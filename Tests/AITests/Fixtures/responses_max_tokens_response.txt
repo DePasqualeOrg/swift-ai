@@ -1,0 +1,11 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_max123","status":"in_progress","model":"gpt-4o"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"This is a long story that will be truncated..."}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_max123","status":"incomplete","model":"gpt-4o","created_at":1700000000,"incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"message","content":[{"type":"output_text","text":"This is a long story that will be truncated..."}]}],"usage":{"input_tokens":20,"output_tokens":15,"total_tokens":35}}}
+
+data: [DONE]
+

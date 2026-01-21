@@ -1,0 +1,23 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_multi123","status":"in_progress","model":"gpt-4o"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"I'll check the weather in both cities."}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"type":"function_call","name":"get_weather","call_id":"call_paris"}}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"call_paris","arguments":"{\"location\":\"Paris\"}"}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"type":"function_call","name":"get_weather","call_id":"call_london"}}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"call_london","arguments":"{\"location\":\"London\"}"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_multi123","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"I'll check the weather in both cities."}]},{"type":"function_call","name":"get_weather","call_id":"call_paris","arguments":"{\"location\":\"Paris\"}"},{"type":"function_call","name":"get_weather","call_id":"call_london","arguments":"{\"location\":\"London\"}"}],"usage":{"input_tokens":60,"output_tokens":40,"total_tokens":100}}}
+
+data: [DONE]
+

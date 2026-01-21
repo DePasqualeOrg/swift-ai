@@ -1,0 +1,10 @@
+data: {"id":"chatcmpl-think123","object":"chat.completion.chunk","created":1700000000,"model":"o1-preview","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"Let me think about this question..."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-think123","object":"chat.completion.chunk","created":1700000000,"model":"o1-preview","choices":[{"index":0,"delta":{"reasoning_content":" The answer requires careful analysis."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-think123","object":"chat.completion.chunk","created":1700000000,"model":"o1-preview","choices":[{"index":0,"delta":{"content":"The answer is 42."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-think123","object":"chat.completion.chunk","created":1700000000,"model":"o1-preview","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":20,"completion_tokens":30,"total_tokens":50,"completion_tokens_details":{"reasoning_tokens":15}}}
+
+data: [DONE]
+

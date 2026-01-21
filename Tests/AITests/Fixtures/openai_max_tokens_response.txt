@@ -1,0 +1,10 @@
+data: {"id":"chatcmpl-max123","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-max123","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"This is a long response that will be"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-max123","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"content":" cut off due to"},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-max123","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{},"finish_reason":"length"}],"usage":{"prompt_tokens":10,"completion_tokens":15,"total_tokens":25}}
+
+data: [DONE]
+

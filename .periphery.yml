@@ -1,0 +1,9 @@
+retain_public: true
+retain_codable_properties: true
+report_exclude:
+  - "**/forked/**"
+  - "**/.build/**"
+retain_files:
+  # Macros read static properties that Periphery thinks are unused
+  - "**/AIMacros/**"
+  - "**/Tests/**"

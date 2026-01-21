@@ -1,0 +1,4 @@
+data: {"candidates":[{"content":{"parts":[{"text":"This is a long response that will be"}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":8,"totalTokenCount":18}}
+
+data: {"candidates":[{"content":{"parts":[{"text":" cut off due to max tokens"}],"role":"model"},"finishReason":"MAX_TOKENS","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":15,"totalTokenCount":25}}
+

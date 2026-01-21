@@ -1,0 +1,22 @@
+{
+  "id": "resp_nonstream123",
+  "status": "completed",
+  "model": "gpt-4o",
+  "created_at": 1700000000,
+  "output": [
+    {
+      "type": "message",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "Hello! How can I help you today?"
+        }
+      ]
+    }
+  ],
+  "usage": {
+    "input_tokens": 15,
+    "output_tokens": 8,
+    "total_tokens": 23
+  }
+}

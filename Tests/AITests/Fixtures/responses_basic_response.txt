@@ -1,0 +1,17 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_abc123","status":"in_progress","model":"gpt-4o"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"Hello"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":" there"}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"!"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_abc123","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Hello there!"}]}],"usage":{"input_tokens":10,"output_tokens":3,"total_tokens":13}}}
+
+data: [DONE]
+

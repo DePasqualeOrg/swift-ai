@@ -1,0 +1,8 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_empty123","status":"in_progress","model":"gpt-4o"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_empty123","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[]}],"usage":{"input_tokens":10,"output_tokens":0,"total_tokens":10}}}
+
+data: [DONE]
+

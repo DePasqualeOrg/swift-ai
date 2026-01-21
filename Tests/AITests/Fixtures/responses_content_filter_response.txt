@@ -1,0 +1,11 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_filter123","status":"in_progress","model":"gpt-4o"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","delta":"I can't"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_filter123","status":"incomplete","model":"gpt-4o","created_at":1700000000,"incomplete_details":{"reason":"content_filter"},"output":[{"type":"message","content":[{"type":"output_text","text":"I can't"}]}],"usage":{"input_tokens":20,"output_tokens":2,"total_tokens":22}}}
+
+data: [DONE]
+
