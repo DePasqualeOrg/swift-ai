@@ -114,7 +114,7 @@ public actor MCPToolProvider {
         // Track which client handles this tool
         toolToClientIndex[toolName] = index
 
-        let aiTool = try AI.Tool(tool, name: toolName) { [weak self, client] parameters in
+        let aiTool = try AI.Tool(from: tool, name: toolName) { [weak self, client] parameters in
           guard self != nil else {
             throw MCPToolProviderError.toolNotFound(toolName)
           }
@@ -150,7 +150,7 @@ public actor MCPToolProvider {
          let tool = mcpTools.first(where: { $0.name == toolName })
       {
         let client = clients[serverIndex]
-        return try AI.Tool(tool, name: name) { [client] parameters in
+        return try AI.Tool(from: tool, name: name) { [client] parameters in
           let result = try await client.callTool(
             name: toolName,
             arguments: parameters.mcpValues
@@ -168,7 +168,7 @@ public actor MCPToolProvider {
         continue
       }
       let client = clients[index]
-      return try AI.Tool(tool) { [client] parameters in
+      return try AI.Tool(from: tool) { [client] parameters in
         let result = try await client.callTool(
           name: tool.name,
           arguments: parameters.mcpValues

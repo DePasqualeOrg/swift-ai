@@ -909,9 +909,6 @@ public final class AnthropicClient: APIClient, Sendable {
 
   /// Configuration options for Anthropic API requests.
   public struct Configuration: Sendable {
-    /// The default thinking budget in tokens (10,000).
-    public static let defaultThinkingBudget = 10000
-
     /// Maximum tokens for extended thinking. Set to enable thinking mode.
     /// The minimum value supported by Anthropic is 1024.
     public var maxThinkingTokens: Int?
@@ -925,18 +922,11 @@ public final class AnthropicClient: APIClient, Sendable {
     /// Enables code execution in a sandboxed environment.
     public var codeExecution: Bool
 
-    /// A configuration with all features disabled.
-    public static let disabled = Configuration()
-
-    var thinkingConfig: ThinkingConfig {
-      // The minimum thinking budget for Anthropic is 1024.
-      // Gemini uses thinking budget of 0 to turn off thinking.
-      // Anthropic client doesn't include a thinking config to turn off thinking.
-      // If thinking budget is 0, don't include the thinking config.
+    var thinkingConfig: ThinkingConfig? {
       if let maxThinkingTokens, maxThinkingTokens > 0 {
         ThinkingConfig(type: .enabled, budgetTokens: maxThinkingTokens)
       } else {
-        ThinkingConfig(type: .disabled, budgetTokens: nil)
+        nil
       }
     }
 
@@ -1843,7 +1833,7 @@ public extension AnthropicClient {
         }
       }
       // Temperature must be set to 1 when thinking is enabled.
-      let adjustedTemperature = configuration.thinkingConfig.type == .enabled ? 1.0 : temperature
+      let adjustedTemperature = configuration.thinkingConfig != nil ? 1.0 : temperature
 
       // Create parameters
       var params = MessageCreateParams(
@@ -2144,6 +2134,12 @@ extension AnthropicClient {
     } else {
       64000
     }
+  }
+
+  /// Returns the maximum thinking budget for a given model ID.
+  /// Thinking budget must be less than max_tokens.
+  public static func maxThinkingBudget(for modelId: String) -> Int {
+    defaultMaxTokens(for: modelId) - 1
   }
 }
 

@@ -1462,9 +1462,6 @@ public extension GeminiClient {
     /// Use `thinkingBudget` for Gemini 2.5 models instead.
     public var thinkingLevel: ThinkingLevel?
 
-    /// A configuration with all features disabled.
-    public static let disabled = Configuration()
-
     /// Creates a new configuration with the specified options.
     ///
     /// - Parameters:
@@ -1493,10 +1490,6 @@ public extension GeminiClient {
 
   /// Thinking level for Gemini 3 models.
   enum ThinkingLevel: String, CaseIterable, Identifiable, Codable, Equatable, Hashable, Sendable {
-    /// The default thinking level. Uses "high" which is supported by both Gemini 3 Pro and Flash.
-    /// Note: "medium" and "minimal" are only supported by Gemini 3 Flash.
-    public static let `default`: ThinkingLevel = .high
-
     /// Matches "no thinking" for most queries. Flash-only.
     case minimal
     /// Minimizes latency and cost. Best for simple instruction following, chat, or high-throughput applications.

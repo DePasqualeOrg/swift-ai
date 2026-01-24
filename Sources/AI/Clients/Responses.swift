@@ -1591,9 +1591,6 @@ public final class ResponsesClient: APIClient, Sendable {
 extension ResponsesClient {
   /// Reasoning effort level for models that support extended thinking.
   public enum ReasoningEffortLevel: String, CaseIterable, Identifiable, Sendable {
-    /// The default reasoning effort level.
-    public static let `default`: ReasoningEffortLevel = .medium
-
     /// Minimal reasoning effort for simple tasks.
     case minimal
     /// Low reasoning effort for straightforward tasks.
@@ -1712,9 +1709,6 @@ extension ResponsesClient {
 
     /// Enable background mode for long-running requests.
     public var backgroundMode: Bool
-
-    /// A configuration with all features disabled.
-    public static let disabled = Configuration()
 
     /// Creates a new configuration with the specified options.
     ///

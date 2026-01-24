@@ -11,9 +11,6 @@ public extension ChatCompletionsClient {
     /// Use this to pass provider-specific options not covered by the standard interface.
     public var extraParameters: [String: any Sendable]?
 
-    /// A configuration with no extra parameters.
-    public static let disabled = Configuration()
-
     /// Creates a new configuration with optional extra parameters.
     ///
     /// - Parameter extraParameters: Additional parameters for the API request.

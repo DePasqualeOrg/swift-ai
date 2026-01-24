@@ -11,15 +11,15 @@ AI API clients with tool use and MCP integration
 - [Provider-Specific Features](#provider-specific-features)
 - [Media Attachments](#media-attachments)
 - [Tools](#tools)
+- [Imperative Tool Usage](#imperative-tool-usage)
 - [MCP Integration](#mcp-integration)
 - [Error Handling](#error-handling)
-- [API Reference](#api-reference)
 - [Custom Endpoints and Sessions](#custom-endpoints-and-sessions)
 - [Cancellation](#cancellation)
 
 ## Quick Start
 
-The simplest way to use Swift AI is through the top-level `generateText` and `streamText` functions.
+> **Note:** Never store API keys in your app bundle. Users should provide their own keys at runtime.
 
 ### Non-Streaming
 
@@ -28,8 +28,7 @@ import AI
 
 let response = try await generateText(
     model: .anthropic("claude-opus-4-5"),
-    systemPrompt: "You are a helpful assistant.",
-    prompt: "Hello!",
+    prompt: "Recommend a book similar to The Magic Mountain.",
     apiKey: "sk-ant-..."
 )
 
@@ -42,9 +41,9 @@ For multi-turn conversations, use `messages:` instead of `prompt:`:
 let response = try await generateText(
     model: .anthropic("claude-opus-4-5"),
     messages: [
-        Message(role: .user, content: "Hello!"),
-        Message(role: .assistant, content: "Hi there! How can I help you?"),
-        Message(role: .user, content: "What's the weather like?")
+        Message(role: .user, content: "I'm planning to hike the Tour du Mont Blanc."),
+        Message(role: .assistant, content: "Great choice! The TMB is a 170km trek through France, Italy, and Switzerland. When are you planning to go?"),
+        Message(role: .user, content: "Late August. What should I pack?")
     ],
     apiKey: "sk-ant-..."
 )
@@ -59,8 +58,7 @@ import AI
 
 for try await partial in streamText(
     model: .anthropic("claude-opus-4-5"),
-    systemPrompt: "You are a helpful assistant.",
-    prompt: "Hello!",
+    prompt: "Plan a 3-day hiking trip in the Swiss Alps.",
     apiKey: "sk-ant-..."
 ) {
     print(partial.texts.response ?? "", terminator: "")
@@ -79,8 +77,8 @@ let client = AnthropicClient()
 // Non-streaming
 let response = try await client.generateText(
     modelId: "claude-opus-4-5",
-    systemPrompt: "You are a helpful assistant.",
-    messages: [Message(role: .user, content: "Hello!")],
+    systemPrompt: "You are a helpful mountain guide assistant.",
+    messages: [Message(role: .user, content: "What's the best season to climb Mont Blanc?")],
     maxTokens: 1024,
     apiKey: "sk-ant-..."
 )
@@ -88,8 +86,8 @@ let response = try await client.generateText(
 // Streaming
 for try await partial in client.streamText(
     modelId: "claude-opus-4-5",
-    systemPrompt: "You are a helpful assistant.",
-    messages: [Message(role: .user, content: "Hello!")],
+    systemPrompt: "You are a helpful mountain guide assistant.",
+    messages: [Message(role: .user, content: "Describe the Matterhorn.")],
     maxTokens: 1024,
     apiKey: "sk-ant-..."
 ) {
@@ -118,7 +116,7 @@ let response = try await generateText(
     messages: messages,
     apiKey: apiKey,
     webSearch: true,  // Defaults to false
-    reasoning: false  // true corresponds to higher reasoning level, false omits reasoning config
+    reasoning: false  // Defaults to true
 )
 ```
 
@@ -131,22 +129,20 @@ let client = AnthropicClient()
 
 // With extended thinking and web search
 let config = AnthropicClient.Configuration(
-    maxThinkingTokens: 10000,  // Enable extended thinking (default: nil/disabled)
+    maxThinkingTokens: 10000,  // Enable extended thinking (minimum: 1024)
     webSearch: true,           // Enable web search tool
     webContent: false,         // Enable web content fetching
     codeExecution: false       // Enable code execution
 )
 
-// Use the default thinking budget constant
+// Use the model-specific maximum thinking budget
+let modelId = "claude-opus-4-5"
 let config = AnthropicClient.Configuration(
-    maxThinkingTokens: AnthropicClient.Configuration.defaultThinkingBudget  // 10000
+    maxThinkingTokens: AnthropicClient.maxThinkingBudget(for: modelId)
 )
 
-// Disable all provider features
-let config = AnthropicClient.Configuration.disabled
-
 for try await partial in client.streamText(
-    modelId: "claude-opus-4-5",
+    modelId: modelId,
     systemPrompt: systemPrompt,
     messages: messages,
     maxTokens: 4096,
@@ -173,9 +169,6 @@ let config = ChatCompletionsClient.Configuration(
     ]
 )
 
-// Disable all provider features
-let config = ChatCompletionsClient.Configuration.disabled
-
 for try await partial in client.streamText(
     modelId: "gpt-5.2",
     systemPrompt: systemPrompt,
@@ -197,7 +190,7 @@ For models with reasoning support:
 let client = ResponsesClient()
 
 let config = ResponsesClient.Configuration(
-    reasoningEffortLevel: .medium,     // .minimal, .low, .medium (default), .high
+    reasoningEffortLevel: .medium,     // .minimal, .low, .medium, .high
     verbosityLevel: nil,               // .low, .medium, .high (optional)
     serverSideTools: [                 // Provider-specific server-side tools
         .OpenAI.webSearch(contextSize: .medium),
@@ -205,14 +198,6 @@ let config = ResponsesClient.Configuration(
     ],
     backgroundMode: false              // Enable background mode for long responses
 )
-
-// Use the default reasoning level
-let config = ResponsesClient.Configuration(
-    reasoningEffortLevel: ResponsesClient.ReasoningEffortLevel.default  // .medium
-)
-
-// Disable all provider features
-let config = ResponsesClient.Configuration.disabled
 
 for try await partial in client.streamText(
     modelId: "gpt-5.2",
@@ -307,16 +292,8 @@ let config = GeminiClient.Configuration(
     webContent: false,         // Enable web content fetching
     codeExecution: false,      // Enable code execution
     thinkingBudget: nil,       // Token budget for thinking (Gemini 2.5)
-    thinkingLevel: .high       // .minimal (Flash), .low, .medium (Flash), .high (default)
+    thinkingLevel: .high       // .minimal (Flash), .low, .medium (Flash), .high
 )
-
-// Use the default thinking level
-let config = GeminiClient.Configuration(
-    thinkingLevel: GeminiClient.ThinkingLevel.default  // .high
-)
-
-// Disable all provider features
-let config = GeminiClient.Configuration.disabled
 
 for try await partial in client.streamText(
     modelId: "gemini-3-pro-preview",
@@ -375,9 +352,9 @@ Supported attachment types:
 
 ## Tools
 
-### Declarative Tools with @Tool Macro
+### Declarative Tools with `@Tool`
 
-The simplest way to define tools is with the `@Tool` macro. Import `AITool` to access the `@Tool` macro and `@Parameter` property wrapper:
+The simplest way to define tools is with the `@Tool` macro. Import `AITool` to use it:
 
 ```swift
 import AI
@@ -475,14 +452,12 @@ struct SetPriority {
 
 #### Rich Output Types
 
-Besides `String`, tools can return other content types via the `ToolOutput` protocol:
+Besides `String`, tools can return other content types\. The return type automatically sets `resultTypes` for [capability filtering](#filtering-tools-by-capability).
 
 - `ImageResult` → `resultTypes: [.image]`
 - `AudioResult` → `resultTypes: [.audio]`
 - `FileResult` → `resultTypes: [.file]`
 - `MultiContent` → `resultTypes: nil` (determined at runtime)
-
-The return type automatically sets `resultTypes` for [capability filtering](#filtering-tools-by-capability).
 
 ```swift
 // ImageResult
@@ -561,13 +536,13 @@ Run a conversation loop where the model can call tools and process results until
 ```swift
 import AI
 
-// Define your tools
+// Make tools (defined elsewhere) available
 let tools: Tools = [GetWeather.tool, SearchDocuments.tool]
 
 // Set up client and conversation
 let client = AnthropicClient()
 var messages: [Message] = [
-    Message(role: .user, content: "What's the weather in Paris and find documents about travel?")
+    Message(role: .user, content: "What's the weather like at Chamonix this week? And find documents about alpine climbing safety.")
 ]
 
 // Agentic loop
@@ -579,7 +554,7 @@ while iterations < maxIterations {
     let response = try await client.generateText(
         modelId: "claude-opus-4-5",
         tools: tools.definitions,
-        systemPrompt: "You are a helpful assistant.",
+        systemPrompt: "You are an expert alpine guide assistant.",
         messages: messages,
         apiKey: apiKey
     )
@@ -617,73 +592,6 @@ let combined = tools + [AnotherTool.tool]
 // Using adding() methods
 let expanded = tools.adding(AnotherTool.tool)
 let merged = tools.adding(otherTools)
-```
-
-### Imperative Tool Definition
-
-For tools defined dynamically at runtime, or when you need full control, create tools imperatively:
-
-```swift
-let weatherTool = Tool(
-    name: "get_weather",
-    description: "Get the current weather for a location",
-    title: "Weather",
-    parameters: [
-        .string("location", title: "Location", description: "The city and country"),
-        .string("units", description: "Temperature units: celsius or fahrenheit", required: false)
-    ],
-    execute: { params in
-        let location = params["location"]?.stringValue ?? "Unknown"
-        // Call your weather API here
-        return [.text("72°F and sunny in \(location)")]
-    }
-)
-
-let client = AnthropicClient()
-let response = try await client.generateText(
-    modelId: modelId,
-    tools: [weatherTool],
-    systemPrompt: systemPrompt,
-    messages: messages,
-    maxTokens: 1024,
-    apiKey: apiKey
-)
-
-// Check if the model wants to call a tool
-if !response.toolCalls.isEmpty {
-    for call in response.toolCalls {
-        print("Tool: \(call.name), ID: \(call.id)")
-        print("Parameters: \(call.parameters)")
-    }
-}
-```
-
-After executing a tool, send the result back:
-
-```swift
-let toolResult = ToolResult(
-    name: "get_weather",
-    id: call.id,
-    content: .text("72°F and sunny")
-)
-
-let assistantMessage = Message(
-    role: .assistant,
-    content: nil,
-    toolCalls: response.toolCalls
-)
-
-let toolMessage = Message(
-    role: .tool,
-    content: nil,
-    toolResults: [toolResult]
-)
-
-// Continue the conversation with tool results
-let followUp = try await client.generateText(
-    messages: messages + [assistantMessage, toolMessage],
-    // ... other parameters
-)
 ```
 
 ### Tool Result Types
@@ -774,7 +682,7 @@ When a tool returns an unsupported type, Swift AI automatically converts it to a
 
 Filter tools based on what result types they produce and what clients support.
 
-**For `@Tool` macro tools**, `resultTypes` is automatically derived from the `perform()` return type:
+**For tools defined with `@Tool`**, `resultTypes` is automatically derived from the `perform()` return type:
 
 ```swift
 @Tool
@@ -811,6 +719,83 @@ let compatibleTools = allTools.compatible(with: ChatCompletionsClient.self)
 // Excludes TakeScreenshot since ChatCompletions only supports text
 ```
 
+## Imperative Tool Usage
+
+For tools defined dynamically at runtime, or when you need full control over tool execution, you can work with the lower-level APIs directly.
+
+### Defining Tools Imperatively
+
+```swift
+let weatherTool = Tool(
+    name: "get_weather",
+    description: "Get the current weather for a location",
+    title: "Weather",
+    parameters: [
+        .string("location", title: "Location", description: "The city and country"),
+        .string("units", description: "Temperature units: celsius or fahrenheit", required: false)
+    ],
+    execute: { params in
+        let location = params["location"]?.stringValue ?? "Unknown"
+        // Call your weather API here
+        return [.text("72°F and sunny in \(location)")]
+    }
+)
+```
+
+### Manual Tool Execution
+
+When you need full control over the tool execution loop:
+
+```swift
+let client = AnthropicClient()
+let response = try await client.generateText(
+    modelId: modelId,
+    tools: [weatherTool],
+    systemPrompt: systemPrompt,
+    messages: messages,
+    maxTokens: 1024,
+    apiKey: apiKey
+)
+
+// Check if the model wants to call a tool
+if !response.toolCalls.isEmpty {
+    for call in response.toolCalls {
+        print("Tool: \(call.name), ID: \(call.id)")
+        print("Parameters: \(call.parameters)")
+    }
+}
+```
+
+### Constructing Tool Results
+
+After executing a tool manually, construct the result and continue the conversation:
+
+```swift
+let toolResult = ToolResult(
+    name: "get_weather",
+    id: call.id,
+    content: .text("72°F and sunny")
+)
+
+let assistantMessage = Message(
+    role: .assistant,
+    content: nil,
+    toolCalls: response.toolCalls
+)
+
+let toolMessage = Message(
+    role: .tool,
+    content: nil,
+    toolResults: [toolResult]
+)
+
+// Continue the conversation with tool results
+let followUp = try await client.generateText(
+    messages: messages + [assistantMessage, toolMessage],
+    // ... other parameters
+)
+```
+
 ## MCP Integration
 
 The `AIMCP` module bridges Swift AI with the [Model Context Protocol](https://github.com/anthropics/swift-mcp) (MCP), allowing you to use MCP tools with any AI provider.
@@ -831,9 +816,7 @@ dependencies: [
 Connect to an MCP server and use its tools with any AI provider:
 
 ```swift
-import AI
-import AIMCP
-import MCP
+import AIMCP  // AI and MCP bridging, also imports those packages
 
 // Create and connect to an MCP server
 let mcpClient = MCP.Client(name: "MyApp", version: "1.0.0")
@@ -853,7 +836,7 @@ let tools = try await toolProvider.tools()
 let response = try await client.generateText(
     modelId: "claude-opus-4-5",
     tools: tools.definitions,
-    systemPrompt: "You are a helpful assistant.",
+    systemPrompt: "You are an expert alpine guide assistant.",
     messages: messages,
     apiKey: apiKey
 )
@@ -902,19 +885,19 @@ let serverNames = await toolProvider.connectedServerNames()
 For more control, use the conversion extensions directly:
 
 ```swift
-import AIMCP
+import AIMCP  // AI and MCP bridging, also imports those packages
 
 // Convert AI Tool to MCP Tool
-let mcpTool = MCP.Tool(aiTool)
+let mcpTool = MCP.Tool(from: aiTool)
 
-// Convert MCP Tool to AI Tool (with custom executor)
-let aiTool = try AI.Tool(mcpTool) { parameters in
+// Convert MCP Tool to AI Tool (executes via MCP client)
+let aiTool = try AI.Tool(from: mcpTool, client: mcpClient)
+
+// Convert MCP Tool to AI Tool (with custom executor, e.g. for mocking)
+let aiTool = try AI.Tool(from: mcpTool) { parameters in
     // Your execution logic
     return [.text("result")]
 }
-
-// Convert MCP Tool to AI Tool (using MCP client)
-let aiTool = try AI.Tool(mcpTool, client: mcpClient)
 
 // Batch conversions
 let mcpTools = aiTools.mcpTools
@@ -957,209 +940,6 @@ do {
     }
 }
 ```
-
-## API Reference
-
-### Core Types
-
-#### Message
-
-```swift
-struct Message: Sendable, Hashable {
-    enum Role: String { case system, developer, user, assistant, tool }
-
-    let role: Role
-    let content: String?
-    let attachments: [Attachment]
-    let toolCalls: [GenerationResponse.ToolCall]?
-    let toolResults: [ToolResult]?
-}
-```
-
-#### GenerationResponse
-
-```swift
-struct GenerationResponse: Sendable, Hashable {
-    struct Texts: Sendable, Hashable {
-        var reasoning: String?   // Reasoning content
-        var response: String?    // Main response text
-        var notes: String?       // Citations/grounding info
-    }
-
-    struct Metadata: Sendable, Hashable {
-        var responseId: String?
-        var model: String?
-        var createdAt: Date?
-        var finishReason: FinishReason?
-        var inputTokens: Int?
-        var outputTokens: Int?
-        var totalTokens: Int?
-        var cacheCreationInputTokens: Int?
-        var cacheReadInputTokens: Int?
-        var reasoningTokens: Int?
-    }
-
-    enum FinishReason: String {
-        case stop, maxTokens, toolUse, contentFilter, other
-    }
-
-    struct ToolCall: Sendable, Codable, Hashable {
-        var name: String
-        let id: String
-        var parameters: [String: Value]
-        var providerMetadata: [String: String]?  // Provider-specific (e.g., Gemini thoughtSignature)
-
-        func parametersToData() -> Data?
-        static func dataToParameters(_ data: Data) -> [String: Value]?
-    }
-
-    var texts: Texts
-    var metadata: Metadata?
-    var toolCalls: [ToolCall]
-
-    // Convert response to assistant message for conversation history
-    var message: Message { get }
-}
-```
-
-#### Model
-
-```swift
-enum Model: Sendable {
-    case anthropic(String)
-    case gemini(String)
-    case chatCompletions(String, endpoint: URL = ChatCompletionsClient.Endpoint.openAI.url)
-    case responses(String, endpoint: URL = ResponsesClient.Endpoint.openAI.url)
-
-    var modelId: String { get }
-}
-
-// Available endpoints (use short syntax with client initializers)
-ResponsesClient(endpoint: .openAI)      // https://api.openai.com/v1/responses
-ResponsesClient(endpoint: .xAI)         // https://api.x.ai/v1/responses
-ChatCompletionsClient(endpoint: .openAI) // https://api.openai.com/v1/chat/completions
-ChatCompletionsClient(endpoint: .xAI)    // https://api.x.ai/v1/chat/completions
-
-// Or pass arbitrary URLs
-ResponsesClient(endpoint: URL(string: "https://custom/v1/responses")!)
-```
-
-#### Tool
-
-```swift
-struct Tool: Sendable {
-    enum ParameterType: Sendable, Hashable {
-        case string, float, integer, boolean
-        case array(items: ParameterType = .string)
-        case object
-    }
-
-    struct Parameter: Sendable {
-        let name: String
-        let title: String
-        let type: ParameterType
-        let description: String
-        let required: Bool
-        let enumValues: [String]?
-        let minLength: Int?
-        let maxLength: Int?
-        let minimum: Double?
-        let maximum: Double?
-
-        // Factory methods for common parameter types
-        static func string(_ name: String, title: String? = nil, description: String, required: Bool = true, enum: [String]? = nil, minLength: Int? = nil, maxLength: Int? = nil) -> Parameter
-        static func integer(_ name: String, title: String? = nil, description: String, required: Bool = true, minimum: Int? = nil, maximum: Int? = nil) -> Parameter
-        static func number(_ name: String, title: String? = nil, description: String, required: Bool = true, minimum: Double? = nil, maximum: Double? = nil) -> Parameter
-        static func boolean(_ name: String, title: String? = nil, description: String, required: Bool = true) -> Parameter
-        static func array(_ name: String, title: String? = nil, description: String, items: ParameterType = .string, required: Bool = true) -> Parameter
-    }
-
-    let name: String
-    let description: String
-    let title: String
-    let parameters: [Parameter]
-    let resultTypes: Set<ToolResult.ValueType>?  // Derived from perform() return type for @Tool macros
-    let rawInputSchema: [String: Value]  // JSON Schema for parameters
-    let execute: @Sendable ([String: Value]) async throws -> [ToolResult.Content]
-}
-```
-
-#### ToolResult
-
-```swift
-struct ToolResult: Hashable, Sendable {
-    // Category of a result (for capability declarations and filtering)
-    enum ValueType: String, Sendable, Hashable, CaseIterable {
-        case text, image, audio, file
-    }
-
-    // Actual result content with associated data
-    enum Content: Sendable, Hashable {
-        case text(String)
-        case image(Data, mimeType: String? = nil)
-        case audio(Data, mimeType: String)
-        case file(Data, mimeType: String, filename: String? = nil)
-
-        var type: ValueType { get }  // Get the ValueType for this content
-        var fallbackDescription: String { get }
-    }
-
-    let name: String
-    let id: String
-    let content: [Content]
-    let isError: Bool?
-
-    // Convenience initializers
-    static func text(_ text: String, name: String, id: String) -> ToolResult
-    static func error(_ message: String, name: String, id: String) -> ToolResult
-}
-
-// Convert tool results to a message for conversation history
-extension Array where Element == ToolResult {
-    var message: Message { get }
-}
-```
-
-### APIClient Protocol
-
-All clients conform to this protocol:
-
-```swift
-protocol APIClient: Sendable {
-    associatedtype Configuration: Sendable = Void
-
-    static var supportedResultTypes: Set<ToolResult.ValueType> { get }
-
-    @MainActor var isGenerating: Bool { get }
-    @MainActor func stop()
-
-    // Non-streaming
-    func generateText(
-        modelId: String,
-        tools: [Tool],
-        systemPrompt: String?,
-        messages: [Message],
-        maxTokens: Int?,
-        temperature: Float?,
-        apiKey: String?,
-        configuration: Configuration
-    ) async throws -> GenerationResponse
-
-    // Streaming
-    func streamText(
-        modelId: String,
-        tools: [Tool],
-        systemPrompt: String?,
-        messages: [Message],
-        maxTokens: Int?,
-        temperature: Float?,
-        apiKey: String?,
-        configuration: Configuration
-    ) -> AsyncThrowingStream<GenerationResponse, Error>
-}
-```
-
-All clients also provide convenience overloads that accept `prompt: String` instead of `messages: [Message]` for single-turn interactions.
 
 ## Custom Endpoints and Sessions
 
@@ -1206,14 +986,21 @@ let client = AnthropicClient(
 Cancel an in-progress generation:
 
 ```swift
-let client = AnthropicClient()
-
-// Start generation in a task
-let task = Task {
-    try await client.generateText(...)
-}
-
-// Cancel when needed
 await client.stop()
-task.cancel()
+```
+
+All clients expose `isGenerating` for UI state:
+
+```swift
+struct ChatView: View {
+    let client = AnthropicClient()
+
+    var body: some View {
+        VStack {
+            if client.isGenerating {
+                // Progress indicator
+            }
+        }
+    }
+}
 ```

@@ -67,7 +67,7 @@ public func generateText(
     case let .anthropic(modelId):
       let client = AnthropicClient()
       let configuration = AnthropicClient.Configuration(
-        maxThinkingTokens: reasoning ? AnthropicClient.Configuration.defaultThinkingBudget : nil,
+        maxThinkingTokens: reasoning ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
         webSearch: webSearch
       )
       return try await client.generateText(
@@ -85,7 +85,7 @@ public func generateText(
       let client = GeminiClient()
       let configuration = GeminiClient.Configuration(
         searchGrounding: webSearch,
-        thinkingLevel: reasoning ? GeminiClient.ThinkingLevel.default : nil
+        thinkingLevel: reasoning ? .high : nil
       )
       return try await client.generateText(
         modelId: modelId,
@@ -115,7 +115,7 @@ public func generateText(
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoning ? ResponsesClient.ReasoningEffortLevel.default : nil,
+        reasoningEffortLevel: reasoning ? .high : nil,
         serverSideTools: webSearch ? [.OpenAI.webSearch(contextSize: .medium)] : []
       )
       return try await client.generateText(
@@ -159,7 +159,7 @@ public func streamText(
     case let .anthropic(modelId):
       let client = AnthropicClient()
       let configuration = AnthropicClient.Configuration(
-        maxThinkingTokens: reasoning ? AnthropicClient.Configuration.defaultThinkingBudget : nil,
+        maxThinkingTokens: reasoning ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
         webSearch: webSearch
       )
       return client.streamText(
@@ -177,7 +177,7 @@ public func streamText(
       let client = GeminiClient()
       let configuration = GeminiClient.Configuration(
         searchGrounding: webSearch,
-        thinkingLevel: reasoning ? GeminiClient.ThinkingLevel.default : nil
+        thinkingLevel: reasoning ? .high : nil
       )
       return client.streamText(
         modelId: modelId,
@@ -207,7 +207,7 @@ public func streamText(
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoning ? ResponsesClient.ReasoningEffortLevel.default : nil,
+        reasoningEffortLevel: reasoning ? .high : nil,
         serverSideTools: webSearch ? [.OpenAI.webSearch(contextSize: .medium)] : []
       )
       return client.streamText(

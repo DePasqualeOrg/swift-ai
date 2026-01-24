@@ -14,7 +14,7 @@ extension MCP.Tool {
   /// are metadata-only; execution happens via ToolSpec or registered handlers.
   ///
   /// - Parameter tool: The AI Tool to convert
-  public init(_ tool: AI.Tool) {
+  public init(from tool: AI.Tool) {
     // Build JSON Schema from Tool parameters
     var properties: [String: MCP.Value] = [:]
     var required: [MCP.Value] = []
@@ -100,10 +100,10 @@ extension AI.Tool {
   ///   - executor: Closure that executes the tool and returns a result
   /// - Throws: `MCPConversionError` if the tool's schema can't be converted
   public init(
-    _ tool: MCP.Tool,
+    from tool: MCP.Tool,
     executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content]
   ) throws {
-    try self.init(tool, name: tool.name, executor: executor)
+    try self.init(from: tool, name: tool.name, executor: executor)
   }
 
   /// Creates an AI Tool from an MCP Tool with a custom name.
@@ -117,7 +117,7 @@ extension AI.Tool {
   ///   - executor: Closure that executes the tool and returns a result
   /// - Throws: `MCPConversionError` if the tool's schema can't be converted
   public init(
-    _ tool: MCP.Tool,
+    from tool: MCP.Tool,
     name: String,
     executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content]
   ) throws {
@@ -143,8 +143,8 @@ extension AI.Tool {
   ///   - tool: The MCP Tool to convert
   ///   - client: The MCP Client to use for tool execution
   /// - Throws: `MCPConversionError` if the tool's schema can't be converted
-  public init(_ tool: MCP.Tool, client: MCP.Client) throws {
-    try self.init(tool) { parameters in
+  public init(from tool: MCP.Tool, client: MCP.Client) throws {
+    try self.init(from: tool) { parameters in
       let result = try await client.callTool(
         name: tool.name,
         arguments: parameters.mcpValues
@@ -303,7 +303,7 @@ extension AI.Tool {
 public extension [AI.Tool] {
   /// Converts an array of AI Tools to MCP Tools.
   var mcpTools: [MCP.Tool] {
-    map { MCP.Tool($0) }
+    map { MCP.Tool(from: $0) }
   }
 }
 
@@ -314,6 +314,6 @@ public extension [MCP.Tool] {
   /// - Returns: Array of AI Tools
   /// - Throws: If any tool can't be converted
   func aiTools(client: MCP.Client) throws -> [AI.Tool] {
-    try map { try AI.Tool($0, client: client) }
+    try map { try AI.Tool(from: $0, client: client) }
   }
 }
