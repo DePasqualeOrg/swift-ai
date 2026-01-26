@@ -83,9 +83,11 @@ public func generateText(
 
     case let .gemini(modelId):
       let client = GeminiClient()
+      let (thinkingLevel, thinkingBudget) = GeminiClient.thinkingConfig(for: modelId, reasoning: reasoning)
       let configuration = GeminiClient.Configuration(
         searchGrounding: webSearch,
-        thinkingLevel: reasoning ? .high : nil
+        thinkingBudget: thinkingBudget,
+        thinkingLevel: thinkingLevel
       )
       return try await client.generateText(
         modelId: modelId,
@@ -115,7 +117,7 @@ public func generateText(
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoning ? .high : nil,
+        reasoningEffortLevel: reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil,
         serverSideTools: webSearch ? [.OpenAI.webSearch(contextSize: .medium)] : []
       )
       return try await client.generateText(
@@ -175,9 +177,11 @@ public func streamText(
 
     case let .gemini(modelId):
       let client = GeminiClient()
+      let (thinkingLevel, thinkingBudget) = GeminiClient.thinkingConfig(for: modelId, reasoning: reasoning)
       let configuration = GeminiClient.Configuration(
         searchGrounding: webSearch,
-        thinkingLevel: reasoning ? .high : nil
+        thinkingBudget: thinkingBudget,
+        thinkingLevel: thinkingLevel
       )
       return client.streamText(
         modelId: modelId,
@@ -207,7 +211,7 @@ public func streamText(
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoning ? .high : nil,
+        reasoningEffortLevel: reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil,
         serverSideTools: webSearch ? [.OpenAI.webSearch(contextSize: .medium)] : []
       )
       return client.streamText(

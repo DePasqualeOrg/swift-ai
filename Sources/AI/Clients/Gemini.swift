@@ -1517,4 +1517,23 @@ public extension GeminiClient {
     /// The raw value identifier.
     public var id: String { rawValue }
   }
+
+  /// Returns the appropriate thinking configuration for a Gemini model.
+  /// Defaults to `thinkingLevel` (Gemini 3+ paradigm). Uses `thinkingBudget` for
+  /// Gemini 2.5 models, and disables thinking for older models.
+  static func thinkingConfig(
+    for modelId: String,
+    reasoning: Bool
+  ) -> (thinkingLevel: ThinkingLevel?, thinkingBudget: Int?) {
+    guard reasoning, modelId.hasPrefix("gemini-") else {
+      return (nil, nil)
+    }
+    if modelId.hasPrefix("gemini-2.0") || modelId.hasPrefix("gemini-1") {
+      return (nil, nil)
+    }
+    if modelId.hasPrefix("gemini-2.5") {
+      return (nil, -1)
+    }
+    return (.high, nil)
+  }
 }

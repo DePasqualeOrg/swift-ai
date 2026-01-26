@@ -1979,6 +1979,19 @@ extension ResponsesClient {
     let message: String?
     let code: String?
   }
+
+  /// Checks whether a model supports the reasoning effort parameter.
+  /// Defaults to true (latest paradigm), returning false only for known older models.
+  static func supportsReasoning(_ modelId: String) -> Bool {
+    if modelId.hasPrefix("gpt-3") || modelId.hasPrefix("gpt-4") { return false }
+    if modelId.hasPrefix("chatgpt-") { return false }
+    if modelId == "o1-mini" || modelId.hasPrefix("o1-mini-") { return false }
+    if modelId == "o1-preview" || modelId.hasPrefix("o1-preview-") { return false }
+    if modelId.hasPrefix("grok-") {
+      return modelId.hasPrefix("grok-3-mini")
+    }
+    return true
+  }
 }
 
 // Response format options for the responses endpoint
