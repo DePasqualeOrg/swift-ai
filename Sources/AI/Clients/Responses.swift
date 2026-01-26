@@ -133,8 +133,9 @@ public final class ResponsesClient: APIClient, Sendable {
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
 
+    let patchedInput = Message.patchingOrphanedToolCalls(input)
     var inputContent: [[String: any Sendable]] = []
-    for message in input {
+    for message in patchedInput {
       switch message.role {
         case .user:
           var contentItems: [[String: any Sendable]] = []
@@ -208,7 +209,6 @@ public final class ResponsesClient: APIClient, Sendable {
           // This represents the model's turn where it decided to call functions.
           if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
             for toolCall in toolCalls {
-              let callId = "call_" + toolCall.id
               // Convert parameters to Foundation types before serializing
               let foundationParams = Self.convertValueToSendable(toolCall.parameters)
               let argumentsData = try JSONSerialization.data(withJSONObject: foundationParams, options: [])
@@ -217,7 +217,7 @@ public final class ResponsesClient: APIClient, Sendable {
               }
               inputContent.append([
                 "type": ContentType.functionCall,
-                "call_id": callId,
+                "call_id": toolCall.id,
                 "name": toolCall.name,
                 "arguments": argumentsString,
               ])
@@ -232,9 +232,7 @@ public final class ResponsesClient: APIClient, Sendable {
           // responses and confirm the output format is correct per API docs.
           if let toolResults = message.toolResults, !toolResults.isEmpty {
             for toolResult in toolResults {
-              // Make sure the ID has the correct "call_" prefix for the output
-              // The API expects the call_id to match the original function call's ID
-              let callId = "call_" + toolResult.id
+              let callId = toolResult.id
               // The output can be a string or an array of content items
               let resultOutput: any Sendable
 
@@ -401,16 +399,6 @@ public final class ResponsesClient: APIClient, Sendable {
     if !textConfig.isEmpty {
       body["text"] = textConfig
     }
-
-//    // Debugging request body
-//    do {
-//      let jsonData = try JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted, .sortedKeys])
-//      if let jsonString = String(data: jsonData, encoding: .utf8) {
-//        print("Request Body JSON:\n\(jsonString)")
-//      }
-//    } catch {
-//      openAIResponsesLogger.error("Failed to serialize request body for debugging: \(error)")
-//    }
 
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
     let finalRequest = request
@@ -793,8 +781,8 @@ public final class ResponsesClient: APIClient, Sendable {
     event: StreamEvent,
     reasoningText: inout String,
     responseText: inout String,
-    streamingFunctionCalls: inout [String: GenerationResponse.ToolCall],
-    streamingArgumentsStrings: inout [String: String],
+    streamingFunctionCalls: inout [Int: GenerationResponse.ToolCall],
+    streamingArgumentsStrings: inout [Int: String],
     completedFunctionCalls: inout [GenerationResponse.ToolCall],
     continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation
   ) throws {
@@ -829,13 +817,13 @@ public final class ResponsesClient: APIClient, Sendable {
         if let item = event.item, let itemType = item.type {
           switch itemType {
             case OutputItemType.functionCall:
-              if let name = item.name, let callId = item.callId {
-                streamingFunctionCalls[callId] = GenerationResponse.ToolCall(
+              if let name = item.name, let callId = item.callId, let outputIndex = event.outputIndex {
+                streamingFunctionCalls[outputIndex] = GenerationResponse.ToolCall(
                   name: name,
                   id: callId,
                   parameters: [:]
                 )
-                streamingArgumentsStrings[callId] = ""
+                streamingArgumentsStrings[outputIndex] = ""
                 continuation.yield(GenerationResponse(texts: .init(
                   reasoning: reasoningText.isEmpty ? nil : reasoningText,
                   response: responseText.isEmpty ? nil : responseText,
@@ -870,18 +858,18 @@ public final class ResponsesClient: APIClient, Sendable {
 
       case StreamEventType.functionCallArgumentsDelta:
         if let delta = event.delta,
-           let callId = event.itemId,
-           var currentCall = streamingFunctionCalls[callId]
+           let outputIndex = event.outputIndex,
+           var currentCall = streamingFunctionCalls[outputIndex]
         {
-          let existingArgsString = streamingArgumentsStrings[callId] ?? ""
+          let existingArgsString = streamingArgumentsStrings[outputIndex] ?? ""
           let newArgsString = existingArgsString + delta
-          streamingArgumentsStrings[callId] = newArgsString
+          streamingArgumentsStrings[outputIndex] = newArgsString
 
           if let argsData = newArgsString.data(using: .utf8),
              let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
           {
             currentCall.parameters = partialArgs
-            streamingFunctionCalls[callId] = currentCall
+            streamingFunctionCalls[outputIndex] = currentCall
           }
 
           continuation.yield(GenerationResponse(texts: .init(
@@ -893,17 +881,17 @@ public final class ResponsesClient: APIClient, Sendable {
 
       case StreamEventType.functionCallArgumentsDone:
         if let argumentsString = event.arguments,
-           let callId = event.itemId,
-           var completedCall = streamingFunctionCalls.removeValue(forKey: callId)
+           let outputIndex = event.outputIndex,
+           var completedCall = streamingFunctionCalls.removeValue(forKey: outputIndex)
         {
-          streamingArgumentsStrings.removeValue(forKey: callId)
+          streamingArgumentsStrings.removeValue(forKey: outputIndex)
 
           if let argumentsData = argumentsString.data(using: .utf8),
              let parsedArguments = try? JSONDecoder().decode([String: Value].self, from: argumentsData)
           {
             completedCall.parameters = parsedArguments
           } else {
-            openAIResponsesLogger.error("Failed to parse final function call arguments for call ID \(callId): \(argumentsString)")
+            openAIResponsesLogger.error("Failed to parse final function call arguments for output index \(outputIndex): \(argumentsString)")
             completedCall.parameters = ["_parseError": .string("Failed to parse arguments JSON")]
           }
           completedFunctionCalls.append(completedCall)
@@ -1173,8 +1161,8 @@ public final class ResponsesClient: APIClient, Sendable {
 
     var reasoningText = ""
     var responseText = ""
-    var streamingFunctionCalls: [String: GenerationResponse.ToolCall] = [:]
-    var streamingArgumentsStrings: [String: String] = [:]
+    var streamingFunctionCalls: [Int: GenerationResponse.ToolCall] = [:]
+    var streamingArgumentsStrings: [Int: String] = [:]
     var completedFunctionCalls: [GenerationResponse.ToolCall] = []
 
     for try await jsonString in SSEParser.dataPayloads(from: result) {
@@ -1763,6 +1751,7 @@ extension ResponsesClient {
     let sequenceNumber: Int?
     let delta: String?
     let itemId: String?
+    let outputIndex: Int?
     let arguments: String?
     let item: OutputItem?
     let response: ResponseObject?
@@ -1773,6 +1762,7 @@ extension ResponsesClient {
       case sequenceNumber = "sequence_number"
       case delta
       case itemId = "item_id"
+      case outputIndex = "output_index"
       case arguments
       case item
       case response

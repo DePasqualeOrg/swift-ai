@@ -199,8 +199,9 @@ public final class GeminiClient: APIClient, Sendable {
     // Note: X-Server-Timeout header is not set, matching TypeScript SDK behavior
     // The server will use its default timeout, which allows for long-running queries
 
+    let patchedMessages = Message.patchingOrphanedToolCalls(messages)
     var processedMessages: [[String: any Sendable]] = []
-    for message in messages {
+    for message in patchedMessages {
       var parts: [[String: any Sendable]] = []
 
       // Handle function calls

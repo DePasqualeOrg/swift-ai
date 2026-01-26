@@ -118,11 +118,29 @@ public actor MCPToolProvider {
           guard self != nil else {
             throw MCPToolProviderError.toolNotFound(toolName)
           }
-          let result = try await client.callTool(
-            name: tool.name, // Use original name for MCP call
-            arguments: parameters.mcpValues
-          )
-          return try Self.convertResult(result)
+          if let onProgress = ToolCallProgress.onProgress {
+            let toolCallId = ToolCallContext.currentId
+            let result = try await client.callTool(
+              name: tool.name,
+              arguments: parameters.mcpValues,
+              onProgress: { progress in
+                await onProgress(ToolCallProgressUpdate(
+                  toolCallId: toolCallId,
+                  toolName: toolName,
+                  value: progress.value,
+                  total: progress.total,
+                  message: progress.message
+                ))
+              }
+            )
+            return try Self.convertResult(result)
+          } else {
+            let result = try await client.callTool(
+              name: tool.name,
+              arguments: parameters.mcpValues
+            )
+            return try Self.convertResult(result)
+          }
         }
         allTools.append(aiTool)
       }
@@ -151,11 +169,29 @@ public actor MCPToolProvider {
       {
         let client = clients[serverIndex]
         return try AI.Tool(from: tool, name: name) { [client] parameters in
-          let result = try await client.callTool(
-            name: toolName,
-            arguments: parameters.mcpValues
-          )
-          return try Self.convertResult(result)
+          if let onProgress = ToolCallProgress.onProgress {
+            let toolCallId = ToolCallContext.currentId
+            let result = try await client.callTool(
+              name: toolName,
+              arguments: parameters.mcpValues,
+              onProgress: { progress in
+                await onProgress(ToolCallProgressUpdate(
+                  toolCallId: toolCallId,
+                  toolName: name,
+                  value: progress.value,
+                  total: progress.total,
+                  message: progress.message
+                ))
+              }
+            )
+            return try Self.convertResult(result)
+          } else {
+            let result = try await client.callTool(
+              name: toolName,
+              arguments: parameters.mcpValues
+            )
+            return try Self.convertResult(result)
+          }
         }
       }
     }
@@ -169,11 +205,29 @@ public actor MCPToolProvider {
       }
       let client = clients[index]
       return try AI.Tool(from: tool) { [client] parameters in
-        let result = try await client.callTool(
-          name: tool.name,
-          arguments: parameters.mcpValues
-        )
-        return try Self.convertResult(result)
+        if let onProgress = ToolCallProgress.onProgress {
+          let toolCallId = ToolCallContext.currentId
+          let result = try await client.callTool(
+            name: tool.name,
+            arguments: parameters.mcpValues,
+            onProgress: { progress in
+              await onProgress(ToolCallProgressUpdate(
+                toolCallId: toolCallId,
+                toolName: name,
+                value: progress.value,
+                total: progress.total,
+                message: progress.message
+              ))
+            }
+          )
+          return try Self.convertResult(result)
+        } else {
+          let result = try await client.callTool(
+            name: tool.name,
+            arguments: parameters.mcpValues
+          )
+          return try Self.convertResult(result)
+        }
       }
     }
 

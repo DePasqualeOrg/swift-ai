@@ -104,6 +104,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     if let apiKey {
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
+    let patchedMessages = Message.patchingOrphanedToolCalls(messages)
     var processedMessages: [[String: any Sendable]] = []
     if let systemPrompt, !systemPrompt.isEmpty {
       processedMessages.append([
@@ -111,7 +112,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
         "content": systemPrompt,
       ])
     }
-    for message in messages {
+    for message in patchedMessages {
       if let toolResults = message.toolResults, !toolResults.isEmpty {
         // Handle function results (tool results)
         // ChatCompletions only supports text in tool results

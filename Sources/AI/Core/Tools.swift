@@ -2,6 +2,15 @@
 
 import Foundation
 
+/// Provides the current tool call ID to downstream code via a task-local value.
+///
+/// When `Tools.call()` invokes a tool's execute closure, it sets the current tool call ID
+/// so that downstream code (e.g., MCP tool providers) can correlate progress notifications
+/// with specific tool calls.
+public enum ToolCallContext {
+  @TaskLocal public static var currentId: String?
+}
+
 /// A tool that can be called by an LLM during generation.
 ///
 /// Tools enable models to perform actions like searching the web, executing code,
@@ -455,7 +464,9 @@ public struct Tools: Collection, Sendable {
 
     // Execute tool, catching errors
     do {
-      let content = try await tool.execute(toolCall.parameters)
+      let content = try await ToolCallContext.$currentId.withValue(toolCall.id) {
+        try await tool.execute(toolCall.parameters)
+      }
       return ToolResult(name: toolCall.name, id: toolCall.id, content: content)
     } catch {
       return .error(error.localizedDescription, name: toolCall.name, id: toolCall.id)

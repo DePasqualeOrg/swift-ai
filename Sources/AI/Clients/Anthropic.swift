@@ -1759,6 +1759,8 @@ public extension AnthropicClient {
       var toolUseBlocks: [ToolUseBlock] = []
       var wasCancelled = false
       var finalMessage: APIMessage? = nil
+      // Patch orphaned tool calls (e.g., from canceled or timed-out generation)
+      let patchedMessages = Message.patchingOrphanedToolCalls(messages)
       // When thinking is enabled, preprocess messages to handle missing opaque blocks.
       // Assistant messages with tool calls that lack Anthropic thinking blocks are collapsed to text,
       // along with their following tool result messages, to avoid the
@@ -1767,7 +1769,7 @@ public extension AnthropicClient {
         {
           var result: [Message] = []
           var skipNext = false
-          for (index, message) in messages.enumerated() {
+          for (index, message) in patchedMessages.enumerated() {
             if skipNext {
               skipNext = false
               continue
@@ -1797,7 +1799,7 @@ public extension AnthropicClient {
           return result
         }()
       } else {
-        messages
+        patchedMessages
       }
       // Convert Message to AnthropicClient.MessageParam
       let messageParams = processedMessages.map { message in

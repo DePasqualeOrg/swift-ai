@@ -64,6 +64,49 @@ public struct Message: Sendable, Hashable {
   }
 }
 
+// MARK: - Orphaned Tool Call Handling
+
+public extension Message {
+  /// Returns messages with synthetic error results appended for any tool calls that lack matching tool results.
+  /// This can happen when generation is canceled or times out mid-tool-call.
+  static func patchingOrphanedToolCalls(_ messages: [Message]) -> [Message] {
+    var toolCallIds = Set<String>()
+    var toolResultIds = Set<String>()
+
+    for message in messages {
+      if let toolCalls = message.toolCalls {
+        for toolCall in toolCalls {
+          toolCallIds.insert(toolCall.id)
+        }
+      }
+      if let toolResults = message.toolResults {
+        for toolResult in toolResults {
+          toolResultIds.insert(toolResult.id)
+        }
+      }
+    }
+
+    let orphanedIds = toolCallIds.subtracting(toolResultIds)
+    guard !orphanedIds.isEmpty else { return messages }
+
+    var orphanedResults: [ToolResult] = []
+    for message in messages {
+      if let toolCalls = message.toolCalls {
+        for toolCall in toolCalls where orphanedIds.contains(toolCall.id) {
+          orphanedResults.append(ToolResult(
+            name: toolCall.name,
+            id: toolCall.id,
+            content: [.text("Function call was not executed. The request may have been canceled or timed out.")],
+            isError: true
+          ))
+        }
+      }
+    }
+
+    return messages + [Message(role: .tool, content: nil, toolResults: orphanedResults)]
+  }
+}
+
 // MARK: - Tool Collapsing Utilities
 
 public extension Message {
