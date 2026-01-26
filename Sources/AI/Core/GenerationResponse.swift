@@ -170,12 +170,16 @@ public struct GenerationResponse: Sendable, Hashable {
   /// Tool calls made by the model in this response.
   public var toolCalls: [ToolCall]
 
+  /// Provider-specific opaque blocks that must be round-tripped (e.g., Anthropic thinking blocks with signatures).
+  public var opaqueBlocks: [OpaqueBlock]?
+
   /// The assistant message representing this response, suitable for adding to conversation history.
   public var message: Message {
     Message(
       role: Message.Role.assistant,
       content: texts.response,
-      toolCalls: toolCalls.isEmpty ? nil : toolCalls
+      toolCalls: toolCalls.isEmpty ? nil : toolCalls,
+      opaqueBlocks: opaqueBlocks
     )
   }
 
@@ -185,10 +189,12 @@ public struct GenerationResponse: Sendable, Hashable {
   ///   - texts: The text content of the response.
   ///   - toolCalls: Tool calls made by the model.
   ///   - metadata: Metadata about the response.
-  public init(texts: Texts = Texts(), toolCalls: [ToolCall] = [], metadata: Metadata? = nil) {
+  ///   - opaqueBlocks: Provider-specific opaque blocks for round-tripping.
+  public init(texts: Texts = Texts(), toolCalls: [ToolCall] = [], metadata: Metadata? = nil, opaqueBlocks: [OpaqueBlock]? = nil) {
     self.texts = texts
     self.toolCalls = toolCalls
     self.metadata = metadata
+    self.opaqueBlocks = opaqueBlocks
   }
 }
 

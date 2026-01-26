@@ -36,6 +36,7 @@ extension AnthropicClient {
   enum ContentBlockType: String, Codable {
     case text
     case thinking
+    case redactedThinking = "redacted_thinking"
     case toolUse = "tool_use"
     case toolResult = "tool_result"
     case serverToolUse = "server_tool_use"
@@ -59,9 +60,10 @@ extension AnthropicClient {
     var codeExecutionToolResult: CodeExecutionToolResultBlock?
     var source: ContentBlockSource?
     var signature: String?
+    var data: String?
 
     private enum CodingKeys: String, CodingKey {
-      case type, text, thinking, citations, toolUse, toolResult, serverToolUse, webSearchToolResult, webFetchToolResult, codeExecutionToolResult, source, signature
+      case type, text, thinking, citations, toolUse, toolResult, serverToolUse, webSearchToolResult, webFetchToolResult, codeExecutionToolResult, source, signature, data
       case id, name, input
       case toolUseId = "tool_use_id"
       case content, isError = "is_error"
@@ -77,6 +79,8 @@ extension AnthropicClient {
         case .thinking:
           thinking = try container.decodeIfPresent(String.self, forKey: .thinking)
           signature = try container.decodeIfPresent(String.self, forKey: .signature)
+        case .redactedThinking:
+          data = try container.decodeIfPresent(String.self, forKey: .data)
         case .toolUse:
           let id = try container.decode(String.self, forKey: .id)
           let name = try container.decode(String.self, forKey: .name)
@@ -185,6 +189,8 @@ extension AnthropicClient {
         case .thinking:
           try container.encodeIfPresent(thinking, forKey: .thinking)
           try container.encodeIfPresent(signature, forKey: .signature)
+        case .redactedThinking:
+          try container.encodeIfPresent(data, forKey: .data)
         case .toolUse:
           if let toolUse {
             try container.encode(toolUse.id, forKey: .id)
@@ -606,11 +612,29 @@ extension AnthropicClient {
               }
             }
           case .messageStop:
-            // Convert Message to MessageParam
+            // Convert Message to MessageParam, preserving all content blocks
+            let contentBlockParams: [ContentBlockParam] = messageSnapshot.content.compactMap { block in
+              switch block.type {
+                case .thinking:
+                  return ContentBlockParam(type: .thinking, thinking: block.thinking, signature: block.signature)
+                case .redactedThinking:
+                  return ContentBlockParam(type: .redactedThinking, data: block.data)
+                case .text:
+                  return ContentBlockParam(type: .text, text: block.text)
+                case .toolUse:
+                  guard let toolUse = block.toolUse else { return nil }
+                  return ContentBlockParam(type: .toolUse, toolUse: ToolUseBlockParam(id: toolUse.id, name: toolUse.name, input: toolUse.input))
+                case .toolResult:
+                  guard let toolResult = block.toolResult else { return nil }
+                  return ContentBlockParam(type: .toolResult, toolResult: ToolResultBlockParam(toolUseId: toolResult.toolUseId, content: .text(toolResult.content), isError: toolResult.isError))
+                default:
+                  return nil
+              }
+            }
             let messageParam = MessageParam(
               role: messageSnapshot.role,
-              text: messageSnapshot.content.first(where: { $0.type == .text })?.text,
-              contentBlocks: nil
+              text: nil,
+              contentBlocks: contentBlockParams.isEmpty ? nil : contentBlockParams
             )
             addMessageParam(messageParam)
             addMessage(messageSnapshot, emit: true)
@@ -1101,7 +1125,16 @@ public final class AnthropicClient: APIClient, Sendable {
                 }
               }
             case .thinking:
-              break
+              if let thinking = block.thinking {
+                blockDict["thinking"] = .string(thinking)
+              }
+              if let signature = block.signature {
+                blockDict["signature"] = .string(signature)
+              }
+            case .redactedThinking:
+              if let data = block.data {
+                blockDict["data"] = .string(data)
+              }
             case .serverToolUse, .webSearchToolResult, .webFetchToolResult:
               break
             case .image, .document:
@@ -1331,8 +1364,25 @@ extension AnthropicClient {
     let toolUse: ToolUseBlockParam?
     let toolResult: ToolResultBlockParam?
     let codeExecutionToolResult: CodeExecutionToolResultBlockParam?
-    // Add other fields if necessary
-    // ...
+    let thinking: String?
+    let signature: String?
+    let data: String?
+
+    init(type: ContentBlockType, text: String? = nil, source: ContentBlockSource? = nil,
+         toolUse: ToolUseBlockParam? = nil, toolResult: ToolResultBlockParam? = nil,
+         codeExecutionToolResult: CodeExecutionToolResultBlockParam? = nil,
+         thinking: String? = nil, signature: String? = nil, data: String? = nil)
+    {
+      self.type = type
+      self.text = text
+      self.source = source
+      self.toolUse = toolUse
+      self.toolResult = toolResult
+      self.codeExecutionToolResult = codeExecutionToolResult
+      self.thinking = thinking
+      self.signature = signature
+      self.data = data
+    }
   }
 
   struct ToolUseBlockParam: Codable {
@@ -1709,8 +1759,48 @@ public extension AnthropicClient {
       var toolUseBlocks: [ToolUseBlock] = []
       var wasCancelled = false
       var finalMessage: APIMessage? = nil
+      // When thinking is enabled, preprocess messages to handle missing opaque blocks.
+      // Assistant messages with tool calls that lack Anthropic thinking blocks are collapsed to text,
+      // along with their following tool result messages, to avoid the
+      // "final assistant message must start with a thinking block" error.
+      let processedMessages: [Message] = if configuration.thinkingConfig != nil {
+        {
+          var result: [Message] = []
+          var skipNext = false
+          for (index, message) in messages.enumerated() {
+            if skipNext {
+              skipNext = false
+              continue
+            }
+            if message.role == .assistant,
+               let toolCalls = message.toolCalls, !toolCalls.isEmpty
+            {
+              let hasAnthropicBlocks = message.opaqueBlocks?.contains(where: { $0.provider == "anthropic" }) ?? false
+              if !hasAnthropicBlocks {
+                // Collapse this assistant message's tool calls to text
+                result.append(message.collapsingToolCalls())
+                // Also collapse the following tool result message if present
+                if index + 1 < messages.count {
+                  let nextMessage = messages[index + 1]
+                  if nextMessage.toolResults != nil, !nextMessage.toolResults!.isEmpty {
+                    result.append(nextMessage.collapsingToolResults())
+                    skipNext = true
+                  }
+                }
+              } else {
+                result.append(message)
+              }
+            } else {
+              result.append(message)
+            }
+          }
+          return result
+        }()
+      } else {
+        messages
+      }
       // Convert Message to AnthropicClient.MessageParam
-      let messageParams = messages.map { message in
+      let messageParams = processedMessages.map { message in
         if let toolResults = message.toolResults, !toolResults.isEmpty {
           // Handle messages with function results (tool results)
           var contentBlocks: [AnthropicClient.ContentBlockParam] = []
@@ -1789,15 +1879,28 @@ public extension AnthropicClient {
         } else if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
           // Handle messages with function calls
           var contentBlocks: [AnthropicClient.ContentBlockParam] = []
+          // Prepend thinking blocks from opaqueBlocks (required by Anthropic for round-tripping)
+          if let opaqueBlocks = message.opaqueBlocks {
+            for block in opaqueBlocks where block.provider == "anthropic" {
+              switch block.type {
+                case "thinking":
+                  contentBlocks.append(AnthropicClient.ContentBlockParam(
+                    type: .thinking, thinking: block.content, signature: block.signature
+                  ))
+                case "redacted_thinking":
+                  contentBlocks.append(AnthropicClient.ContentBlockParam(
+                    type: .redactedThinking, data: block.data
+                  ))
+                default:
+                  break
+              }
+            }
+          }
           // Add text content if present
           if let content = message.content, !content.isEmpty {
             contentBlocks.append(AnthropicClient.ContentBlockParam(
               type: .text,
-              text: content,
-              source: nil,
-              toolUse: nil,
-              toolResult: nil,
-              codeExecutionToolResult: nil
+              text: content
             ))
           }
           // Add function calls as tool_use blocks
@@ -2008,6 +2111,24 @@ public extension AnthropicClient {
                 return .init(name: name, id: toolUseBlock.id, parameters: parameters)
               }
 
+              // Extract thinking blocks as OpaqueBlocks for round-tripping (only needed when tool calls are present)
+              let opaqueBlocks: [OpaqueBlock]? = if !toolCalls.isEmpty, let msg = finalMessage {
+                msg.content.compactMap { block -> OpaqueBlock? in
+                  switch block.type {
+                    case .thinking:
+                      OpaqueBlock(provider: "anthropic", type: "thinking",
+                                  content: block.thinking, signature: block.signature)
+                    case .redactedThinking:
+                      OpaqueBlock(provider: "anthropic", type: "redacted_thinking",
+                                  data: block.data)
+                    default:
+                      nil
+                  }
+                }
+              } else {
+                nil
+              }
+
               // Build metadata from final message
               let metadata: GenerationResponse.Metadata?
               if let msg = finalMessage {
@@ -2031,10 +2152,11 @@ public extension AnthropicClient {
               }
 
               return (GenerationResponse(texts: .init(
-                reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                response: fullResponseText.isEmpty ? nil : fullResponseText,
-                notes: formatEndnotesList(urlStrings: Array(webSearchCitationUrls))
-              ), toolCalls: toolCalls, metadata: metadata), wasCancelled)
+                  reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
+                  response: fullResponseText.isEmpty ? nil : fullResponseText,
+                  notes: formatEndnotesList(urlStrings: Array(webSearchCitationUrls))
+                ), toolCalls: toolCalls, metadata: metadata,
+                opaqueBlocks: opaqueBlocks?.isEmpty == false ? opaqueBlocks : nil), wasCancelled)
             default:
               continue
           }

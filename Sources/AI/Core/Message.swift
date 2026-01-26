@@ -35,6 +35,9 @@ public struct Message: Sendable, Hashable {
   /// Results from tool executions, when `role` is `.tool`.
   public let toolResults: [ToolResult]?
 
+  /// Provider-specific opaque blocks for round-tripping (e.g., Anthropic thinking signatures).
+  public let opaqueBlocks: [OpaqueBlock]?
+
   /// Creates a new message.
   ///
   /// - Parameters:
@@ -43,17 +46,79 @@ public struct Message: Sendable, Hashable {
   ///   - attachments: File attachments to include.
   ///   - toolCalls: Tool calls made by the assistant.
   ///   - toolResults: Results from tool executions.
+  ///   - opaqueBlocks: Provider-specific opaque blocks for round-tripping.
   public init(
     role: Role,
     content: String?,
     attachments: [Attachment] = [],
     toolCalls: [GenerationResponse.ToolCall]? = nil,
-    toolResults: [ToolResult]? = nil
+    toolResults: [ToolResult]? = nil,
+    opaqueBlocks: [OpaqueBlock]? = nil
   ) {
     self.role = role
     self.content = content
     self.attachments = attachments
     self.toolCalls = toolCalls
     self.toolResults = toolResults
+    self.opaqueBlocks = opaqueBlocks
+  }
+}
+
+// MARK: - Tool Collapsing Utilities
+
+public extension Message {
+  /// Returns a new message with tool_use blocks collapsed to descriptive text.
+  /// Used when a provider can't satisfy metadata requirements for historical tool turns.
+  func collapsingToolCalls() -> Message {
+    guard let toolCalls, !toolCalls.isEmpty else { return self }
+    var text = content ?? ""
+    for toolCall in toolCalls {
+      let paramsJSON: String = if let data = toolCall.parametersToData(),
+                                  let jsonString = String(data: data, encoding: .utf8)
+      {
+        jsonString
+      } else {
+        "{}"
+      }
+      text += "\n\n[Called tool \"\(toolCall.name)\" with: \(paramsJSON)]"
+    }
+    return Message(
+      role: role,
+      content: text,
+      attachments: attachments,
+      toolCalls: nil,
+      toolResults: nil,
+      opaqueBlocks: nil
+    )
+  }
+
+  /// Returns a new message with tool_result blocks collapsed to descriptive text.
+  /// Used when a provider can't satisfy metadata requirements for historical tool turns.
+  func collapsingToolResults() -> Message {
+    guard let toolResults, !toolResults.isEmpty else { return self }
+    var text = content ?? ""
+    for toolResult in toolResults {
+      if let isError = toolResult.isError, isError {
+        let errorText = toolResult.content.compactMap { content -> String? in
+          if case let .text(str) = content { return str }
+          return nil
+        }.joined(separator: " ")
+        text += "\n\n[Error from tool \"\(toolResult.name)\": \(errorText)]"
+      } else {
+        let resultText = toolResult.content.compactMap { content -> String? in
+          if case let .text(str) = content { return str }
+          return nil
+        }.joined(separator: " ")
+        text += "\n\n[Result from tool \"\(toolResult.name)\": \(resultText)]"
+      }
+    }
+    return Message(
+      role: .user,
+      content: text,
+      attachments: attachments,
+      toolCalls: nil,
+      toolResults: nil,
+      opaqueBlocks: nil
+    )
   }
 }
