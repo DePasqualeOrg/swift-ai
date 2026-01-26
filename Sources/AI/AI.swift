@@ -117,8 +117,8 @@ public func generateText(
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil,
-        serverSideTools: webSearch ? [.OpenAI.webSearch(contextSize: .medium)] : []
+        reasoningEffortLevel: reasoning && ResponsesClient.supportsReasoning(modelId) ? .medium : nil,
+        serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : []
       )
       return try await client.generateText(
         modelId: modelId,
@@ -211,8 +211,8 @@ public func streamText(
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil,
-        serverSideTools: webSearch ? [.OpenAI.webSearch(contextSize: .medium)] : []
+        reasoningEffortLevel: reasoning && ResponsesClient.supportsReasoning(modelId) ? .medium : nil,
+        serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : []
       )
       return client.streamText(
         modelId: modelId,
@@ -317,4 +317,16 @@ public func streamText(
     webSearch: webSearch,
     reasoning: reasoning
   )
+}
+
+// MARK: - Helpers
+
+/// Returns the appropriate web search server-side tools for a Responses API model.
+/// xAI (Grok) uses a different tool format than OpenAI.
+private func responsesWebSearchTools(modelId: String) -> [ResponsesClient.ServerSideTool] {
+  if modelId.hasPrefix("grok-") {
+    [.xAI.webSearch()]
+  } else {
+    [.OpenAI.webSearch(contextSize: .medium)]
+  }
 }
