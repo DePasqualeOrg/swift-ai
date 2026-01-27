@@ -29,39 +29,84 @@ public enum MCPToolProviderError: Error, CustomStringConvertible {
 /// The double underscore separator ensures compatibility with all LLM providers while
 /// clearly distinguishing the namespace from the tool name.
 ///
-/// ## Example
+/// ## Example with MCPClient (recommended)
+///
+/// When initialized with `MCPClient`, tool calls automatically benefit from
+/// transparent reconnection and retry on session expiration:
 ///
 /// ```swift
-/// let mcpClient = try await Client.connect(transport: .stdio(command: "mcp-server-filesystem"))
+/// let mcpClient = MCPClient(name: "MyApp", version: "1.0")
+/// try await mcpClient.connect {
+///     HTTPClientTransport(endpoint: URL(string: "https://example.com/mcp")!)
+/// }
+///
 /// let toolProvider = MCPToolProvider(client: mcpClient)
 /// let mcpTools = try await toolProvider.tools()
-/// // Tools: "filesystem__read_file", "filesystem__write_file", etc.
+/// ```
 ///
-/// // Mix with local AI tools
-/// let allTools = localTools + mcpTools
+/// ## Example with Client (basic)
 ///
-/// // Execute tool calls - automatically routed to the correct server
-/// let results = try await toolProvider.execute(response.toolCalls)
-/// messages.append(results.message)
+/// For simple use cases without automatic reconnection:
+///
+/// ```swift
+/// let client = Client(name: "MyApp", version: "1.0")
+/// try await client.connect(transport: StdioTransport())
+///
+/// let toolProvider = MCPToolProvider(client: client)
+/// let mcpTools = try await toolProvider.tools()
 /// ```
 ///
 /// Use `tools(namespaced: false)` to get tools without the server name prefix.
 public actor MCPToolProvider {
-  private let clients: [MCP.Client]
+  /// Bundles a low-level `Client` with its optional managed `MCPClient` wrapper.
+  private struct ClientEntry {
+    let client: MCP.Client
+    let mcpClient: MCPClient?
+  }
+
+  private let entries: [ClientEntry]
   private var serverNames: [String] = []
   private var toolToClientIndex: [String: Int] = [:]
   private var cachedTools: [String: [MCP.Tool]] = [:] // serverName -> tools
 
   // MARK: - Initialization
 
+  /// Creates a tool provider with a single managed MCPClient.
+  ///
+  /// Tool calls are routed through `MCPClient`, which provides automatic
+  /// reconnection and retry on session expiration.
+  ///
+  /// - Parameter client: The managed MCP client connected to a server
+  public init(client: MCPClient) {
+    entries = [ClientEntry(client: client.client, mcpClient: client)]
+  }
+
+  /// Creates a tool provider with multiple managed MCPClients.
+  ///
+  /// Tool calls are routed through `MCPClient`, which provides automatic
+  /// reconnection and retry on session expiration.
+  ///
+  /// Server names are automatically derived from each client's `serverInfo.name`.
+  /// If multiple servers have the same name, they are disambiguated with numeric
+  /// suffixes (e.g., "server", "server-2", "server-3").
+  ///
+  /// - Parameter clients: Array of managed MCP clients, each connected to a server
+  public init(clients: [MCPClient]) {
+    entries = clients.map { ClientEntry(client: $0.client, mcpClient: $0) }
+  }
+
   /// Creates a tool provider with a single MCP client.
+  ///
+  /// For automatic reconnection and retry, use `init(client: MCPClient)` instead.
   ///
   /// - Parameter client: The MCP client connected to a server
   public init(client: MCP.Client) {
-    clients = [client]
+    entries = [ClientEntry(client: client, mcpClient: nil)]
   }
 
   /// Creates a tool provider with multiple MCP clients.
+  ///
+  /// For automatic reconnection and retry, use `init(clients: [MCPClient])` instead.
   ///
   /// Server names are automatically derived from each client's `serverInfo.name`.
   /// If multiple servers have the same name, they are disambiguated with numeric
@@ -69,7 +114,7 @@ public actor MCPToolProvider {
   ///
   /// - Parameter clients: Array of MCP clients, each connected to a server
   public init(clients: [MCP.Client]) {
-    self.clients = clients
+    entries = clients.map { ClientEntry(client: $0, mcpClient: nil) }
   }
 
   // MARK: - Tools
@@ -96,7 +141,6 @@ public actor MCPToolProvider {
     var seenNames: [String: String] = [:] // toolName -> serverName (for conflict detection)
 
     for (index, serverName) in serverNames.enumerated() {
-      let client = clients[index]
       guard let mcpTools = cachedTools[serverName] else { continue }
 
       for tool in mcpTools {
@@ -114,33 +158,17 @@ public actor MCPToolProvider {
         // Track which client handles this tool
         toolToClientIndex[toolName] = index
 
-        let aiTool = try AI.Tool(from: tool, name: toolName) { [weak self, client] parameters in
-          guard self != nil else {
+        let aiTool = try AI.Tool(from: tool, name: toolName) { [weak self] parameters in
+          guard let self else {
             throw MCPToolProviderError.toolNotFound(toolName)
           }
-          if let onProgress = ToolCallProgress.onProgress {
-            let toolCallId = ToolCallContext.currentId
-            let result = try await client.callTool(
-              name: tool.name,
-              arguments: parameters.mcpValues,
-              onProgress: { progress in
-                await onProgress(ToolCallProgressUpdate(
-                  toolCallId: toolCallId,
-                  toolName: toolName,
-                  value: progress.value,
-                  total: progress.total,
-                  message: progress.message
-                ))
-              }
-            )
-            return try Self.convertResult(result)
-          } else {
-            let result = try await client.callTool(
-              name: tool.name,
-              arguments: parameters.mcpValues
-            )
-            return try Self.convertResult(result)
-          }
+          let result = try await callToolInternal(
+            index: index,
+            originalName: tool.name,
+            displayName: toolName,
+            arguments: parameters.mcpValues
+          )
+          return try Self.convertResult(result)
         }
         allTools.append(aiTool)
       }
@@ -165,33 +193,19 @@ public actor MCPToolProvider {
 
       if let serverIndex = serverNames.firstIndex(of: serverName),
          let mcpTools = cachedTools[serverName],
-         let tool = mcpTools.first(where: { $0.name == toolName })
+         mcpTools.first(where: { $0.name == toolName }) != nil
       {
-        let client = clients[serverIndex]
-        return try AI.Tool(from: tool, name: name) { [client] parameters in
-          if let onProgress = ToolCallProgress.onProgress {
-            let toolCallId = ToolCallContext.currentId
-            let result = try await client.callTool(
-              name: toolName,
-              arguments: parameters.mcpValues,
-              onProgress: { progress in
-                await onProgress(ToolCallProgressUpdate(
-                  toolCallId: toolCallId,
-                  toolName: name,
-                  value: progress.value,
-                  total: progress.total,
-                  message: progress.message
-                ))
-              }
-            )
-            return try Self.convertResult(result)
-          } else {
-            let result = try await client.callTool(
-              name: toolName,
-              arguments: parameters.mcpValues
-            )
-            return try Self.convertResult(result)
+        return try AI.Tool(from: mcpTools.first(where: { $0.name == toolName })!, name: name) { [weak self] parameters in
+          guard let self else {
+            throw MCPToolProviderError.toolNotFound(name)
           }
+          let result = try await callToolInternal(
+            index: serverIndex,
+            originalName: toolName,
+            displayName: name,
+            arguments: parameters.mcpValues
+          )
+          return try Self.convertResult(result)
         }
       }
     }
@@ -203,31 +217,17 @@ public actor MCPToolProvider {
       else {
         continue
       }
-      let client = clients[index]
-      return try AI.Tool(from: tool) { [client] parameters in
-        if let onProgress = ToolCallProgress.onProgress {
-          let toolCallId = ToolCallContext.currentId
-          let result = try await client.callTool(
-            name: tool.name,
-            arguments: parameters.mcpValues,
-            onProgress: { progress in
-              await onProgress(ToolCallProgressUpdate(
-                toolCallId: toolCallId,
-                toolName: name,
-                value: progress.value,
-                total: progress.total,
-                message: progress.message
-              ))
-            }
-          )
-          return try Self.convertResult(result)
-        } else {
-          let result = try await client.callTool(
-            name: tool.name,
-            arguments: parameters.mcpValues
-          )
-          return try Self.convertResult(result)
+      return try AI.Tool(from: tool) { [weak self] parameters in
+        guard let self else {
+          throw MCPToolProviderError.toolNotFound(name)
         }
+        let result = try await callToolInternal(
+          index: index,
+          originalName: tool.name,
+          displayName: name,
+          arguments: parameters.mcpValues
+        )
+        return try Self.convertResult(result)
       }
     }
 
@@ -239,17 +239,26 @@ public actor MCPToolProvider {
   /// Executes an AI ToolCall through MCP and returns the result.
   ///
   /// The tool call is automatically routed to the correct server based on the tool name.
+  /// When using `MCPClient`, the call benefits from transparent reconnection and retry.
   ///
   /// - Parameter toolCall: The tool call from an AI response
   /// - Returns: The tool result
   /// - Throws: `MCPToolProviderError.toolNotFound` if the tool is not provided by any server
   public func execute(_ toolCall: AI.GenerationResponse.ToolCall) async throws -> AI.ToolResult {
-    let (client, originalName) = try resolveClient(for: toolCall.name)
+    let (index, originalName) = try resolveClientIndex(for: toolCall.name)
+    let entry = entries[index]
 
-    let result = try await client.callTool(
-      name: originalName,
-      arguments: toolCall.parameters.mcpValues
-    )
+    let result: MCP.CallTool.Result = if let mcpClient = entry.mcpClient {
+      try await mcpClient.callTool(
+        name: originalName,
+        arguments: toolCall.parameters.mcpValues
+      )
+    } else {
+      try await entry.client.callTool(
+        name: originalName,
+        arguments: toolCall.parameters.mcpValues
+      )
+    }
     return AI.ToolResult(result, name: toolCall.name, id: toolCall.id)
   }
 
@@ -304,6 +313,56 @@ public actor MCPToolProvider {
 
   // MARK: - Private Helpers
 
+  /// Calls a tool, routing through MCPClient (with reconnection) when available,
+  /// falling back to direct Client call.
+  private func callToolInternal(
+    index: Int,
+    originalName: String,
+    displayName: String,
+    arguments: [String: MCP.Value]?
+  ) async throws -> MCP.CallTool.Result {
+    let entry = entries[index]
+
+    if let onProgress = ToolCallProgress.onProgress {
+      let toolCallId = ToolCallContext.currentId
+      let progressCallback: MCP.ProgressCallback = { progress in
+        await onProgress(ToolCallProgressUpdate(
+          toolCallId: toolCallId,
+          toolName: displayName,
+          value: progress.value,
+          total: progress.total,
+          message: progress.message
+        ))
+      }
+
+      if let mcpClient = entry.mcpClient {
+        return try await mcpClient.callTool(
+          name: originalName,
+          arguments: arguments,
+          onProgress: progressCallback
+        )
+      } else {
+        return try await entry.client.callTool(
+          name: originalName,
+          arguments: arguments,
+          onProgress: progressCallback
+        )
+      }
+    } else {
+      if let mcpClient = entry.mcpClient {
+        return try await mcpClient.callTool(
+          name: originalName,
+          arguments: arguments
+        )
+      } else {
+        return try await entry.client.callTool(
+          name: originalName,
+          arguments: arguments
+        )
+      }
+    }
+  }
+
   private func refreshToolsIfNeeded(forceRefresh: Bool) async throws {
     if serverNames.isEmpty {
       serverNames = await buildServerNames()
@@ -311,8 +370,14 @@ public actor MCPToolProvider {
 
     for (index, serverName) in serverNames.enumerated() {
       if forceRefresh || cachedTools[serverName] == nil {
-        let result = try await clients[index].listTools()
-        cachedTools[serverName] = result.tools
+        let entry = entries[index]
+        if let mcpClient = entry.mcpClient {
+          let result = try await mcpClient.listTools()
+          cachedTools[serverName] = result.tools
+        } else {
+          let result = try await entry.client.listTools()
+          cachedTools[serverName] = result.tools
+        }
       }
     }
   }
@@ -321,8 +386,8 @@ public actor MCPToolProvider {
     var names: [String] = []
     var nameCounts: [String: Int] = [:]
 
-    for (index, client) in clients.enumerated() {
-      let baseName = await client.serverInfo?.name ?? "server-\(index + 1)"
+    for (index, entry) in entries.enumerated() {
+      let baseName = await entry.client.serverInfo?.name ?? "server-\(index + 1)"
 
       let count = nameCounts[baseName, default: 0]
       nameCounts[baseName] = count + 1
@@ -338,20 +403,20 @@ public actor MCPToolProvider {
     return names
   }
 
-  private func resolveClient(for toolName: String) throws -> (client: MCP.Client, originalName: String) {
+  private func resolveClientIndex(for toolName: String) throws -> (index: Int, originalName: String) {
     // Check if we have a direct mapping
     if let index = toolToClientIndex[toolName] {
       // Check if it's a namespaced name (server__tool format)
       if let separatorRange = toolName.range(of: "__") {
         let originalName = String(toolName[separatorRange.upperBound...])
-        return (clients[index], originalName)
+        return (index, originalName)
       }
-      return (clients[index], toolName)
+      return (index, toolName)
     }
 
     // For single-client case without prior tools() call
-    if clients.count == 1 {
-      return (clients[0], toolName)
+    if entries.count == 1 {
+      return (0, toolName)
     }
 
     throw MCPToolProviderError.toolNotFound(toolName)
