@@ -30,7 +30,7 @@ struct ToolConversionTests {
       execute: { _ in [.text("Sunny")] }
     )
 
-    let tool = MCP.Tool(aiTool)
+    let tool = MCP.Tool(from: aiTool)
 
     #expect(tool.name == "get_weather")
     #expect(tool.description == "Get weather for a location")
@@ -87,7 +87,7 @@ struct ToolConversionTests {
       inputSchema: inputSchema
     )
 
-    let aiTool = try AI.Tool(tool) { params in
+    let aiTool = try AI.Tool(from: tool) { params in
       [.text("Results for: \(params["query"]?.stringRepresentation ?? "")")]
     }
 
@@ -123,7 +123,7 @@ struct ToolConversionTests {
       execute: { _ in [.text("ok")] }
     )
 
-    let tool = MCP.Tool(aiTool)
+    let tool = MCP.Tool(from: aiTool)
 
     guard case let .object(schema) = tool.inputSchema,
           case let .object(properties) = schema["properties"]
