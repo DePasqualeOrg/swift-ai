@@ -116,8 +116,9 @@ public func generateText(
 
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
+      let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoning && ResponsesClient.supportsReasoning(modelId) ? .medium : nil,
+        reasoningEffortLevel: reasoningLevel,
         serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : []
       )
       return try await client.generateText(
@@ -210,8 +211,9 @@ public func streamText(
 
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
+      let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoning && ResponsesClient.supportsReasoning(modelId) ? .medium : nil,
+        reasoningEffortLevel: reasoningLevel,
         serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : []
       )
       return client.streamText(
