@@ -259,7 +259,7 @@ extension AnthropicClient {
       }
     }
 
-    // Helper to get display text regardless of type
+    /// Helper to get display text regardless of type
     var displayText: String {
       switch self {
         case let .text(citation): citation.text
@@ -267,7 +267,7 @@ extension AnthropicClient {
       }
     }
 
-    // Other convenience properties
+    /// Other convenience properties
     var url: String? {
       switch self {
         case .text: nil
@@ -283,7 +283,7 @@ extension AnthropicClient {
     }
   }
 
-  // Used for retrieval-augmented generation (when documents are included with the request)
+  /// Used for retrieval-augmented generation (when documents are included with the request)
   struct TextCitation: Codable, Sendable {
     let type: String
     let text: String
@@ -328,7 +328,7 @@ extension AnthropicClient {
     }
   }
 
-  // Stream event types
+  /// Stream event types
   enum MessageStreamEventType: String, Codable {
     case messageStart = "message_start"
     case messageDelta = "message_delta"
@@ -434,7 +434,7 @@ extension AnthropicClient {
 
     init() {}
 
-    // Create an AsyncStream for events
+    /// Create an AsyncStream for events
     func events() -> AsyncStream<Event> {
       AsyncStream { continuation in
         let id = UUID()
@@ -919,7 +919,7 @@ public final class AnthropicClient: APIClient, Sendable {
 
   struct ThinkingConfig: Encodable {
     enum EnabledSetting: String, Encodable {
-      case enabled, disabled
+      case enabled, disabled, adaptive
     }
 
     let type: EnabledSetting
@@ -931,11 +931,25 @@ public final class AnthropicClient: APIClient, Sendable {
     }
   }
 
+  /// Controls how much effort the model spends on thinking.
+  /// Maps to the `effort` value in the API's `output_config`.
+  public enum EffortLevel: String, CaseIterable, Identifiable, Sendable {
+    case low, medium, high, max
+    public var id: String {
+      rawValue
+    }
+  }
+
   /// Configuration options for Anthropic API requests.
   public struct Configuration: Sendable {
     /// Maximum tokens for extended thinking. Set to enable thinking mode.
     /// The minimum value supported by Anthropic is 1024.
     public var maxThinkingTokens: Int?
+
+    /// Controls how much effort the model spends on adaptive thinking.
+    /// Setting this enables adaptive thinking (the model decides how much to think).
+    /// Mutually exclusive with `maxThinkingTokens`.
+    public var effort: EffortLevel?
 
     /// Enables web search tool for retrieving information from the internet.
     public var webSearch: Bool
@@ -947,7 +961,9 @@ public final class AnthropicClient: APIClient, Sendable {
     public var codeExecution: Bool
 
     var thinkingConfig: ThinkingConfig? {
-      if let maxThinkingTokens, maxThinkingTokens > 0 {
+      if effort != nil {
+        ThinkingConfig(type: .adaptive, budgetTokens: nil)
+      } else if let maxThinkingTokens, maxThinkingTokens > 0 {
         ThinkingConfig(type: .enabled, budgetTokens: maxThinkingTokens)
       } else {
         nil
@@ -958,11 +974,13 @@ public final class AnthropicClient: APIClient, Sendable {
     ///
     /// - Parameters:
     ///   - maxThinkingTokens: Maximum tokens for extended thinking. Minimum is 1024.
+    ///   - effort: Effort level for adaptive thinking. Setting this enables adaptive thinking.
     ///   - webSearch: Enable web search tool.
     ///   - webContent: Enable web content fetching.
     ///   - codeExecution: Enable sandboxed code execution.
-    public init(maxThinkingTokens: Int? = nil, webSearch: Bool = false, webContent: Bool = false, codeExecution: Bool = false) {
+    public init(maxThinkingTokens: Int? = nil, effort: EffortLevel? = nil, webSearch: Bool = false, webContent: Bool = false, codeExecution: Bool = false) {
       self.maxThinkingTokens = maxThinkingTokens
+      self.effort = effort
       self.webSearch = webSearch
       self.webContent = webContent
       self.codeExecution = codeExecution
@@ -1210,6 +1228,9 @@ public final class AnthropicClient: APIClient, Sendable {
       }
       requestBody["thinking"] = .object(thinkingDict)
     }
+    if let effort = params.effort {
+      requestBody["output_config"] = .object(["effort": .string(effort.rawValue)])
+    }
     // Add tool parameters
     if let tools = params.tools, !tools.isEmpty {
       requestBody["tools"] = try .array(tools.compactMap { tool in
@@ -1276,7 +1297,7 @@ public final class AnthropicClient: APIClient, Sendable {
     currentTask?.cancel()
   }
 
-  // Helper method to make requests with retries
+  /// Helper method to make requests with retries
   private func makeRequest<T: Decodable>(
     endpoint: URL,
     method: String,
@@ -1474,6 +1495,7 @@ extension AnthropicClient {
     var toolChoice: ToolChoice?
     let metadata: [String: String]?
     let thinking: ThinkingConfig?
+    let effort: EffortLevel?
     let disableParallelToolUse: Bool?
 
     init(
@@ -1488,6 +1510,7 @@ extension AnthropicClient {
       toolChoice: ToolChoice? = nil,
       metadata: [String: String]? = nil,
       thinking: ThinkingConfig? = nil,
+      effort: EffortLevel? = nil,
       disableParallelToolUse: Bool? = nil
     ) {
       self.model = model
@@ -1501,6 +1524,7 @@ extension AnthropicClient {
       self.toolChoice = toolChoice
       self.metadata = metadata
       self.thinking = thinking
+      self.effort = effort
       self.disableParallelToolUse = disableParallelToolUse
     }
   }
@@ -1947,7 +1971,8 @@ public extension AnthropicClient {
         maxTokens: maxTokens,
         system: systemPrompt,
         temperature: adjustedTemperature,
-        thinking: configuration.thinkingConfig
+        thinking: configuration.thinkingConfig,
+        effort: configuration.effort
       )
       // Tools - rawInputSchema is always populated (either explicit or generated from parameters)
       var anthropicTools = tools.map { tool -> AnthropicClient.APITool in
@@ -1994,7 +2019,8 @@ public extension AnthropicClient {
                     reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                     response: fullResponseText.isEmpty ? nil : fullResponseText,
                     notes: nil
-                  ), toolCalls: []))
+                  ), toolCalls: [])
+                )
               }
             case let .text(delta, _):
               fullResponseText += delta
@@ -2138,6 +2164,8 @@ public extension AnthropicClient {
                   case "end_turn", "stop_sequence": .stop
                   case "max_tokens": .maxTokens
                   case "tool_use": .toolUse
+                  case "refusal": .refusal
+                  case "pause_turn": .pauseTurn
                   case .some: .other
                   case .none: nil
                 }
@@ -2186,6 +2214,8 @@ public extension AnthropicClient {
           case "end_turn", "stop_sequence": .stop
           case "max_tokens": .maxTokens
           case "tool_use": .toolUse
+          case "refusal": .refusal
+          case "pause_turn": .pauseTurn
           case .some: .other
           case .none: nil
         }
@@ -2429,8 +2459,8 @@ extension AnthropicClient {
       }
     }
 
-    // If you add a custom init(from:), you might need to provide encode(to:) if default isn't sufficient
-    // For this change, the default encode should be fine as `content` is now always an array internally.
+    /// If you add a custom init(from:), you might need to provide encode(to:) if default isn't sufficient
+    /// For this change, the default encode should be fine as `content` is now always an array internally.
     func encode(to encoder: Encoder) throws {
       var container = encoder.container(keyedBy: CodingKeys.self)
       try container.encode(toolUseId, forKey: .toolUseId)
@@ -2438,7 +2468,7 @@ extension AnthropicClient {
     }
   }
 
-  // Define the structure for successful code execution content
+  /// Define the structure for successful code execution content
   struct CodeExecutionResultContent: Codable, Sendable {
     let type: String // Should be "code_execution_result"
     let stdout: String
@@ -2452,7 +2482,7 @@ extension AnthropicClient {
     }
   }
 
-  // Define the structure for code execution error content
+  /// Define the structure for code execution error content
   struct CodeExecutionToolResultErrorContent: Codable, Sendable {
     let type: String // Should be "code_execution_tool_result_error"
     let errorCode: String
@@ -2501,7 +2531,7 @@ extension AnthropicClient {
     }
   }
 
-  // Define the structure for file outputs from code execution
+  /// Define the structure for file outputs from code execution
   struct CodeExecutionOutputBlock: Codable, Sendable {
     let fileId: String
     let type: String // Should be "code_execution_output"
@@ -2551,8 +2581,8 @@ extension AnthropicClient {
     case results(items: [WebSearchResultItem])
     case error(details: WebSearchErrorDetails)
 
-    // Custom Codable implementation is needed because the JSON is either
-    // an array (for results) or an object (for error).
+    /// Custom Codable implementation is needed because the JSON is either
+    /// an array (for results) or an object (for error).
     init(from decoder: Decoder) throws {
       let container = try decoder.singleValueContainer()
       // Try decoding as an array of results first

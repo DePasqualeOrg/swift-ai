@@ -95,6 +95,10 @@ public struct GenerationResponse: Sendable, Hashable {
     case toolUse
     /// The response was filtered due to content policy.
     case contentFilter
+    /// The model refused to generate a response due to a policy violation.
+    case refusal
+    /// A long-running turn was paused and can be resumed.
+    case pauseTurn
     /// An unrecognized finish reason from the provider.
     case other
   }

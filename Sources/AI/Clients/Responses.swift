@@ -997,7 +997,7 @@ public final class ResponsesClient: APIClient, Sendable {
     )
   }
 
-  // Shared streaming logic for both direct and resumption modes
+  /// Shared streaming logic for both direct and resumption modes
   private func performBackgroundStream(
     request: URLRequest,
     responseId: String?,
@@ -1133,7 +1133,7 @@ public final class ResponsesClient: APIClient, Sendable {
     }
   }
 
-  // Shared SSE (Server-Sent Events) streaming logic for all stream types
+  /// Shared SSE (Server-Sent Events) streaming logic for all stream types
   private func performSSEStream(
     request: URLRequest,
     continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
@@ -1203,7 +1203,7 @@ public final class ResponsesClient: APIClient, Sendable {
     }
   }
 
-  // Helper method to check response status and handle completion/failure
+  /// Helper method to check response status and handle completion/failure
   private func checkResponseStatusAndHandle(
     responseId: String,
     apiKey: String?,
@@ -1251,7 +1251,7 @@ public final class ResponsesClient: APIClient, Sendable {
     return false
   }
 
-  // Helper method to parse completed response
+  /// Helper method to parse completed response
   private func parseCompletedResponse(
     _ response: ResponseObject,
     continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation
@@ -1578,6 +1578,7 @@ public final class ResponsesClient: APIClient, Sendable {
 
 extension ResponsesClient {
   /// Reasoning effort level for models that support extended thinking.
+  /// Maps to the `effort` value in the API's `reasoning` object.
   public enum ReasoningEffortLevel: String, CaseIterable, Identifiable, Sendable {
     /// Minimal reasoning effort for simple tasks.
     case minimal
@@ -1589,7 +1590,9 @@ extension ResponsesClient {
     case high
 
     /// The raw value identifier.
-    public var id: String { rawValue }
+    public var id: String {
+      rawValue
+    }
   }
 
   /// Response verbosity level controlling output detail.
@@ -1602,7 +1605,9 @@ extension ResponsesClient {
     case high
 
     /// The raw value identifier.
-    public var id: String { rawValue }
+    public var id: String {
+      rawValue
+    }
   }
 
   /// Context size for web search results.
@@ -1615,7 +1620,9 @@ extension ResponsesClient {
     case high
 
     /// The raw value identifier.
-    public var id: String { rawValue }
+    public var id: String {
+      rawValue
+    }
   }
 
   /// A server-side tool that runs on the provider's infrastructure.
@@ -1984,7 +1991,7 @@ extension ResponsesClient {
   }
 }
 
-// Response format options for the responses endpoint
+/// Response format options for the responses endpoint
 enum ResponseFormat {
   case text
   case jsonObject
