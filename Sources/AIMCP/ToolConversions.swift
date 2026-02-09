@@ -245,7 +245,9 @@ extension AI.Tool {
   /// Error thrown when an MCP tool returns an error result.
   private struct MCPToolError: Error, LocalizedError {
     let message: String
-    var errorDescription: String? { message }
+    var errorDescription: String? {
+      message
+    }
   }
 
   /// Converts an MCP CallTool.Result to AI ToolResult.Content array.

@@ -39,7 +39,9 @@ public protocol ToolOutput: Sendable {
 // MARK: - String Conformance
 
 extension String: ToolOutput {
-  public static var resultTypes: Set<ToolResult.ValueType>? { [.text] }
+  public static var resultTypes: Set<ToolResult.ValueType>? {
+    [.text]
+  }
 
   public func toToolResult() -> [ToolResult.Content] {
     [.text(self)]
@@ -58,7 +60,9 @@ extension String: ToolOutput {
 /// }
 /// ```
 public struct ImageResult: ToolOutput, Sendable {
-  public static var resultTypes: Set<ToolResult.ValueType>? { [.image] }
+  public static var resultTypes: Set<ToolResult.ValueType>? {
+    [.image]
+  }
 
   /// The raw image data.
   public let data: Data
@@ -104,7 +108,9 @@ public struct ImageResult: ToolOutput, Sendable {
 /// }
 /// ```
 public struct AudioResult: ToolOutput, Sendable {
-  public static var resultTypes: Set<ToolResult.ValueType>? { [.audio] }
+  public static var resultTypes: Set<ToolResult.ValueType>? {
+    [.audio]
+  }
 
   /// The raw audio data.
   public let data: Data
@@ -138,7 +144,9 @@ public struct AudioResult: ToolOutput, Sendable {
 /// }
 /// ```
 public struct FileResult: ToolOutput, Sendable {
-  public static var resultTypes: Set<ToolResult.ValueType>? { [.file] }
+  public static var resultTypes: Set<ToolResult.ValueType>? {
+    [.file]
+  }
 
   /// The raw file data.
   public let data: Data
@@ -180,7 +188,9 @@ public struct FileResult: ToolOutput, Sendable {
 /// ```
 public struct MultiContent: ToolOutput, Sendable {
   /// Returns `nil` because the actual content types are determined at runtime.
-  public static var resultTypes: Set<ToolResult.ValueType>? { nil }
+  public static var resultTypes: Set<ToolResult.ValueType>? {
+    nil
+  }
 
   /// The content items to return.
   public let items: [ToolResult.Content]

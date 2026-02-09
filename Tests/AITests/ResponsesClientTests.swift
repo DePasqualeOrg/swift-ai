@@ -337,7 +337,7 @@ struct ResponsesClientTests {
   func nonStreamingResponse() async throws {
     let fixture = try loadFixture("responses_non_streaming_response.json")
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { request in
       let response = HTTPURLResponse(
@@ -526,7 +526,7 @@ struct ResponsesClientTests {
   @Test("Handles network errors")
   func networkError() async throws {
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { _ in
       throw URLError(.notConnectedToInternet)
@@ -616,7 +616,7 @@ struct ResponsesClientTests {
   func instructionsInRequestBody() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { [self] request in
       capturedBodyData = readRequestBody(from: request)
@@ -654,7 +654,7 @@ struct ResponsesClientTests {
     // Verify body was captured
     #expect(capturedBodyData != nil, "Request body should be available")
 
-    let body = try JSONSerialization.jsonObject(with: capturedBodyData!) as? [String: Any]
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     #expect(body != nil)
 
     // Verify instructions (system prompt) is included at top level
@@ -669,14 +669,14 @@ struct ResponsesClientTests {
     // Verify input array exists
     let input = body?["input"] as? [[String: Any]]
     #expect(input != nil)
-    #expect(!input!.isEmpty)
+    #expect(try !#require(input?.isEmpty))
   }
 
   @Test("Request body includes tools correctly")
   func toolsInRequestBody() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { [self] request in
       capturedBodyData = readRequestBody(from: request)
@@ -713,13 +713,13 @@ struct ResponsesClientTests {
     // Verify body was captured
     #expect(capturedBodyData != nil, "Request body should be available")
 
-    let body = try JSONSerialization.jsonObject(with: capturedBodyData!) as? [String: Any]
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     #expect(body != nil)
 
     // Verify tools are included in request
     let tools = body?["tools"] as? [[String: Any]]
     #expect(tools != nil, "Request should include tools")
-    #expect(!tools!.isEmpty)
+    #expect(try !#require(tools?.isEmpty))
 
     // Verify tool structure (Responses API uses flat structure, not nested "function" object)
     let firstTool = tools?.first
@@ -732,7 +732,7 @@ struct ResponsesClientTests {
   func authorizationHeader() async throws {
     var capturedRequest: URLRequest?
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { request in
       capturedRequest = request
@@ -775,7 +775,7 @@ struct ResponsesClientTests {
   func cancellationPropagates() async throws {
     // Create a slow-responding fixture
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { _ in
       // Simulate a slow response

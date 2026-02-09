@@ -23,7 +23,9 @@
 public protocol ToolEnum: ParameterValue, RawRepresentable, CaseIterable where RawValue == String {}
 
 public extension ToolEnum {
-  static var jsonSchemaType: String { "string" }
+  static var jsonSchemaType: String {
+    "string"
+  }
 
   /// Uses the first case as the placeholder value.
   static var placeholderValue: Self {

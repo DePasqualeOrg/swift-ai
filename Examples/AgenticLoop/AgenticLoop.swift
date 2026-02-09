@@ -8,7 +8,7 @@ import Foundation
 
 // MARK: - Errors
 
-/// Throwing a LocalizedError gives the model helpful information on what went wrong so that it can recover.
+// Throwing a LocalizedError gives the model helpful information on what went wrong so that it can recover.
 
 enum RandomSelectionError: LocalizedError {
   case emptyCollection(String)

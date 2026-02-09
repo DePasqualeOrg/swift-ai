@@ -28,8 +28,8 @@ public final class GeminiClient: APIClient, Sendable {
 
   private let modelsEndpoint: URL
 
-  // URLSession configured with no timeout for long-running requests (like extended thinking)
-  // This mirrors the TypeScript SDK approach which doesn't set a default timeout
+  /// URLSession configured with no timeout for long-running requests (like extended thinking)
+  /// This mirrors the TypeScript SDK approach which doesn't set a default timeout
   public static let defaultSession: URLSession = {
     let config = URLSessionConfiguration.default
     config.timeoutIntervalForRequest = .infinity // No timeout for individual requests
@@ -43,7 +43,9 @@ public final class GeminiClient: APIClient, Sendable {
     let message: String
     let response: GenerateContentResponse?
 
-    var errorDescription: String? { message }
+    var errorDescription: String? {
+      message
+    }
 
     init(message: String, response: GenerateContentResponse? = nil) {
       self.message = message
@@ -106,7 +108,7 @@ public final class GeminiClient: APIClient, Sendable {
     let thoughtsTokenCount: Int?
   }
 
-  // Code execution
+  /// Code execution
   struct ExecutableCode: Codable {
     let code: String?
     let language: String?
@@ -117,7 +119,7 @@ public final class GeminiClient: APIClient, Sendable {
     let output: String?
   }
 
-  // Grounding metadata structures
+  /// Grounding metadata structures
   struct GroundingMetadata: Codable {
     let webSearchQueries: [String]?
     let groundingChunks: [GroundingChunk]?
@@ -505,7 +507,7 @@ public final class GeminiClient: APIClient, Sendable {
     return processStreamBytes(result: result, response: response)
   }
 
-  // Process the raw bytes into a stream of responses
+  /// Process the raw bytes into a stream of responses
   private func processStreamBytes(result: URLSession.AsyncBytes, response: URLResponse) -> AsyncThrowingStream<StreamResponse, Error> {
     AsyncThrowingStream { continuation in
       Task {
@@ -768,7 +770,7 @@ public final class GeminiClient: APIClient, Sendable {
     }
   }
 
-  // Extract grounding information from metadata
+  /// Extract grounding information from metadata
   private func formatGroundingInfo(from metadata: GroundingMetadata) async -> String? {
     var notes = [String]()
     // Add sources
@@ -808,8 +810,7 @@ public final class GeminiClient: APIClient, Sendable {
       }
     }
 
-    let result = notes.isEmpty ? nil : notes.joined(separator: "\n")
-    return result
+    return notes.isEmpty ? nil : notes.joined(separator: "\n")
   }
 
   /// Generates a text response from the given conversation messages.
@@ -1196,7 +1197,7 @@ public final class GeminiClient: APIClient, Sendable {
           let uri: String
           let state: String
           let source: String
-          // Create new instance
+          /// Create new instance
           init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             name = try container.decode(String.self, forKey: .name)
@@ -1212,7 +1213,7 @@ public final class GeminiClient: APIClient, Sendable {
             source = try container.decode(String.self, forKey: .source)
           }
 
-          // Create new instance with updated state
+          /// Create new instance with updated state
           init(copyFrom other: File, withState newState: String) {
             name = other.name
             displayName = other.displayName
@@ -1229,7 +1230,7 @@ public final class GeminiClient: APIClient, Sendable {
         }
 
         let file: File
-        // Create new instance with updated file
+        /// Create new instance with updated file
         init(copyFrom _: FileResponse, withFile newFile: File) {
           file = newFile
         }
@@ -1310,7 +1311,7 @@ public final class GeminiClient: APIClient, Sendable {
     }
   }
 
-  // Used to get actual URL in search results references instead of Google tracking URL
+  /// Used to get actual URL in search results references instead of Google tracking URL
   private func resolveRedirectURL(_ url: String) async -> String {
     guard let originalURL = URL(string: url) else { return url }
     // Create a HEAD request to follow redirects without downloading content
@@ -1337,7 +1338,7 @@ public final class GeminiClient: APIClient, Sendable {
     return url
   }
 
-  // Extract the blocked URL from ATS error
+  /// Extract the blocked URL from ATS error
   private func extractURLFromATSError(_ error: Error) -> String? {
     let nsError = error as NSError
     // Check the error's userInfo dictionary for URL information
@@ -1501,7 +1502,9 @@ public extension GeminiClient {
     case high
 
     /// The raw value identifier.
-    public var id: String { rawValue }
+    public var id: String {
+      rawValue
+    }
   }
 
   /// Content safety filtering threshold levels.
@@ -1516,7 +1519,9 @@ public extension GeminiClient {
     case low = "BLOCK_LOW_AND_ABOVE"
 
     /// The raw value identifier.
-    public var id: String { rawValue }
+    public var id: String {
+      rawValue
+    }
   }
 
   /// Returns the appropriate thinking configuration for a Gemini model.

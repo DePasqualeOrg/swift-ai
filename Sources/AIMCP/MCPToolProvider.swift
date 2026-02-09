@@ -425,7 +425,9 @@ public actor MCPToolProvider {
   /// Error thrown when an MCP tool returns an error result.
   struct MCPToolError: Error, LocalizedError {
     let message: String
-    var errorDescription: String? { message }
+    var errorDescription: String? {
+      message
+    }
   }
 
   static func convertResult(_ result: MCP.CallTool.Result) throws -> [AI.ToolResult.Content] {

@@ -343,7 +343,7 @@ struct ChatCompletionsClientTests {
   func nonStreamingResponse() async throws {
     let fixture = try loadFixture("openai_non_streaming_response.json")
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { request in
       let response = HTTPURLResponse(
@@ -563,7 +563,7 @@ struct ChatCompletionsClientTests {
   @Test("Handles network errors")
   func networkError() async throws {
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { _ in
       throw URLError(.notConnectedToInternet)
@@ -652,7 +652,7 @@ struct ChatCompletionsClientTests {
   func systemPromptInRequestBody() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { [self] request in
       capturedBodyData = readRequestBody(from: request)
@@ -685,13 +685,13 @@ struct ChatCompletionsClientTests {
     // Verify body was captured
     #expect(capturedBodyData != nil, "Request body should be available")
 
-    let body = try JSONSerialization.jsonObject(with: capturedBodyData!) as? [String: Any]
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     #expect(body != nil)
 
     // Verify messages array includes system message
     let messages = body?["messages"] as? [[String: Any]]
     #expect(messages != nil)
-    #expect(messages!.count >= 2) // At least system + user
+    #expect(try #require(messages?.count) >= 2) // At least system + user
 
     // Verify first message is system message
     let systemMessage = messages?.first
@@ -715,7 +715,7 @@ struct ChatCompletionsClientTests {
   func toolsInRequestBody() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { [self] request in
       capturedBodyData = readRequestBody(from: request)
@@ -748,13 +748,13 @@ struct ChatCompletionsClientTests {
     // Verify body was captured
     #expect(capturedBodyData != nil, "Request body should be available")
 
-    let body = try JSONSerialization.jsonObject(with: capturedBodyData!) as? [String: Any]
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     #expect(body != nil)
 
     // Verify tools are included in request
     let tools = body?["tools"] as? [[String: Any]]
     #expect(tools != nil, "Request should include tools")
-    #expect(!tools!.isEmpty)
+    #expect(try !#require(tools?.isEmpty))
 
     // Verify tool structure
     let firstTool = tools?.first
@@ -769,7 +769,7 @@ struct ChatCompletionsClientTests {
   func authorizationHeader() async throws {
     var capturedRequest: URLRequest?
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { request in
       capturedRequest = request
@@ -810,7 +810,7 @@ struct ChatCompletionsClientTests {
   func cancellationPropagates() async throws {
     // Create a slow-responding fixture
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { _ in
       // Simulate a slow response

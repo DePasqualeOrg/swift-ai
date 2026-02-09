@@ -118,7 +118,7 @@ struct MCPAgenticLoopTests {
       provider: .chatCompletions(
         apiKey: apiKey,
         modelId: "grok-4-1-fast-reasoning",
-        endpoint: URL(string: "https://api.x.ai/v1/chat/completions")!
+        endpoint: #require(URL(string: "https://api.x.ai/v1/chat/completions"))
       )
     )
 
@@ -199,7 +199,7 @@ struct MCPAgenticLoopTests {
       provider: .chatCompletions(
         apiKey: apiKey,
         modelId: "grok-4-1-fast-reasoning",
-        endpoint: URL(string: "https://api.x.ai/v1/chat/completions")!
+        endpoint: #require(URL(string: "https://api.x.ai/v1/chat/completions"))
       )
     )
 

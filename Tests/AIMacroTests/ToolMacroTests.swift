@@ -14,7 +14,7 @@ final class ToolMacroTests: XCTestCase {
 
   // MARK: - Compile-Time Validation Tests
 
-  func testMissingNameError() throws {
+  func testMissingNameError() {
     assertMacroExpansion(
       """
       @Tool
@@ -42,7 +42,7 @@ final class ToolMacroTests: XCTestCase {
     )
   }
 
-  func testMissingDescriptionError() throws {
+  func testMissingDescriptionError() {
     assertMacroExpansion(
       """
       @Tool
@@ -70,7 +70,7 @@ final class ToolMacroTests: XCTestCase {
     )
   }
 
-  func testNotAStructError() throws {
+  func testNotAStructError() {
     assertMacroExpansion(
       """
       @Tool
@@ -92,7 +92,7 @@ final class ToolMacroTests: XCTestCase {
     )
   }
 
-  func testInvalidToolNameWithSpaces() throws {
+  func testInvalidToolNameWithSpaces() {
     assertMacroExpansion(
       """
       @Tool
@@ -122,7 +122,7 @@ final class ToolMacroTests: XCTestCase {
     )
   }
 
-  func testInvalidToolNameTooLong() throws {
+  func testInvalidToolNameTooLong() {
     let longName = String(repeating: "a", count: 129)
     assertMacroExpansion(
       """
@@ -153,7 +153,7 @@ final class ToolMacroTests: XCTestCase {
     )
   }
 
-  func testNonLiteralDefaultValueError() throws {
+  func testNonLiteralDefaultValueError() {
     assertMacroExpansion(
       """
       @Tool

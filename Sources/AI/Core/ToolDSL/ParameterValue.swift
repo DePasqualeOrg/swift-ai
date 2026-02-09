@@ -73,14 +73,21 @@ public protocol ParameterValue: Sendable {
 
 public extension ParameterValue {
   /// Default: no additional properties.
-  static var jsonSchemaProperties: [String: Value] { [:] }
+  static var jsonSchemaProperties: [String: Value] {
+    [:]
+  }
 }
 
 // MARK: - String Conformance
 
 extension String: ParameterValue {
-  public static var jsonSchemaType: String { "string" }
-  public static var placeholderValue: String { "" }
+  public static var jsonSchemaType: String {
+    "string"
+  }
+
+  public static var placeholderValue: String {
+    ""
+  }
 
   /// Parse a string from a Value.
   /// Uses strict mode: only `.string` values are accepted.
@@ -92,8 +99,13 @@ extension String: ParameterValue {
 // MARK: - Int Conformance
 
 extension Int: ParameterValue {
-  public static var jsonSchemaType: String { "integer" }
-  public static var placeholderValue: Int { 0 }
+  public static var jsonSchemaType: String {
+    "integer"
+  }
+
+  public static var placeholderValue: Int {
+    0
+  }
 
   /// Parse an integer from a Value.
   /// Uses strict mode: only `.int` values are accepted.
@@ -105,8 +117,13 @@ extension Int: ParameterValue {
 // MARK: - Double Conformance
 
 extension Double: ParameterValue {
-  public static var jsonSchemaType: String { "number" }
-  public static var placeholderValue: Double { 0 }
+  public static var jsonSchemaType: String {
+    "number"
+  }
+
+  public static var placeholderValue: Double {
+    0
+  }
 
   /// Parse a double from a Value.
   /// Uses strict mode: only `.double` and `.int` values are accepted.
@@ -118,8 +135,13 @@ extension Double: ParameterValue {
 // MARK: - Bool Conformance
 
 extension Bool: ParameterValue {
-  public static var jsonSchemaType: String { "boolean" }
-  public static var placeholderValue: Bool { false }
+  public static var jsonSchemaType: String {
+    "boolean"
+  }
+
+  public static var placeholderValue: Bool {
+    false
+  }
 
   /// Parse a boolean from a Value.
   /// Uses strict mode: only `.bool` values are accepted.
@@ -131,8 +153,13 @@ extension Bool: ParameterValue {
 // MARK: - Date Conformance
 
 extension Date: ParameterValue {
-  public static var jsonSchemaType: String { "string" }
-  public static var placeholderValue: Date { Date(timeIntervalSince1970: 0) }
+  public static var jsonSchemaType: String {
+    "string"
+  }
+
+  public static var placeholderValue: Date {
+    Date(timeIntervalSince1970: 0)
+  }
 
   public static var jsonSchemaProperties: [String: Value] {
     ["format": .string("date-time")]
@@ -164,8 +191,13 @@ extension Date: ParameterValue {
 // MARK: - Data Conformance
 
 extension Data: ParameterValue {
-  public static var jsonSchemaType: String { "string" }
-  public static var placeholderValue: Data { Data() }
+  public static var jsonSchemaType: String {
+    "string"
+  }
+
+  public static var placeholderValue: Data {
+    Data()
+  }
 
   public static var jsonSchemaProperties: [String: Value] {
     ["contentEncoding": .string("base64")]
@@ -185,10 +217,17 @@ extension Data: ParameterValue {
 // MARK: - Optional Conformance
 
 extension Optional: ParameterValue where Wrapped: ParameterValue {
-  public static var jsonSchemaType: String { Wrapped.jsonSchemaType }
-  public static var placeholderValue: Wrapped? { nil }
+  public static var jsonSchemaType: String {
+    Wrapped.jsonSchemaType
+  }
 
-  public static var jsonSchemaProperties: [String: Value] { Wrapped.jsonSchemaProperties }
+  public static var placeholderValue: Wrapped? {
+    nil
+  }
+
+  public static var jsonSchemaProperties: [String: Value] {
+    Wrapped.jsonSchemaProperties
+  }
 
   /// Parse an optional value from a Value.
   /// Returns nil (success with nil value) for Value.null, otherwise delegates to wrapped type.
@@ -208,8 +247,13 @@ extension Optional: ParameterValue where Wrapped: ParameterValue {
 // MARK: - Array Conformance
 
 extension Array: ParameterValue where Element: ParameterValue {
-  public static var jsonSchemaType: String { "array" }
-  public static var placeholderValue: [Element] { [] }
+  public static var jsonSchemaType: String {
+    "array"
+  }
+
+  public static var placeholderValue: [Element] {
+    []
+  }
 
   public static var jsonSchemaProperties: [String: Value] {
     var props: [String: Value] = [
@@ -247,8 +291,13 @@ extension Array: ParameterValue where Element: ParameterValue {
 // MARK: - Dictionary Conformance
 
 extension Dictionary: ParameterValue where Key == String, Value: ParameterValue {
-  public static var jsonSchemaType: String { "object" }
-  public static var placeholderValue: [String: Value] { [:] }
+  public static var jsonSchemaType: String {
+    "object"
+  }
+
+  public static var placeholderValue: [String: Value] {
+    [:]
+  }
 
   public static var jsonSchemaProperties: [String: AI.Value] {
     var additionalProps: [String: AI.Value] = ["type": .string(Value.jsonSchemaType)]

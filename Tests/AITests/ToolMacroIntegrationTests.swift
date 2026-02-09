@@ -335,7 +335,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Parse with default value")
-  func parseWithDefaultValue() async throws {
+  func parseWithDefaultValue() throws {
     let arguments: [String: Value] = [
       "query": "swift concurrency",
     ]
@@ -346,7 +346,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Parse with default value overridden")
-  func parseWithDefaultValueOverridden() async throws {
+  func parseWithDefaultValueOverridden() throws {
     let arguments: [String: Value] = [
       "query": "swift concurrency",
       "limit": 50,
@@ -358,7 +358,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Parse throws error when default parameter has wrong type")
-  func parseThrowsForWrongTypeOnDefault() async throws {
+  func parseThrowsForWrongTypeOnDefault() throws {
     let arguments: [String: Value] = [
       "query": "swift concurrency",
       "limit": "not a number", // Wrong type - should throw, not silently use default
@@ -370,7 +370,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Parse enum parameter")
-  func parseEnumParameter() async throws {
+  func parseEnumParameter() throws {
     let arguments: [String: Value] = [
       "priority": "high",
     ]
@@ -438,7 +438,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Tools collection executes tool calls")
-  func toolsCollectionExecution() async throws {
+  func toolsCollectionExecution() async {
     let tools = Tools([
       GetWeather.tool,
       SearchDocuments.tool,
@@ -466,7 +466,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Tools collection handles unknown tool")
-  func toolsCollectionUnknownTool() async throws {
+  func toolsCollectionUnknownTool() async {
     let tools = Tools([GetWeather.tool])
 
     let toolCall = GenerationResponse.ToolCall(
@@ -516,7 +516,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Parse nested types")
-  func parseNestedTypes() async throws {
+  func parseNestedTypes() throws {
     let arguments: [String: Value] = [
       "records": .array([
         .object(["name": "Alice", "role": "admin"]),
@@ -576,7 +576,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Parse uses custom keys from arguments")
-  func parseWithCustomKeys() async throws {
+  func parseWithCustomKeys() throws {
     let arguments: [String: Value] = [
       "start_date": "2024-01-01",
       "end_date": "2024-12-31",
@@ -722,7 +722,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Parse Date from ISO 8601 string")
-  func parseDateParameter() async throws {
+  func parseDateParameter() throws {
     let dateString = "2024-06-15T10:30:00Z"
     let arguments: [String: Value] = [
       "eventDate": .string(dateString),
@@ -731,12 +731,12 @@ struct ToolMacroIntegrationTests {
     let instance = try ToolWithDateAndData.parse(from: arguments)
 
     let formatter = ISO8601DateFormatter()
-    let expectedDate = formatter.date(from: dateString)!
+    let expectedDate = try #require(formatter.date(from: dateString))
     #expect(instance.eventDate == expectedDate)
   }
 
   @Test("Parse Date with fractional seconds")
-  func parseDateWithFractionalSeconds() async throws {
+  func parseDateWithFractionalSeconds() throws {
     let dateString = "2024-06-15T10:30:00.123Z"
     let arguments: [String: Value] = [
       "eventDate": .string(dateString),
@@ -746,14 +746,14 @@ struct ToolMacroIntegrationTests {
 
     // Should parse successfully - date will be close to expected
     let calendar = Calendar(identifier: .gregorian)
-    let components = calendar.dateComponents(in: TimeZone(identifier: "UTC")!, from: instance.eventDate)
+    let components = try calendar.dateComponents(in: #require(TimeZone(identifier: "UTC")), from: instance.eventDate)
     #expect(components.year == 2024)
     #expect(components.month == 6)
     #expect(components.day == 15)
   }
 
   @Test("Parse Data from base64 string")
-  func parseDataParameter() async throws {
+  func parseDataParameter() throws {
     let originalData = Data([0x48, 0x65, 0x6C, 0x6C, 0x6F]) // "Hello"
     let base64String = originalData.base64EncodedString()
 
@@ -768,7 +768,7 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test("Invalid base64 returns nil for Data parameter")
-  func parseInvalidBase64() async throws {
+  func parseInvalidBase64() throws {
     let arguments: [String: Value] = [
       "eventDate": "2024-01-01T00:00:00Z",
       "payload": .string("not valid base64!!!"),

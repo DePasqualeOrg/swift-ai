@@ -179,7 +179,7 @@ struct SSEParserTests {
     #expect(payloads.count == 1)
 
     // Verify the JSON can be parsed and contains escaped newlines
-    let data = payloads[0].data(using: .utf8)!
+    let data = try #require(payloads[0].data(using: .utf8))
     let json = try JSONDecoder().decode([String: String].self, from: data)
     #expect(json["content"] == "line1\nline2")
   }
@@ -195,7 +195,7 @@ struct SSEParserTests {
 
     #expect(payloads.count == 1)
 
-    let data = payloads[0].data(using: .utf8)!
+    let data = try #require(payloads[0].data(using: .utf8))
     let json = try JSONDecoder().decode([String: String].self, from: data)
     #expect(json["content"] == "Hello 👋 World 🌍")
   }
@@ -211,7 +211,7 @@ struct SSEParserTests {
 
     #expect(payloads.count == 1)
 
-    let data = payloads[0].data(using: .utf8)!
+    let data = try #require(payloads[0].data(using: .utf8))
     let json = try JSONDecoder().decode([String: String].self, from: data)
     #expect(json["content"] == "известни")
   }
@@ -230,8 +230,8 @@ struct SSEParserTests {
 
     #expect(payloads.count == 1)
 
-    let data = payloads[0].data(using: .utf8)!
-    let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    let data = try #require(payloads[0].data(using: .utf8))
+    let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     #expect(json["type"] as? String == "message_start")
   }
 
@@ -247,11 +247,11 @@ struct SSEParserTests {
 
     #expect(payloads.count == 1)
 
-    let data = payloads[0].data(using: .utf8)!
-    let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+    let data = try #require(payloads[0].data(using: .utf8))
+    let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
     #expect(json["type"] as? String == "content_block_delta")
 
-    let delta = json["delta"] as! [String: Any]
+    let delta = try #require(json["delta"] as? [String: Any])
     #expect(delta["text"] as? String == "Hello")
   }
 

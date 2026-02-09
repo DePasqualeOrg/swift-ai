@@ -335,7 +335,7 @@ struct AnthropicClientTests {
   @Test("Handles network errors")
   func networkError() async throws {
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { _ in
       throw URLError(.notConnectedToInternet)
@@ -433,7 +433,7 @@ struct AnthropicClientTests {
   func streamCancellation() async throws {
     // Use URL-specific handler to avoid interfering with other tests
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { request in
       let response = HTTPURLResponse(

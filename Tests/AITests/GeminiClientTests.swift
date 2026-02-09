@@ -326,7 +326,7 @@ struct GeminiClientTests {
   @Test("Handles network errors")
   func networkError() async throws {
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { _ in
       throw URLError(.notConnectedToInternet)
@@ -476,7 +476,7 @@ struct GeminiClientTests {
   func systemPromptInRequestBody() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { [self] request in
       // Capture body data immediately before it's consumed
@@ -508,7 +508,7 @@ struct GeminiClientTests {
     // Verify body was captured
     #expect(capturedBodyData != nil, "Request body should be available")
 
-    let body = try JSONSerialization.jsonObject(with: capturedBodyData!) as? [String: Any]
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     #expect(body != nil)
 
     // Verify system instruction is included
@@ -522,7 +522,7 @@ struct GeminiClientTests {
     // Verify contents are included
     let contents = body?["contents"] as? [[String: Any]]
     #expect(contents != nil)
-    #expect(!contents!.isEmpty)
+    #expect(try !#require(contents?.isEmpty))
 
     // Verify generation config includes temperature
     let generationConfig = body?["generationConfig"] as? [String: Any]
@@ -540,7 +540,7 @@ struct GeminiClientTests {
   func toolsInRequestBody() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { [self] request in
       // Capture body data immediately before it's consumed
@@ -572,13 +572,13 @@ struct GeminiClientTests {
     // Verify body was captured
     #expect(capturedBodyData != nil, "Request body should be available")
 
-    let body = try JSONSerialization.jsonObject(with: capturedBodyData!) as? [String: Any]
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     #expect(body != nil)
 
     // Verify tools are included in request
     let tools = body?["tools"] as? [[String: Any]]
     #expect(tools != nil, "Request should include tools")
-    #expect(!tools!.isEmpty)
+    #expect(try !#require(tools?.isEmpty))
 
     // Verify function declaration structure
     let functionDeclarations = tools?.first?["function_declarations"] as? [[String: Any]]
@@ -599,7 +599,7 @@ struct GeminiClientTests {
 
     """
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     MockURLProtocol.setHandler(for: testId) { request in
       let response = HTTPURLResponse(
@@ -652,7 +652,7 @@ struct GeminiClientTests {
   @Test("Cancellation propagates correctly")
   func streamCancellation() async throws {
     let testId = UUID().uuidString
-    let testEndpoint = URL(string: "https://mock.test/\(testId)")!
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
     // Use URL-specific handler to avoid interfering with other tests
     MockURLProtocol.setHandler(for: testId) { request in

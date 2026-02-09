@@ -497,10 +497,21 @@ public struct Tools: Collection, Sendable {
 
   // MARK: - Collection Conformance
 
-  public var startIndex: Int { items.startIndex }
-  public var endIndex: Int { items.endIndex }
-  public subscript(position: Int) -> Tool { items[position] }
-  public func index(after i: Int) -> Int { items.index(after: i) }
+  public var startIndex: Int {
+    items.startIndex
+  }
+
+  public var endIndex: Int {
+    items.endIndex
+  }
+
+  public subscript(position: Int) -> Tool {
+    items[position]
+  }
+
+  public func index(after i: Int) -> Int {
+    items.index(after: i)
+  }
 
   // MARK: - Combining Tools
 
