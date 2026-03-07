@@ -23,7 +23,7 @@ final class UpdateCollector: @unchecked Sendable {
   }
 }
 
-@Suite("Anthropic Client", .serialized)
+@Suite(.serialized)
 struct AnthropicClientTests {
   // MARK: - Test Helpers
 
@@ -47,14 +47,14 @@ struct AnthropicClientTests {
         url: testEndpoint,
         statusCode: statusCode,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       return (response, sseData.data(using: .utf8)!)
     }
 
     let client = AnthropicClient(
       session: makeMockSession(),
-      messagesEndpoint: testEndpoint
+      messagesEndpoint: testEndpoint,
     )
 
     return (client, { MockURLProtocol.removeHandler(for: testId) })
@@ -72,17 +72,17 @@ struct AnthropicClientTests {
           title: paramName,
           type: .string,
           description: "Test parameter",
-          required: true
+          required: true,
         ),
       ],
-      execute: { _ in [.text("test result")] }
+      execute: { _ in [.text("test result")] },
     )
   }
 
   /// Consumes an async stream and returns the last element.
   private func consumeStream(
     _ stream: AsyncThrowingStream<GenerationResponse, Error>,
-    collecting: UpdateCollector? = nil
+    collecting: UpdateCollector? = nil,
   ) async throws -> GenerationResponse {
     var last: GenerationResponse?
     for try await response in stream {
@@ -97,8 +97,8 @@ struct AnthropicClientTests {
 
   // MARK: - Basic Response Tests
 
-  @Test("Parses basic text response and accumulates text")
-  func basicTextResponse() async throws {
+  @Test
+  func `Parses basic text response and accumulates text`() async throws {
     let fixture = try loadFixture("basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -109,7 +109,7 @@ struct AnthropicClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ), collecting: collector)
 
     // Verify the final response contains the accumulated text
@@ -124,8 +124,8 @@ struct AnthropicClientTests {
     #expect(textUpdates.contains { $0.contains("Hello") })
   }
 
-  @Test("Parses tool use response with function call")
-  func toolUseResponse() async throws {
+  @Test
+  func `Parses tool use response with function call`() async throws {
     let fixture = try loadFixture("tool_use_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -136,7 +136,7 @@ struct AnthropicClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather in Paris?")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify we got a function call
@@ -158,8 +158,8 @@ struct AnthropicClientTests {
     #expect(response.texts.response?.contains("weather in Paris") == true)
   }
 
-  @Test("Extracts token usage metadata")
-  func tokenUsageMetadata() async throws {
+  @Test
+  func `Extracts token usage metadata`() async throws {
     let fixture = try loadFixture("basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -169,7 +169,7 @@ struct AnthropicClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify token counts from the fixture
@@ -178,8 +178,8 @@ struct AnthropicClientTests {
     #expect(response.metadata?.outputTokens == 6)
   }
 
-  @Test("Sets finish reason correctly")
-  func finishReason() async throws {
+  @Test
+  func `Sets finish reason correctly`() async throws {
     let fixture = try loadFixture("basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -189,15 +189,15 @@ struct AnthropicClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // From basic_response.txt: stop_reason: "end_turn"
     #expect(response.metadata?.finishReason == .stop)
   }
 
-  @Test("Tool use sets finish reason to toolUse")
-  func toolUseFinishReason() async throws {
+  @Test
+  func `Tool use sets finish reason to toolUse`() async throws {
     let fixture = try loadFixture("tool_use_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -207,7 +207,7 @@ struct AnthropicClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather?")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // From tool_use_response.txt: stop_reason: "tool_use"
@@ -216,8 +216,8 @@ struct AnthropicClientTests {
 
   // MARK: - Error Handling Tests
 
-  @Test("Throws authentication error for 401 status")
-  func authenticationError() async throws {
+  @Test
+  func `Throws authentication error for 401 status`() async throws {
     let errorResponse = """
     {"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}
     """
@@ -230,13 +230,13 @@ struct AnthropicClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "invalid-key"
+        apiKey: "invalid-key",
       ))
     }
   }
 
-  @Test("Throws rate limit error for 429 status")
-  func rateLimitError() async throws {
+  @Test
+  func `Throws rate limit error for 429 status`() async throws {
     let errorResponse = """
     {"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}
     """
@@ -249,7 +249,7 @@ struct AnthropicClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected rate limit error")
     } catch let error as AIError {
@@ -261,8 +261,8 @@ struct AnthropicClientTests {
     }
   }
 
-  @Test("Throws server error for 500 status")
-  func serverError() async throws {
+  @Test
+  func `Throws server error for 500 status`() async throws {
     let errorResponse = """
     {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
     """
@@ -275,7 +275,7 @@ struct AnthropicClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected server error")
     } catch let error as AIError {
@@ -287,8 +287,8 @@ struct AnthropicClientTests {
     }
   }
 
-  @Test("Throws error when API key is missing")
-  func missingApiKey() async throws {
+  @Test
+  func `Throws error when API key is missing`() async throws {
     let client = AnthropicClient()
 
     do {
@@ -297,7 +297,7 @@ struct AnthropicClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: nil
+        apiKey: nil,
       ))
       Issue.record("Expected authentication error")
     } catch let error as AIError {
@@ -311,8 +311,8 @@ struct AnthropicClientTests {
 
   // MARK: - Message Parsing Tests
 
-  @Test("Parses message with response ID")
-  func messageResponseId() async throws {
+  @Test
+  func `Parses message with response ID`() async throws {
     let fixture = try loadFixture("basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -322,7 +322,7 @@ struct AnthropicClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
-      apiKey: "test-key"
+      apiKey: "test-key",
     ))
 
     // Verify the response ID was captured from the fixture
@@ -332,8 +332,8 @@ struct AnthropicClientTests {
 
   // MARK: - Network Error Tests
 
-  @Test("Handles network errors")
-  func networkError() async throws {
+  @Test
+  func `Handles network errors`() async throws {
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
@@ -344,7 +344,7 @@ struct AnthropicClientTests {
 
     let client = AnthropicClient(
       session: makeMockSession(),
-      messagesEndpoint: testEndpoint
+      messagesEndpoint: testEndpoint,
     )
 
     do {
@@ -353,7 +353,7 @@ struct AnthropicClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected network error")
     } catch {
@@ -365,14 +365,15 @@ struct AnthropicClientTests {
 
   // MARK: - In-Stream Error Tests
 
-  @Test("Handles error event in stream")
-  func streamErrorEvent() async throws {
+  @Test
+  func `Handles error event in stream`() async throws {
     let sseData = """
     event: message_start
     data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
 
     event: error
     data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
 
     """
     let (client, cleanup) = makeTestClient(sseData: sseData)
@@ -384,7 +385,7 @@ struct AnthropicClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected overloaded error")
     } catch let error as AIError {
@@ -401,8 +402,8 @@ struct AnthropicClientTests {
 
   // MARK: - Incomplete Response Tests
 
-  @Test("Handles incomplete partial JSON when max_tokens is reached")
-  func incompletePartialJsonResponse() async throws {
+  @Test
+  func `Handles incomplete partial JSON when max_tokens is reached`() async throws {
     let fixture = try loadFixture("incomplete_partial_json_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -413,7 +414,7 @@ struct AnthropicClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Create a file")],
       maxTokens: 100,
-      apiKey: "test-key"
+      apiKey: "test-key",
     ))
 
     // Verify finish reason is maxTokens (not toolUse or stop)
@@ -429,8 +430,8 @@ struct AnthropicClientTests {
 
   // MARK: - Stream Cancellation Tests
 
-  @Test("Cancellation propagates correctly")
-  func streamCancellation() async throws {
+  @Test
+  func `Cancellation propagates correctly`() async throws {
     // Use URL-specific handler to avoid interfering with other tests
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -440,7 +441,7 @@ struct AnthropicClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
 
       // Return a complete response - cancellation test verifies no crash
@@ -470,7 +471,7 @@ struct AnthropicClientTests {
 
     let client = AnthropicClient(
       session: makeMockSession(),
-      messagesEndpoint: testEndpoint
+      messagesEndpoint: testEndpoint,
     )
 
     let task = Task {
@@ -479,7 +480,7 @@ struct AnthropicClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
     }
 

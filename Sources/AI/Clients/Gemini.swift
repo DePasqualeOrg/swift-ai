@@ -3,6 +3,7 @@
 import Foundation
 import Observation
 import os.log
+import SSE
 
 /// A client for the Google Gemini API.
 ///
@@ -188,7 +189,7 @@ public final class GeminiClient: APIClient, Sendable {
     codeExecution: Bool,
     thinkingBudget: Int?, // For Gemini 2.5 models
     thinkingLevel: ThinkingLevel?, // For Gemini 3 models
-    tools: [Tool] = []
+    tools: [Tool] = [],
   ) async throws -> AsyncThrowingStream<StreamResponse, Error> {
     let url = modelsEndpoint.appending(path: "\(modelId):streamGenerateContent")
     var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true)!
@@ -317,7 +318,7 @@ public final class GeminiClient: APIClient, Sendable {
                   data: data,
                   mimeType: mimeType,
                   displayName: attachment.filename ?? "Video",
-                  apiKey: apiKey
+                  apiKey: apiKey,
                 )
                 parts.append([
                   "file_data": [
@@ -335,7 +336,7 @@ public final class GeminiClient: APIClient, Sendable {
                   data: data,
                   mimeType: mimeType,
                   displayName: attachment.filename ?? "Audio",
-                  apiKey: apiKey
+                  apiKey: apiKey,
                 )
                 parts.append([
                   "file_data": [
@@ -367,7 +368,7 @@ public final class GeminiClient: APIClient, Sendable {
                     data: data,
                     mimeType: mimeTypeForGemini,
                     displayName: attachment.filename ?? "Document",
-                    apiKey: apiKey
+                    apiKey: apiKey,
                   )
                   parts.append([
                     "file_data": [
@@ -591,7 +592,10 @@ public final class GeminiClient: APIClient, Sendable {
             }
           }
 
-          for try await jsonString in SSEParser.dataPayloads(from: result, terminateOnDone: false) {
+          for try await event in result.events {
+            try Task.checkCancellation()
+            let jsonString = event.data
+
             do {
               guard let data = jsonString.data(using: .utf8) else {
                 geminiLogger.error("Failed to convert SSE payload to UTF-8 data")
@@ -610,12 +614,12 @@ public final class GeminiClient: APIClient, Sendable {
                 let errorResponse = GenerateContentResponse(
                   candidates: nil,
                   promptFeedback: PromptFeedback(),
-                  usageMetadata: nil
+                  usageMetadata: nil,
                 )
 
                 continuation.finish(throwing: GeminiError(
                   message: "Your request was blocked: \(blockMessage)",
-                  response: errorResponse
+                  response: errorResponse,
                 ))
                 return
               }
@@ -637,16 +641,16 @@ public final class GeminiClient: APIClient, Sendable {
                       tokenCount: nil,
                       avgLogprobs: nil,
                       index: 0,
-                      groundingMetadata: nil
+                      groundingMetadata: nil,
                     )
                     let errorResponse = GenerateContentResponse(
                       candidates: [candidate],
                       promptFeedback: nil,
-                      usageMetadata: nil
+                      usageMetadata: nil,
                     )
                     continuation.finish(throwing: GeminiError(
                       message: "\(finishMessage)",
-                      response: errorResponse
+                      response: errorResponse,
                     ))
                     return
                   } else if finishReason == "MAX_TOKENS" {
@@ -686,7 +690,7 @@ public final class GeminiClient: APIClient, Sendable {
                       name: name,
                       id: generateShortId(),
                       parameters: parameters,
-                      providerMetadata: providerMetadata
+                      providerMetadata: providerMetadata,
                     )
                     continuation.yield(StreamResponse(text: nil, thought: nil, groundingMetadata: nil, toolCall: toolCallResponse, usageMetadata: nil, finishReason: nil))
                   } else if let executableCodeDict = part["executableCode"] as? [String: any Sendable] {
@@ -790,7 +794,7 @@ public final class GeminiClient: APIClient, Sendable {
               return SourceReference(
                 index: index,
                 title: webSource.title,
-                url: resolvedURL
+                url: resolvedURL,
               )
             }
           }
@@ -833,7 +837,7 @@ public final class GeminiClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) async throws -> GenerationResponse {
     try await _generate(
       modelId: modelId,
@@ -844,7 +848,7 @@ public final class GeminiClient: APIClient, Sendable {
       temperature: temperature,
       apiKey: apiKey,
       configuration: configuration,
-      update: { _ in }
+      update: { _ in },
     )
   }
 
@@ -868,7 +872,7 @@ public final class GeminiClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     AsyncThrowingStream { continuation in
       let task = Task {
@@ -884,7 +888,7 @@ public final class GeminiClient: APIClient, Sendable {
             configuration: configuration,
             update: { response in
               continuation.yield(response)
-            }
+            },
           )
           // Yield the final response with metadata
           continuation.yield(finalResponse)
@@ -908,7 +912,7 @@ public final class GeminiClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) async throws -> GenerationResponse {
     try await generateText(
       modelId: modelId,
@@ -918,7 +922,7 @@ public final class GeminiClient: APIClient, Sendable {
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
-      configuration: configuration
+      configuration: configuration,
     )
   }
 
@@ -931,7 +935,7 @@ public final class GeminiClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     streamText(
       modelId: modelId,
@@ -941,7 +945,7 @@ public final class GeminiClient: APIClient, Sendable {
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
-      configuration: configuration
+      configuration: configuration,
     )
   }
 
@@ -954,7 +958,7 @@ public final class GeminiClient: APIClient, Sendable {
     temperature: Float?,
     apiKey: String?,
     configuration: Configuration,
-    update: @Sendable @escaping (GenerationResponse) -> Void
+    update: @Sendable @escaping (GenerationResponse) -> Void,
   ) async throws -> GenerationResponse {
     guard let apiKey else {
       throw AIError.invalidRequest(message: "API key is not set")
@@ -990,7 +994,7 @@ public final class GeminiClient: APIClient, Sendable {
           codeExecution: configuration.codeExecution,
           thinkingBudget: configuration.thinkingBudget,
           thinkingLevel: configuration.thinkingLevel,
-          tools: tools
+          tools: tools,
         )
 
         for try await chunk in stream {
@@ -1065,14 +1069,14 @@ public final class GeminiClient: APIClient, Sendable {
           outputTokens: usageMetadata?.candidatesTokenCount,
           totalTokens: usageMetadata?.totalTokenCount,
           cacheReadInputTokens: usageMetadata?.cachedContentTokenCount,
-          reasoningTokens: usageMetadata?.thoughtsTokenCount
+          reasoningTokens: usageMetadata?.thoughtsTokenCount,
         )
 
         // Return texts
         return .init(texts: .init(
           reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
           response: fullResponseText.isEmpty ? nil : fullResponseText,
-          notes: notesText
+          notes: notesText,
         ), toolCalls: toolCalls, metadata: metadata)
       } catch let error as GeminiError {
         // Check if the task was cancelled
@@ -1083,13 +1087,13 @@ public final class GeminiClient: APIClient, Sendable {
             outputTokens: usageMetadata?.candidatesTokenCount,
             totalTokens: usageMetadata?.totalTokenCount,
             cacheReadInputTokens: usageMetadata?.cachedContentTokenCount,
-            reasoningTokens: usageMetadata?.thoughtsTokenCount
+            reasoningTokens: usageMetadata?.thoughtsTokenCount,
           )
           // Return partial results without throwing an error
           return .init(texts: .init(
             reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
             response: fullResponseText.isEmpty ? nil : fullResponseText,
-            notes: notesText
+            notes: notesText,
           ), toolCalls: [], metadata: partialMetadata)
         }
 
@@ -1111,12 +1115,12 @@ public final class GeminiClient: APIClient, Sendable {
             outputTokens: usageMetadata?.candidatesTokenCount,
             totalTokens: usageMetadata?.totalTokenCount,
             cacheReadInputTokens: usageMetadata?.cachedContentTokenCount,
-            reasoningTokens: usageMetadata?.thoughtsTokenCount
+            reasoningTokens: usageMetadata?.thoughtsTokenCount,
           )
           return .init(texts: .init(
             reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
             response: fullResponseText.isEmpty ? nil : fullResponseText,
-            notes: notesText
+            notes: notesText,
           ), toolCalls: toolCalls, metadata: partialMetadata)
         } else {
           throw error
@@ -1443,7 +1447,7 @@ private let geminiLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "co
 
 public extension GeminiClient {
   /// Configuration options for Gemini API requests.
-  struct Configuration: Sendable {
+  struct Configuration {
     /// Content safety filtering threshold.
     public var safetyThreshold: SafetyThreshold
 
@@ -1479,7 +1483,7 @@ public extension GeminiClient {
       webContent: Bool = false,
       codeExecution: Bool = false,
       thinkingBudget: Int? = nil,
-      thinkingLevel: ThinkingLevel? = nil
+      thinkingLevel: ThinkingLevel? = nil,
     ) {
       self.safetyThreshold = safetyThreshold
       self.searchGrounding = searchGrounding
@@ -1491,7 +1495,7 @@ public extension GeminiClient {
   }
 
   /// Thinking level for Gemini 3 models.
-  enum ThinkingLevel: String, CaseIterable, Identifiable, Codable, Equatable, Hashable, Sendable {
+  enum ThinkingLevel: String, CaseIterable, Identifiable, Codable, Equatable, Hashable {
     /// Matches "no thinking" for most queries. Flash-only.
     case minimal
     /// Minimizes latency and cost. Best for simple instruction following, chat, or high-throughput applications.
@@ -1508,7 +1512,7 @@ public extension GeminiClient {
   }
 
   /// Content safety filtering threshold levels.
-  enum SafetyThreshold: String, CaseIterable, Identifiable, Sendable {
+  enum SafetyThreshold: String, CaseIterable, Identifiable {
     /// No content filtering.
     case none = "BLOCK_NONE"
     /// Block only high-probability harmful content.
@@ -1529,7 +1533,7 @@ public extension GeminiClient {
   /// Gemini 2.5 models, and disables thinking for older models.
   static func thinkingConfig(
     for modelId: String,
-    reasoning: Bool
+    reasoning: Bool,
   ) -> (thinkingLevel: ThinkingLevel?, thinkingBudget: Int?) {
     guard reasoning, modelId.hasPrefix("gemini-") else {
       return (nil, nil)

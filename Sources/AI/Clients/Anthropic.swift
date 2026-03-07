@@ -3,6 +3,7 @@
 import Foundation
 import Observation
 import os.log
+import SSE
 
 extension AnthropicClient {
   enum Role: String, Codable {
@@ -10,7 +11,7 @@ extension AnthropicClient {
     case assistant
   }
 
-  struct APIMessage: Codable, Sendable {
+  struct APIMessage: Codable {
     let id: String
     let role: Role
     var content: [ContentBlock]
@@ -18,7 +19,7 @@ extension AnthropicClient {
     var stopSequence: String?
     var usage: Usage
 
-    struct Usage: Codable, Sendable {
+    struct Usage: Codable {
       var inputTokens: Int?
       var outputTokens: Int?
       var cacheCreationInputTokens: Int?
@@ -47,7 +48,7 @@ extension AnthropicClient {
     case document
   }
 
-  struct ContentBlock: Codable, Sendable {
+  struct ContentBlock: Codable {
     let type: ContentBlockType
     var text: String?
     var thinking: String?
@@ -230,7 +231,7 @@ extension AnthropicClient {
     }
   }
 
-  enum Citation: Codable, Sendable {
+  enum Citation: Codable {
     case text(TextCitation)
     case webSearch(WebSearchCitation)
 
@@ -284,7 +285,7 @@ extension AnthropicClient {
   }
 
   /// Used for retrieval-augmented generation (when documents are included with the request)
-  struct TextCitation: Codable, Sendable {
+  struct TextCitation: Codable {
     let type: String
     let text: String
     let startIndex: Int
@@ -299,7 +300,7 @@ extension AnthropicClient {
     }
   }
 
-  struct WebSearchCitation: Codable, Sendable {
+  struct WebSearchCitation: Codable {
     let type: String // Always "web_search_result_location"
     let citedText: String
     let url: String
@@ -340,7 +341,7 @@ extension AnthropicClient {
     case ping
   }
 
-  struct MessageStreamEvent: Decodable, Sendable {
+  struct MessageStreamEvent: Decodable {
     let type: MessageStreamEventType
     let message: APIMessage?
     let index: Int?
@@ -354,7 +355,7 @@ extension AnthropicClient {
       case contentBlock = "content_block"
     }
 
-    struct ErrorInfo: Decodable, Sendable {
+    struct ErrorInfo: Decodable {
       let type: String?
       let message: String?
       // Add other error fields as needed
@@ -380,7 +381,7 @@ extension AnthropicClient {
     case signatureDelta = "signature_delta"
   }
 
-  struct MessageDelta: Codable, Sendable {
+  struct MessageDelta: Codable {
     let type: DeltaType?
     let text: String?
     let thinking: String?
@@ -401,7 +402,7 @@ extension AnthropicClient {
 
 extension AnthropicClient {
   actor MessageStream {
-    enum Event: Sendable {
+    enum Event {
       case connect
       case streamEvent(event: MessageStreamEvent, snapshot: APIMessage)
       case text(delta: String, snapshot: String)
@@ -469,7 +470,7 @@ extension AnthropicClient {
       client: AnthropicClient,
       params: MessageCreateParams,
       apiKey: String,
-      session: URLSession
+      session: URLSession,
     ) -> MessageStream {
       let stream = MessageStream()
 
@@ -504,7 +505,7 @@ extension AnthropicClient {
       client: AnthropicClient,
       params: MessageCreateParams,
       apiKey: String,
-      session: URLSession
+      session: URLSession,
     ) async throws {
       beginRequest()
       do {
@@ -522,11 +523,16 @@ extension AnthropicClient {
           }
           throw AnthropicError.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: errorData)
         }
-        for try await jsonString in SSEParser.dataPayloads(from: stream, terminateOnDone: false) {
+        for try await event in stream.events {
+          try Task.checkCancellation()
+
           // Check for abort
           if aborted {
             throw AIError.cancelled
           }
+
+          let jsonString = event.data
+
           guard let jsonData = jsonString.data(using: .utf8) else {
             throw AIError.parsing(message: "Failed to convert line to data: \(jsonString)")
           }
@@ -634,7 +640,7 @@ extension AnthropicClient {
             let messageParam = MessageParam(
               role: messageSnapshot.role,
               text: nil,
-              contentBlocks: contentBlockParams.isEmpty ? nil : contentBlockParams
+              contentBlocks: contentBlockParams.isEmpty ? nil : contentBlockParams,
             )
             addMessageParam(messageParam)
             addMessage(messageSnapshot, emit: true)
@@ -684,7 +690,7 @@ extension AnthropicClient {
           id: "error_\(UUID().uuidString)",
           role: .assistant,
           content: [],
-          usage: APIMessage.Usage()
+          usage: APIMessage.Usage(),
         )
         return currentMessageSnapshot ?? emptyMessage
       }
@@ -1303,7 +1309,7 @@ public final class AnthropicClient: APIClient, Sendable {
     method: String,
     apiKey: String,
     body: [String: any Sendable]? = nil,
-    retries: Int? = nil
+    retries: Int? = nil,
   ) async throws -> T {
     let retriesRemaining = retries ?? maxRetries
     do {
@@ -1333,7 +1339,7 @@ public final class AnthropicClient: APIClient, Sendable {
           method: method,
           apiKey: apiKey,
           body: body,
-          retries: retriesRemaining - 1
+          retries: retriesRemaining - 1,
         )
       }
       throw error
@@ -1364,7 +1370,7 @@ public final class AnthropicClient: APIClient, Sendable {
 }
 
 extension AnthropicClient {
-  struct MessageParam: Sendable {
+  struct MessageParam {
     let role: Role
     let text: String?
     let contentBlocks: [ContentBlockParam]?
@@ -1448,7 +1454,7 @@ extension AnthropicClient {
       } else {
         throw DecodingError.typeMismatch(
           ToolResultContent.self,
-          DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected String or Array")
+          DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Expected String or Array"),
         )
       }
     }
@@ -1468,7 +1474,7 @@ extension AnthropicClient {
       ToolResultContentBlock(
         type: "image",
         text: nil,
-        source: ContentBlockSource(type: "base64", mediaType: mediaType, data: data, url: nil)
+        source: ContentBlockSource(type: "base64", mediaType: mediaType, data: data, url: nil),
       )
     }
   }
@@ -1483,7 +1489,7 @@ extension AnthropicClient {
     }
   }
 
-  struct MessageCreateParams: Sendable {
+  struct MessageCreateParams {
     let model: String
     let messages: [MessageParam]
     let maxTokens: Int?
@@ -1511,7 +1517,7 @@ extension AnthropicClient {
       metadata: [String: String]? = nil,
       thinking: ThinkingConfig? = nil,
       effort: EffortLevel? = nil,
-      disableParallelToolUse: Bool? = nil
+      disableParallelToolUse: Bool? = nil,
     ) {
       self.model = model
       self.messages = messages
@@ -1529,7 +1535,7 @@ extension AnthropicClient {
     }
   }
 
-  enum APITool: Codable, Sendable {
+  enum APITool: Codable {
     case custom(name: String, description: String, inputSchema: JSONSchema)
     case rawCustom(name: String, description: String, rawInputSchema: [String: Value])
     case webSearch
@@ -1642,7 +1648,7 @@ public extension AnthropicClient {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) async throws -> GenerationResponse {
     try await _generate(
       modelId: modelId,
@@ -1653,7 +1659,7 @@ public extension AnthropicClient {
       temperature: temperature,
       apiKey: apiKey,
       configuration: configuration,
-      update: { _ in }
+      update: { _ in },
     )
   }
 
@@ -1677,7 +1683,7 @@ public extension AnthropicClient {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     AsyncThrowingStream { continuation in
       let task = Task {
@@ -1693,7 +1699,7 @@ public extension AnthropicClient {
             configuration: configuration,
             update: { response in
               continuation.yield(response)
-            }
+            },
           )
           // Yield the final response with metadata
           continuation.yield(finalResponse)
@@ -1717,7 +1723,7 @@ public extension AnthropicClient {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) async throws -> GenerationResponse {
     try await generateText(
       modelId: modelId,
@@ -1727,7 +1733,7 @@ public extension AnthropicClient {
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
-      configuration: configuration
+      configuration: configuration,
     )
   }
 
@@ -1740,7 +1746,7 @@ public extension AnthropicClient {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     streamText(
       modelId: modelId,
@@ -1750,7 +1756,7 @@ public extension AnthropicClient {
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
-      configuration: configuration
+      configuration: configuration,
     )
   }
 
@@ -1763,7 +1769,7 @@ public extension AnthropicClient {
     temperature: Float?,
     apiKey: String?,
     configuration: Configuration,
-    update: @Sendable @escaping (GenerationResponse) -> Void
+    update: @Sendable @escaping (GenerationResponse) -> Void,
   ) async throws -> GenerationResponse {
     guard let apiKey else {
       throw AIError.authentication(message: "Missing API key")
@@ -1838,7 +1844,7 @@ public extension AnthropicClient {
               source: nil,
               toolUse: nil,
               toolResult: nil,
-              codeExecutionToolResult: nil
+              codeExecutionToolResult: nil,
             ))
           }
           // Add function results as tool_result blocks
@@ -1885,7 +1891,7 @@ public extension AnthropicClient {
             let toolResultBlock = AnthropicClient.ToolResultBlockParam(
               toolUseId: toolResult.id,
               content: resultContent,
-              isError: toolResult.isError
+              isError: toolResult.isError,
             )
             contentBlocks.append(AnthropicClient.ContentBlockParam(
               type: .toolResult,
@@ -1893,14 +1899,14 @@ public extension AnthropicClient {
               source: nil,
               toolUse: nil,
               toolResult: toolResultBlock,
-              codeExecutionToolResult: nil
+              codeExecutionToolResult: nil,
             ))
           }
           return AnthropicClient.MessageParam(
             role: mapRole(message.role),
             text: nil, // Text is included in contentBlocks
             contentBlocks: contentBlocks,
-            attachments: message.attachments.isEmpty ? nil : message.attachments
+            attachments: message.attachments.isEmpty ? nil : message.attachments,
           )
         } else if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
           // Handle messages with function calls
@@ -1911,11 +1917,11 @@ public extension AnthropicClient {
               switch block.type {
                 case "thinking":
                   contentBlocks.append(AnthropicClient.ContentBlockParam(
-                    type: .thinking, thinking: block.content, signature: block.signature
+                    type: .thinking, thinking: block.content, signature: block.signature,
                   ))
                 case "redacted_thinking":
                   contentBlocks.append(AnthropicClient.ContentBlockParam(
-                    type: .redactedThinking, data: block.data
+                    type: .redactedThinking, data: block.data,
                   ))
                 default:
                   break
@@ -1926,7 +1932,7 @@ public extension AnthropicClient {
           if let content = message.content, !content.isEmpty {
             contentBlocks.append(AnthropicClient.ContentBlockParam(
               type: .text,
-              text: content
+              text: content,
             ))
           }
           // Add function calls as tool_use blocks
@@ -1934,7 +1940,7 @@ public extension AnthropicClient {
             let toolUseBlock = AnthropicClient.ToolUseBlockParam(
               id: toolCall.id,
               name: toolCall.name,
-              input: Value.object(toolCall.parameters)
+              input: Value.object(toolCall.parameters),
             )
             contentBlocks.append(AnthropicClient.ContentBlockParam(
               type: .toolUse,
@@ -1942,14 +1948,14 @@ public extension AnthropicClient {
               source: nil,
               toolUse: toolUseBlock,
               toolResult: nil,
-              codeExecutionToolResult: nil
+              codeExecutionToolResult: nil,
             ))
           }
           return AnthropicClient.MessageParam(
             role: mapRole(message.role),
             text: nil, // Text is included in contentBlocks
             contentBlocks: contentBlocks,
-            attachments: message.attachments.isEmpty ? nil : message.attachments
+            attachments: message.attachments.isEmpty ? nil : message.attachments,
           )
         } else {
           // Simple text message
@@ -1957,7 +1963,7 @@ public extension AnthropicClient {
             role: mapRole(message.role),
             text: message.content,
             contentBlocks: nil,
-            attachments: message.attachments.isEmpty ? nil : message.attachments
+            attachments: message.attachments.isEmpty ? nil : message.attachments,
           )
         }
       }
@@ -1972,14 +1978,14 @@ public extension AnthropicClient {
         system: systemPrompt,
         temperature: adjustedTemperature,
         thinking: configuration.thinkingConfig,
-        effort: configuration.effort
+        effort: configuration.effort,
       )
       // Tools - rawInputSchema is always populated (either explicit or generated from parameters)
       var anthropicTools = tools.map { tool -> AnthropicClient.APITool in
         APITool.rawCustom(
           name: tool.name,
           description: tool.description,
-          rawInputSchema: tool.rawInputSchema
+          rawInputSchema: tool.rawInputSchema,
         )
       }
       // Web search
@@ -2018,8 +2024,8 @@ public extension AnthropicClient {
                   .init(texts: .init(
                     reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                     response: fullResponseText.isEmpty ? nil : fullResponseText,
-                    notes: nil
-                  ), toolCalls: [])
+                    notes: nil,
+                  ), toolCalls: []),
                 )
               }
             case let .text(delta, _):
@@ -2028,7 +2034,7 @@ public extension AnthropicClient {
                 update(.init(texts: .init(
                   reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                   response: fullResponseText.isEmpty ? nil : fullResponseText,
-                  notes: nil
+                  notes: nil,
                 ), toolCalls: []))
               }
             case let .toolUse(toolUse):
@@ -2047,7 +2053,7 @@ public extension AnthropicClient {
                     update(.init(texts: .init(
                       reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                       response: fullResponseText.isEmpty ? nil : fullResponseText,
-                      notes: nil
+                      notes: nil,
                     ), toolCalls: []))
                   }
                 }
@@ -2078,7 +2084,7 @@ public extension AnthropicClient {
                       update(.init(texts: .init(
                         reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                         response: fullResponseText.isEmpty ? nil : fullResponseText,
-                        notes: nil
+                        notes: nil,
                       ), toolCalls: []))
                     }
                   case let .error(errorDetails):
@@ -2090,7 +2096,7 @@ public extension AnthropicClient {
                       update(.init(texts: .init(
                         reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                         response: fullResponseText.isEmpty ? nil : fullResponseText,
-                        notes: nil
+                        notes: nil,
                       ), toolCalls: []))
                     }
                   case let .output(outputBlock): // New case for file outputs
@@ -2100,7 +2106,7 @@ public extension AnthropicClient {
                       update(.init(texts: .init(
                         reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                         response: fullResponseText.isEmpty ? nil : fullResponseText,
-                        notes: nil
+                        notes: nil,
                       ), toolCalls: []))
                     }
                 }
@@ -2114,7 +2120,7 @@ public extension AnthropicClient {
                   update(.init(texts: .init(
                     reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                     response: fullResponseText.isEmpty ? nil : fullResponseText,
-                    notes: nil
+                    notes: nil,
                   ), toolCalls: []))
               }
             case let .finalMessage(message):
@@ -2175,7 +2181,7 @@ public extension AnthropicClient {
                   inputTokens: msg.usage.inputTokens,
                   outputTokens: msg.usage.outputTokens,
                   cacheCreationInputTokens: msg.usage.cacheCreationInputTokens,
-                  cacheReadInputTokens: msg.usage.cacheReadInputTokens
+                  cacheReadInputTokens: msg.usage.cacheReadInputTokens,
                 )
               } else {
                 metadata = nil
@@ -2184,7 +2190,7 @@ public extension AnthropicClient {
               return (GenerationResponse(texts: .init(
                   reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
                   response: fullResponseText.isEmpty ? nil : fullResponseText,
-                  notes: formatEndnotesList(urlStrings: Array(webSearchCitationUrls))
+                  notes: formatEndnotesList(urlStrings: Array(webSearchCitationUrls)),
                 ), toolCalls: toolCalls, metadata: metadata,
                 opaqueBlocks: opaqueBlocks?.isEmpty == false ? opaqueBlocks : nil), wasCancelled)
             default:
@@ -2225,7 +2231,7 @@ public extension AnthropicClient {
           inputTokens: msg.usage.inputTokens,
           outputTokens: msg.usage.outputTokens,
           cacheCreationInputTokens: msg.usage.cacheCreationInputTokens,
-          cacheReadInputTokens: msg.usage.cacheReadInputTokens
+          cacheReadInputTokens: msg.usage.cacheReadInputTokens,
         )
       } else {
         metadata = nil
@@ -2233,7 +2239,7 @@ public extension AnthropicClient {
       let result = GenerationResponse(texts: .init(
         reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
         response: fullResponseText.isEmpty ? nil : fullResponseText,
-        notes: formatEndnotesList(urlStrings: Array(webSearchCitationUrls))
+        notes: formatEndnotesList(urlStrings: Array(webSearchCitationUrls)),
       ), toolCalls: [], metadata: metadata)
       return (result, wasCancelled)
     }
@@ -2300,7 +2306,7 @@ extension AnthropicClient {
 // Tool use
 
 extension AnthropicClient {
-  struct JSONSchema: Codable, Sendable {
+  struct JSONSchema: Codable {
     let type: String
     let properties: [String: JSONSchemaProperty]?
     let required: [String]?
@@ -2349,7 +2355,7 @@ extension AnthropicClient {
     }
   }
 
-  enum ToolChoice: Codable, Sendable {
+  enum ToolChoice: Codable {
     case auto
     case any
     case none
@@ -2393,13 +2399,13 @@ extension AnthropicClient {
           throw DecodingError.dataCorruptedError(
             forKey: .type,
             in: container,
-            debugDescription: "Invalid tool choice type: \(type)"
+            debugDescription: "Invalid tool choice type: \(type)",
           )
       }
     }
   }
 
-  struct ToolUseBlock: Codable, Sendable {
+  struct ToolUseBlock: Codable {
     let id: String
     let name: String
     var input: Value
@@ -2409,7 +2415,7 @@ extension AnthropicClient {
     }
   }
 
-  struct ToolResultBlock: Codable, Sendable {
+  struct ToolResultBlock: Codable {
     let toolUseId: String
     let content: String
     let isError: Bool?
@@ -2421,13 +2427,13 @@ extension AnthropicClient {
     }
   }
 
-  struct ServerToolUseBlock: Codable, Sendable {
+  struct ServerToolUseBlock: Codable {
     let id: String
     let name: String
     var input: Value
   }
 
-  struct WebSearchToolResultBlock: Codable, Sendable {
+  struct WebSearchToolResultBlock: Codable {
     let toolUseId: String
     let content: WebSearchToolResultBlockContent
 
@@ -2437,7 +2443,7 @@ extension AnthropicClient {
     }
   }
 
-  struct CodeExecutionToolResultBlock: Codable, Sendable {
+  struct CodeExecutionToolResultBlock: Codable {
     let toolUseId: String
     let content: [CodeExecutionContentItem]
 
@@ -2469,7 +2475,7 @@ extension AnthropicClient {
   }
 
   /// Define the structure for successful code execution content
-  struct CodeExecutionResultContent: Codable, Sendable {
+  struct CodeExecutionResultContent: Codable {
     let type: String // Should be "code_execution_result"
     let stdout: String
     let stderr: String
@@ -2483,7 +2489,7 @@ extension AnthropicClient {
   }
 
   /// Define the structure for code execution error content
-  struct CodeExecutionToolResultErrorContent: Codable, Sendable {
+  struct CodeExecutionToolResultErrorContent: Codable {
     let type: String // Should be "code_execution_tool_result_error"
     let errorCode: String
 
@@ -2493,7 +2499,7 @@ extension AnthropicClient {
     }
   }
 
-  enum CodeExecutionContentItem: Codable, Sendable {
+  enum CodeExecutionContentItem: Codable {
     case result(CodeExecutionResultContent)
     case error(CodeExecutionToolResultErrorContent)
     case output(CodeExecutionOutputBlock) // New case
@@ -2532,7 +2538,7 @@ extension AnthropicClient {
   }
 
   /// Define the structure for file outputs from code execution
-  struct CodeExecutionOutputBlock: Codable, Sendable {
+  struct CodeExecutionOutputBlock: Codable {
     let fileId: String
     let type: String // Should be "code_execution_output"
 
@@ -2544,7 +2550,7 @@ extension AnthropicClient {
 
   // MARK: - Web Search Tool Result Types
 
-  enum WebSearchErrorCode: String, Codable, Sendable {
+  enum WebSearchErrorCode: String, Codable {
     case invalidToolInput = "invalid_tool_input"
     case unavailable
     case maxUsesExceeded = "max_uses_exceeded"
@@ -2553,7 +2559,7 @@ extension AnthropicClient {
     // Potentially other generic error codes if the API can send them here.
   }
 
-  struct WebSearchErrorDetails: Codable, Sendable {
+  struct WebSearchErrorDetails: Codable {
     let type: String // Should be "web_search_tool_result_error"
     let errorCode: WebSearchErrorCode
 
@@ -2563,7 +2569,7 @@ extension AnthropicClient {
     }
   }
 
-  struct WebSearchResultItem: Codable, Sendable {
+  struct WebSearchResultItem: Codable {
     let encryptedContent: String
     let pageAge: String?
     let title: String
@@ -2577,7 +2583,7 @@ extension AnthropicClient {
     }
   }
 
-  enum WebSearchToolResultBlockContent: Codable, Sendable {
+  enum WebSearchToolResultBlockContent: Codable {
     case results(items: [WebSearchResultItem])
     case error(details: WebSearchErrorDetails)
 
@@ -2615,7 +2621,7 @@ extension AnthropicClient {
 
   // MARK: - Web Fetch Tool Result Types
 
-  struct WebFetchToolResultBlock: Codable, Sendable {
+  struct WebFetchToolResultBlock: Codable {
     let toolUseId: String
     let content: WebFetchToolResultBlockContent
 
@@ -2625,7 +2631,7 @@ extension AnthropicClient {
     }
   }
 
-  enum WebFetchToolResultBlockContent: Codable, Sendable {
+  enum WebFetchToolResultBlockContent: Codable {
     case result(WebFetchResult)
     case error(WebFetchErrorDetails)
 
@@ -2653,7 +2659,7 @@ extension AnthropicClient {
     }
   }
 
-  struct WebFetchResult: Codable, Sendable {
+  struct WebFetchResult: Codable {
     let type: String // "web_fetch_result"
     let url: String
     let retrievedAt: String
@@ -2665,7 +2671,7 @@ extension AnthropicClient {
     }
   }
 
-  struct WebFetchErrorDetails: Codable, Sendable {
+  struct WebFetchErrorDetails: Codable {
     let type: String // Contains "error"
     let errorCode: String
 
@@ -2675,13 +2681,13 @@ extension AnthropicClient {
     }
   }
 
-  struct WebFetchContent: Codable, Sendable {
+  struct WebFetchContent: Codable {
     let type: String // "document"
     let source: WebFetchDocumentSource
     let title: String?
   }
 
-  struct WebFetchDocumentSource: Codable, Sendable {
+  struct WebFetchDocumentSource: Codable {
     let type: String // "text" or "base64"
     let mediaType: String
     let data: String
@@ -2709,7 +2715,7 @@ extension AnthropicClient {
     case unexpectedEventOrder(event: String, expectedPriorEvent: String)
     case missingApiKey
 
-    struct APIErrorDetails: Sendable, Codable {
+    struct APIErrorDetails: Codable {
       let type: String?
       let message: String?
       let param: String?

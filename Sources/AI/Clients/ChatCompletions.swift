@@ -3,10 +3,11 @@
 import Foundation
 import Observation
 import os.log
+import SSE
 
 public extension ChatCompletionsClient {
   /// Configuration options for Chat Completions API requests.
-  struct Configuration: Sendable {
+  struct Configuration {
     /// Additional parameters to include in the API request body.
     /// Use this to pass provider-specific options not covered by the standard interface.
     public var extraParameters: [String: any Sendable]?
@@ -96,7 +97,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     stream: Bool,
     tools: [Tool] = [],
     extraParameters: [String: any Sendable]?,
-    endpoint: URL
+    endpoint: URL,
   ) async throws -> AsyncThrowingStream<GenerationResponse, Error> {
     var request = URLRequest(url: endpoint)
     request.httpMethod = "POST"
@@ -273,7 +274,14 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             var functionCallArguments: [Int: String] = [:] // Accumulate arguments by index
             var metadata = GenerationResponse.Metadata()
             var lastFinishReason: String?
-            for try await jsonString in SSEParser.dataPayloads(from: result) {
+            for try await event in result.events {
+              try Task.checkCancellation()
+              let jsonString = event.data
+
+              if jsonString == "[DONE]" {
+                break
+              }
+
               guard let jsonData = jsonString.data(using: .utf8) else {
                 throw AIError.parsing(message: "Failed to convert streamed response to data")
               }
@@ -316,7 +324,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                         toolCalls.append(GenerationResponse.ToolCall(
                           name: name,
                           id: id,
-                          parameters: [:]
+                          parameters: [:],
                         ))
                         functionCallArguments[index] = function.arguments ?? ""
                       } else if let function = deltaToolCall.function, let arguments = function.arguments {
@@ -332,7 +340,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                           toolCalls[index] = GenerationResponse.ToolCall(
                             name: toolCalls[index].name,
                             id: toolCalls[index].id,
-                            parameters: parsedArgs
+                            parameters: parsedArgs,
                           )
                         }
                       }
@@ -347,7 +355,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                     continuation.yield(GenerationResponse(texts: .init(
                       reasoning: reasoningText,
                       response: responseText,
-                      notes: notesText
+                      notes: notesText,
                     ), toolCalls: toolCalls, metadata: currentMetadata))
                   } else {
                     continue
@@ -360,7 +368,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                     continuation.yield(GenerationResponse(texts: .init(
                       reasoning: nil,
                       response: nil,
-                      notes: nil
+                      notes: nil,
                     ), toolCalls: toolCalls, metadata: currentMetadata))
                   }
                   continue
@@ -414,7 +422,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                     toolCalls.append(GenerationResponse.ToolCall(
                       name: name,
                       id: id,
-                      parameters: parameters
+                      parameters: parameters,
                     ))
                   }
                 }
@@ -429,14 +437,14 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                 outputTokens: completionResponse.usage?.completionTokens,
                 totalTokens: completionResponse.usage?.totalTokens,
                 cacheReadInputTokens: completionResponse.usage?.promptTokensDetails?.cachedTokens,
-                reasoningTokens: completionResponse.usage?.completionTokensDetails?.reasoningTokens
+                reasoningTokens: completionResponse.usage?.completionTokensDetails?.reasoningTokens,
               )
               // Perplexity citations
               let notesText = formatCitations(completionResponse.citations)
               continuation.yield(.init(texts: .init(
                 reasoning: reasoningText,
                 response: responseText,
-                notes: notesText
+                notes: notesText,
               ), toolCalls: toolCalls, metadata: metadata))
             } catch {
               openAILogger.error("Failed to parse non-streamed content: \(error.localizedDescription)")
@@ -520,7 +528,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) async throws -> GenerationResponse {
     try await _generate(
       modelId: modelId,
@@ -532,7 +540,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       apiKey: apiKey,
       stream: false,
       configuration: configuration,
-      update: { _ in }
+      update: { _ in },
     )
   }
 
@@ -556,7 +564,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     AsyncThrowingStream { continuation in
       let task = Task {
@@ -573,7 +581,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             configuration: configuration,
             update: { response in
               continuation.yield(response)
-            }
+            },
           )
           // Yield the final response with metadata
           continuation.yield(finalResponse)
@@ -597,7 +605,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) async throws -> GenerationResponse {
     try await generateText(
       modelId: modelId,
@@ -607,7 +615,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
-      configuration: configuration
+      configuration: configuration,
     )
   }
 
@@ -620,7 +628,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     streamText(
       modelId: modelId,
@@ -630,7 +638,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
-      configuration: configuration
+      configuration: configuration,
     )
   }
 
@@ -644,7 +652,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     apiKey: String?,
     stream: Bool,
     configuration: Configuration,
-    update: @Sendable @escaping (GenerationResponse) -> Void
+    update: @Sendable @escaping (GenerationResponse) -> Void,
   ) async throws -> GenerationResponse {
     await MainActor.run { isGenerating = true }
     let task = Task<GenerationResponse, Error> {
@@ -670,7 +678,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           stream: stream,
           tools: tools,
           extraParameters: configuration.extraParameters,
-          endpoint: endpoint
+          endpoint: endpoint,
         )
         for try await chunk in stream {
           try Task.checkCancellation()
@@ -698,21 +706,21 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             update(.init(texts: .init(
               reasoning: fullReasoningTextCopy.isEmpty ? nil : fullReasoningTextCopy,
               response: fullResponseTextCopy.isEmpty ? nil : fullResponseTextCopy,
-              notes: notesTextCopy
+              notes: notesTextCopy,
             ), toolCalls: toolCallsCopy, metadata: metadataCopy))
           }
         }
         return .init(texts: .init(
           reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
           response: fullResponseText.isEmpty ? nil : fullResponseText,
-          notes: notesText
+          notes: notesText,
         ), toolCalls: toolCalls, metadata: finalMetadata)
       } catch {
         if error is CancellationError {
           return .init(texts: .init(
             reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
             response: fullResponseText.isEmpty ? nil : fullResponseText,
-            notes: notesText
+            notes: notesText,
           ), toolCalls: toolCalls, metadata: finalMetadata)
         } else {
           throw error

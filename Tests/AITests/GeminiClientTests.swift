@@ -4,7 +4,7 @@
 import Foundation
 import Testing
 
-@Suite("Gemini Client", .serialized)
+@Suite(.serialized)
 struct GeminiClientTests {
   // MARK: - Test Helpers
 
@@ -28,14 +28,14 @@ struct GeminiClientTests {
         url: request.url!,
         statusCode: statusCode,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       return (response, sseData.data(using: .utf8)!)
     }
 
     let client = GeminiClient(
       session: makeMockSession(),
-      modelsEndpoint: testEndpoint
+      modelsEndpoint: testEndpoint,
     )
 
     return (client, { MockURLProtocol.removeHandler(for: testId) })
@@ -53,17 +53,17 @@ struct GeminiClientTests {
           title: paramName,
           type: .string,
           description: "Test parameter",
-          required: true
+          required: true,
         ),
       ],
-      execute: { _ in [.text("test result")] }
+      execute: { _ in [.text("test result")] },
     )
   }
 
   /// Consumes an async stream and returns the last element.
   private func consumeStream(
     _ stream: AsyncThrowingStream<GenerationResponse, Error>,
-    collecting: UpdateCollector? = nil
+    collecting: UpdateCollector? = nil,
   ) async throws -> GenerationResponse {
     var last: GenerationResponse?
     for try await response in stream {
@@ -78,8 +78,8 @@ struct GeminiClientTests {
 
   // MARK: - Basic Response Tests
 
-  @Test("Parses basic text response and accumulates text")
-  func basicTextResponse() async throws {
+  @Test
+  func `Parses basic text response and accumulates text`() async throws {
     let fixture = try loadFixture("gemini_basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -90,7 +90,7 @@ struct GeminiClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ), collecting: collector)
 
     // Verify the final response contains the accumulated text
@@ -101,8 +101,8 @@ struct GeminiClientTests {
     #expect(!updates.isEmpty)
   }
 
-  @Test("Parses function call response")
-  func toolCallResponse() async throws {
+  @Test
+  func `Parses function call response`() async throws {
     let fixture = try loadFixture("gemini_function_call_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -113,7 +113,7 @@ struct GeminiClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather in Paris?")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify we got a function call
@@ -133,8 +133,8 @@ struct GeminiClientTests {
     #expect(response.texts.response?.contains("check the weather") == true)
   }
 
-  @Test("Extracts token usage metadata")
-  func tokenUsageMetadata() async throws {
+  @Test
+  func `Extracts token usage metadata`() async throws {
     let fixture = try loadFixture("gemini_basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -144,7 +144,7 @@ struct GeminiClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify token counts from the fixture
@@ -153,8 +153,8 @@ struct GeminiClientTests {
     #expect(response.metadata?.outputTokens == 2)
   }
 
-  @Test("Sets finish reason correctly for normal stop")
-  func finishReasonStop() async throws {
+  @Test
+  func `Sets finish reason correctly for normal stop`() async throws {
     let fixture = try loadFixture("gemini_basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -164,15 +164,15 @@ struct GeminiClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // From gemini_basic_response.txt: finishReason: "STOP"
     #expect(response.metadata?.finishReason == .stop)
   }
 
-  @Test("Sets finish reason correctly for max tokens")
-  func maxTokensFinishReason() async throws {
+  @Test
+  func `Sets finish reason correctly for max tokens`() async throws {
     let fixture = try loadFixture("gemini_max_tokens_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -182,7 +182,7 @@ struct GeminiClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Write a long story")],
       maxTokens: 15,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify the response was truncated
@@ -194,8 +194,8 @@ struct GeminiClientTests {
 
   // MARK: - Error Handling Tests
 
-  @Test("Throws error for 400 bad request")
-  func badRequestError() async throws {
+  @Test
+  func `Throws error for 400 bad request`() async throws {
     let errorResponse = """
     {"error":{"code":400,"message":"Invalid request","status":"INVALID_ARGUMENT"}}
     """
@@ -208,7 +208,7 @@ struct GeminiClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected bad request error")
     } catch let error as AIError {
@@ -220,8 +220,8 @@ struct GeminiClientTests {
     }
   }
 
-  @Test("Throws error for 403 permission denied")
-  func permissionDeniedError() async throws {
+  @Test
+  func `Throws error for 403 permission denied`() async throws {
     let errorResponse = """
     {"error":{"code":403,"message":"Permission denied","status":"PERMISSION_DENIED"}}
     """
@@ -234,7 +234,7 @@ struct GeminiClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "invalid-key"
+        apiKey: "invalid-key",
       ))
       Issue.record("Expected permission denied error")
     } catch let error as AIError {
@@ -246,8 +246,8 @@ struct GeminiClientTests {
     }
   }
 
-  @Test("Throws rate limit error for 429 status")
-  func rateLimitError() async throws {
+  @Test
+  func `Throws rate limit error for 429 status`() async throws {
     let errorResponse = """
     {"error":{"code":429,"message":"Resource exhausted","status":"RESOURCE_EXHAUSTED"}}
     """
@@ -260,7 +260,7 @@ struct GeminiClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected rate limit error")
     } catch let error as AIError {
@@ -272,8 +272,8 @@ struct GeminiClientTests {
     }
   }
 
-  @Test("Throws server error for 500 status")
-  func serverError() async throws {
+  @Test
+  func `Throws server error for 500 status`() async throws {
     let errorResponse = """
     {"error":{"code":500,"message":"Internal server error","status":"INTERNAL"}}
     """
@@ -286,7 +286,7 @@ struct GeminiClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected server error")
     } catch let error as AIError {
@@ -298,8 +298,8 @@ struct GeminiClientTests {
     }
   }
 
-  @Test("Throws error when API key is missing")
-  func missingApiKey() async throws {
+  @Test
+  func `Throws error when API key is missing`() async throws {
     let client = GeminiClient()
 
     do {
@@ -308,7 +308,7 @@ struct GeminiClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: nil
+        apiKey: nil,
       ))
       Issue.record("Expected error for missing API key")
     } catch let error as AIError {
@@ -323,8 +323,8 @@ struct GeminiClientTests {
 
   // MARK: - Network Error Tests
 
-  @Test("Handles network errors")
-  func networkError() async throws {
+  @Test
+  func `Handles network errors`() async throws {
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
@@ -335,7 +335,7 @@ struct GeminiClientTests {
 
     let client = GeminiClient(
       session: makeMockSession(),
-      modelsEndpoint: testEndpoint
+      modelsEndpoint: testEndpoint,
     )
 
     do {
@@ -344,7 +344,7 @@ struct GeminiClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected network error")
     } catch {
@@ -355,8 +355,8 @@ struct GeminiClientTests {
 
   // MARK: - Safety Filtering Tests
 
-  @Test("Handles safety-blocked response")
-  func safetyBlockedResponse() async throws {
+  @Test
+  func `Handles safety-blocked response`() async throws {
     let fixture = try loadFixture("gemini_safety_blocked_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -367,7 +367,7 @@ struct GeminiClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Harmful content")],
         maxTokens: 1024,
-        apiKey: "test-api-key"
+        apiKey: "test-api-key",
       ))
       // If no error thrown, verify the finish reason indicates content filter
       #expect(response.metadata?.finishReason == .contentFilter)
@@ -384,15 +384,15 @@ struct GeminiClientTests {
       #expect(
         errorMessage.lowercased().contains("safety") ||
           errorMessage.lowercased().contains("blocked") ||
-          errorMessage.lowercased().contains("finish reason")
+          errorMessage.lowercased().contains("finish reason"),
       )
     }
   }
 
   // MARK: - Thinking Content Tests
 
-  @Test("Handles thinking content in response")
-  func thinkingContentResponse() async throws {
+  @Test
+  func `Handles thinking content in response`() async throws {
     let fixture = try loadFixture("gemini_thinking_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -404,7 +404,7 @@ struct GeminiClientTests {
       messages: [Message(role: .user, content: "What is the meaning of life?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
-      configuration: .init(thinkingBudget: 1000)
+      configuration: .init(thinkingBudget: 1000),
     ), collecting: collector)
 
     // Verify we got the final answer (from non-thinking content)
@@ -425,8 +425,8 @@ struct GeminiClientTests {
 
   // MARK: - Stream Processing Tests
 
-  @Test("Yields all chunks correctly")
-  func yieldsAllChunks() async throws {
+  @Test
+  func `Yields all chunks correctly`() async throws {
     let fixture = try loadFixture("gemini_basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
@@ -437,7 +437,7 @@ struct GeminiClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ), collecting: collector)
 
     // Verify we received multiple streaming updates
@@ -472,8 +472,8 @@ struct GeminiClientTests {
     return nil
   }
 
-  @Test("Request body includes system instruction correctly")
-  func systemPromptInRequestBody() async throws {
+  @Test
+  func `Request body includes system instruction correctly`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -485,7 +485,7 @@ struct GeminiClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       let sseData = """
       data: {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1,"totalTokenCount":11}}
@@ -502,7 +502,7 @@ struct GeminiClientTests {
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       temperature: 0.7,
-      apiKey: "test-key"
+      apiKey: "test-key",
     ))
 
     // Verify body was captured
@@ -536,8 +536,8 @@ struct GeminiClientTests {
     #expect(generationConfig?["maxOutputTokens"] as? Int == 1024)
   }
 
-  @Test("Request body includes tools correctly")
-  func toolsInRequestBody() async throws {
+  @Test
+  func `Request body includes tools correctly`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -549,7 +549,7 @@ struct GeminiClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       let sseData = """
       data: {"candidates":[{"content":{"parts":[{"text":"I'll check"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
@@ -566,7 +566,7 @@ struct GeminiClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather?")],
       maxTokens: 1024,
-      apiKey: "test-key"
+      apiKey: "test-key",
     ))
 
     // Verify body was captured
@@ -589,13 +589,14 @@ struct GeminiClientTests {
 
   // MARK: - Multiple Tool Calls Tests
 
-  @Test("Parses multiple function calls in single response")
-  func multipleToolCallsResponse() async throws {
+  @Test
+  func `Parses multiple function calls in single response`() async throws {
     // Create a fixture with multiple function calls
     let sseData = """
     data: {"candidates":[{"content":{"parts":[{"text":"I'll check the weather in both cities."}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":10,"totalTokenCount":35}}
 
     data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","args":{"location":"Paris"}}},{"functionCall":{"name":"get_weather","args":{"location":"London"}}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":20,"totalTokenCount":45}}
+
 
     """
     let testId = UUID().uuidString
@@ -606,7 +607,7 @@ struct GeminiClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       return (response, sseData.data(using: .utf8)!)
     }
@@ -619,7 +620,7 @@ struct GeminiClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
       maxTokens: 1024,
-      apiKey: "test-key"
+      apiKey: "test-key",
     ))
 
     // Verify we got multiple function calls
@@ -649,8 +650,8 @@ struct GeminiClientTests {
 
   // MARK: - Stream Cancellation Tests
 
-  @Test("Cancellation propagates correctly")
-  func streamCancellation() async throws {
+  @Test
+  func `Cancellation propagates correctly`() async throws {
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
@@ -660,7 +661,7 @@ struct GeminiClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
 
       // Return a response that simulates a slow stream
@@ -674,7 +675,7 @@ struct GeminiClientTests {
 
     let client = GeminiClient(
       session: makeMockSession(),
-      modelsEndpoint: testEndpoint
+      modelsEndpoint: testEndpoint,
     )
 
     let task = Task {
@@ -683,7 +684,7 @@ struct GeminiClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
     }
 

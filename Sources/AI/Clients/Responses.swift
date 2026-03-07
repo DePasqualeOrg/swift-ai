@@ -3,6 +3,7 @@
 import Foundation
 import Observation
 import os.log
+import SSE
 
 /// A client for the OpenAI Responses API.
 ///
@@ -123,7 +124,7 @@ public final class ResponsesClient: APIClient, Sendable {
     serverSideTools: [ServerSideTool],
     backgroundMode: Bool,
     textFormat: ResponseFormat? = nil,
-    tools: [Tool] = []
+    tools: [Tool] = [],
   ) async throws -> AsyncThrowingStream<GenerationResponse, Error> {
     var request = URLRequest(url: endpoint)
     request.httpMethod = "POST"
@@ -413,7 +414,7 @@ public final class ResponsesClient: APIClient, Sendable {
             try await streamBackgroundResponseDirect(
               request: request,
               apiKey: apiKey,
-              continuation: continuation
+              continuation: continuation,
             )
           } else if backgroundMode {
             openAIResponsesLogger.log("Initiating background mode response without streaming in OpenAI Responses client")
@@ -442,7 +443,7 @@ public final class ResponsesClient: APIClient, Sendable {
               continuation: continuation,
               logPrefix: "Standard Stream",
               isBackground: false,
-              apiKey: apiKey
+              apiKey: apiKey,
             )
           } else {
             let (data, response) = try await session.data(for: request)
@@ -534,7 +535,7 @@ public final class ResponsesClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) async throws -> GenerationResponse {
     try await _generate(
       modelId: modelId,
@@ -546,7 +547,7 @@ public final class ResponsesClient: APIClient, Sendable {
       apiKey: apiKey,
       stream: false,
       configuration: configuration,
-      update: { _ in }
+      update: { _ in },
     )
   }
 
@@ -570,7 +571,7 @@ public final class ResponsesClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     AsyncThrowingStream { continuation in
       let task = Task {
@@ -587,7 +588,7 @@ public final class ResponsesClient: APIClient, Sendable {
             configuration: configuration,
             update: { response in
               continuation.yield(response)
-            }
+            },
           )
           // Yield the final response with metadata
           continuation.yield(finalResponse)
@@ -611,7 +612,7 @@ public final class ResponsesClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) async throws -> GenerationResponse {
     try await generateText(
       modelId: modelId,
@@ -621,7 +622,7 @@ public final class ResponsesClient: APIClient, Sendable {
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
-      configuration: configuration
+      configuration: configuration,
     )
   }
 
@@ -634,7 +635,7 @@ public final class ResponsesClient: APIClient, Sendable {
     maxTokens: Int? = nil,
     temperature: Float? = nil,
     apiKey: String? = nil,
-    configuration: Configuration = .init()
+    configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     streamText(
       modelId: modelId,
@@ -644,7 +645,7 @@ public final class ResponsesClient: APIClient, Sendable {
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
-      configuration: configuration
+      configuration: configuration,
     )
   }
 
@@ -658,7 +659,7 @@ public final class ResponsesClient: APIClient, Sendable {
     apiKey: String?,
     stream: Bool,
     configuration: Configuration,
-    update: @Sendable @escaping (GenerationResponse) -> Void
+    update: @Sendable @escaping (GenerationResponse) -> Void,
   ) async throws -> GenerationResponse {
     await MainActor.run {
       isGenerating = true
@@ -692,7 +693,7 @@ public final class ResponsesClient: APIClient, Sendable {
           verbosityLevel: configuration.verbosityLevel,
           serverSideTools: configuration.serverSideTools,
           backgroundMode: configuration.backgroundMode,
-          tools: tools
+          tools: tools,
         )
 
         for try await chunk in stream {
@@ -715,7 +716,7 @@ public final class ResponsesClient: APIClient, Sendable {
             update(.init(texts: .init(
               reasoning: reasoningCopy, // Pass nil if empty handled by GenerationResponse init
               response: responseCopy,
-              notes: notesCopy
+              notes: notesCopy,
             ), toolCalls: toolCallsCopy))
           }
         }
@@ -726,7 +727,7 @@ public final class ResponsesClient: APIClient, Sendable {
           return .init(texts: .init(
             reasoning: finalReasoningText,
             response: finalResponseText,
-            notes: finalEndnotesText
+            notes: finalEndnotesText,
           ), toolCalls: finalFunctionCalls, metadata: finalMetadata)
         }
 
@@ -734,7 +735,7 @@ public final class ResponsesClient: APIClient, Sendable {
         return .init(texts: .init(
           reasoning: finalReasoningText,
           response: finalResponseText,
-          notes: finalEndnotesText
+          notes: finalEndnotesText,
         ), toolCalls: finalFunctionCalls.filter { !$0.parameters.keys.contains("_parseError") }, metadata: finalMetadata) // Filter out calls that failed final parsing
 
       } catch {
@@ -744,7 +745,7 @@ public final class ResponsesClient: APIClient, Sendable {
           return .init(texts: .init(
             reasoning: finalReasoningText,
             response: finalResponseText,
-            notes: finalEndnotesText
+            notes: finalEndnotesText,
           ), toolCalls: finalFunctionCalls, metadata: finalMetadata)
         } else {
           // Rethrow other errors
@@ -784,7 +785,7 @@ public final class ResponsesClient: APIClient, Sendable {
     streamingFunctionCalls: inout [Int: GenerationResponse.ToolCall],
     streamingArgumentsStrings: inout [Int: String],
     completedFunctionCalls: inout [GenerationResponse.ToolCall],
-    continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation
+    continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
   ) throws {
     if let errorMessage = event.error?.message {
       throw AIError.serverError(statusCode: 0, message: errorMessage, context: nil)
@@ -799,7 +800,7 @@ public final class ResponsesClient: APIClient, Sendable {
           continuation.yield(GenerationResponse(texts: .init(
             reasoning: reasoningText.isEmpty ? nil : reasoningText,
             response: responseText,
-            notes: nil
+            notes: nil,
           ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
         }
 
@@ -809,7 +810,7 @@ public final class ResponsesClient: APIClient, Sendable {
           continuation.yield(GenerationResponse(texts: .init(
             reasoning: reasoningText,
             response: responseText.isEmpty ? nil : responseText,
-            notes: nil
+            notes: nil,
           ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
         }
 
@@ -821,13 +822,13 @@ public final class ResponsesClient: APIClient, Sendable {
                 streamingFunctionCalls[outputIndex] = GenerationResponse.ToolCall(
                   name: name,
                   id: callId,
-                  parameters: [:]
+                  parameters: [:],
                 )
                 streamingArgumentsStrings[outputIndex] = ""
                 continuation.yield(GenerationResponse(texts: .init(
                   reasoning: reasoningText.isEmpty ? nil : reasoningText,
                   response: responseText.isEmpty ? nil : responseText,
-                  notes: nil
+                  notes: nil,
                 ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
               }
             case OutputItemType.reasoning:
@@ -840,7 +841,7 @@ public final class ResponsesClient: APIClient, Sendable {
                 continuation.yield(GenerationResponse(texts: .init(
                   reasoning: reasoningText.isEmpty ? nil : reasoningText,
                   response: responseText.isEmpty ? nil : responseText,
-                  notes: nil
+                  notes: nil,
                 ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
               } else {
                 openAIResponsesLogger.warning("Received reasoning item without expected summary array")
@@ -875,7 +876,7 @@ public final class ResponsesClient: APIClient, Sendable {
           continuation.yield(GenerationResponse(texts: .init(
             reasoning: reasoningText.isEmpty ? nil : reasoningText,
             response: responseText.isEmpty ? nil : responseText,
-            notes: nil
+            notes: nil,
           ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
         }
 
@@ -899,7 +900,7 @@ public final class ResponsesClient: APIClient, Sendable {
           continuation.yield(GenerationResponse(texts: .init(
             reasoning: reasoningText.isEmpty ? nil : reasoningText,
             response: responseText.isEmpty ? nil : responseText,
-            notes: nil
+            notes: nil,
           ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
         }
 
@@ -920,14 +921,27 @@ public final class ResponsesClient: APIClient, Sendable {
         // Build and yield final response with metadata
         if let response = event.response {
           let generationResponse = response.toGenerationResponse()
+          var mergedToolCalls = completedFunctionCalls + Array(streamingFunctionCalls.values)
+
+          // Some Responses API streams omit output_index on intermediate
+          // function-call events. In that case, recover tool calls from the
+          // final completed response payload instead of dropping them.
+          if !generationResponse.toolCalls.isEmpty {
+            var seenToolCallIDs = Set(mergedToolCalls.map(\.id))
+            for toolCall in generationResponse.toolCalls where !seenToolCallIDs.contains(toolCall.id) {
+              mergedToolCalls.append(toolCall)
+              seenToolCallIDs.insert(toolCall.id)
+            }
+          }
+
           continuation.yield(GenerationResponse(
             texts: .init(
               reasoning: reasoningText.isEmpty ? nil : reasoningText,
               response: responseText.isEmpty ? generationResponse.texts.response : responseText,
-              notes: nil
+              notes: nil,
             ),
-            toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values),
-            metadata: generationResponse.metadata
+            toolCalls: mergedToolCalls,
+            metadata: generationResponse.metadata,
           ))
         }
 
@@ -943,7 +957,7 @@ public final class ResponsesClient: APIClient, Sendable {
     apiKey: String?,
     continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
     retryCount: Int = 0,
-    maxRetries: Int = 3
+    maxRetries: Int = 3,
   ) async throws {
     openAIResponsesLogger.log("Background Stream Direct: Starting attempt \(retryCount + 1)/\(maxRetries + 1)")
 
@@ -955,7 +969,7 @@ public final class ResponsesClient: APIClient, Sendable {
       startingAfter: 0,
       retryCount: retryCount,
       maxRetries: maxRetries,
-      isDirect: true
+      isDirect: true,
     )
   }
 
@@ -965,7 +979,7 @@ public final class ResponsesClient: APIClient, Sendable {
     continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
     startingAfter: Int? = nil,
     retryCount: Int = 0,
-    maxRetries: Int = 3
+    maxRetries: Int = 3,
   ) async throws {
     openAIResponsesLogger.log("Background Stream: Starting for response \(responseId), attempt \(retryCount + 1)/\(maxRetries + 1), startingAfter: \(startingAfter ?? 0)")
 
@@ -993,7 +1007,7 @@ public final class ResponsesClient: APIClient, Sendable {
       startingAfter: startingAfter ?? 0,
       retryCount: retryCount,
       maxRetries: maxRetries,
-      isDirect: false
+      isDirect: false,
     )
   }
 
@@ -1006,7 +1020,7 @@ public final class ResponsesClient: APIClient, Sendable {
     startingAfter: Int,
     retryCount: Int,
     maxRetries: Int,
-    isDirect: Bool
+    isDirect: Bool,
   ) async throws {
     let logPrefix = isDirect ? "Background Stream Direct" : "Background Stream"
     var lastSequenceNumber: Int = startingAfter
@@ -1036,7 +1050,7 @@ public final class ResponsesClient: APIClient, Sendable {
             }
           }
           lastSequenceNumber = sequenceNumber
-        }
+        },
       )
     } catch {
       // Check if this is a cancellation error (expected when user stops)
@@ -1071,7 +1085,7 @@ public final class ResponsesClient: APIClient, Sendable {
               continuation: continuation,
               startingAfter: lastSequenceNumber,
               retryCount: retryCount,
-              maxRetries: maxRetries
+              maxRetries: maxRetries,
             )
             return
           }
@@ -1083,7 +1097,7 @@ public final class ResponsesClient: APIClient, Sendable {
               responseId: responseId,
               apiKey: apiKey,
               continuation: continuation,
-              logPrefix: logPrefix
+              logPrefix: logPrefix,
             ) {
               return // Response was completed or handled
             }
@@ -1101,7 +1115,7 @@ public final class ResponsesClient: APIClient, Sendable {
               apiKey: apiKey,
               continuation: continuation,
               retryCount: retryCount + 1,
-              maxRetries: maxRetries
+              maxRetries: maxRetries,
             )
           } else {
             openAIResponsesLogger.log("\(logPrefix): Retrying from sequence \(lastSequenceNumber)...")
@@ -1111,7 +1125,7 @@ public final class ResponsesClient: APIClient, Sendable {
               continuation: continuation,
               startingAfter: lastSequenceNumber,
               retryCount: retryCount + 1,
-              maxRetries: maxRetries
+              maxRetries: maxRetries,
             )
           }
           return
@@ -1141,7 +1155,7 @@ public final class ResponsesClient: APIClient, Sendable {
     isBackground _: Bool,
     apiKey _: String? = nil,
     responseIdHandler: ((String) async -> Void)? = nil,
-    sequenceHandler: ((Int) -> Void)? = nil
+    sequenceHandler: ((Int) -> Void)? = nil,
   ) async throws {
     openAIResponsesLogger.log("\(logPrefix): Connecting to stream...")
 
@@ -1165,7 +1179,14 @@ public final class ResponsesClient: APIClient, Sendable {
     var streamingArgumentsStrings: [Int: String] = [:]
     var completedFunctionCalls: [GenerationResponse.ToolCall] = []
 
-    for try await jsonString in SSEParser.dataPayloads(from: result) {
+    for try await event in result.events {
+      try Task.checkCancellation()
+      let jsonString = event.data
+
+      if jsonString == "[DONE]" {
+        break
+      }
+
       guard let jsonData = jsonString.data(using: .utf8) else {
         throw AIError.parsing(message: "Failed to convert streamed response to data: \(jsonString)")
       }
@@ -1192,7 +1213,7 @@ public final class ResponsesClient: APIClient, Sendable {
           streamingFunctionCalls: &streamingFunctionCalls,
           streamingArgumentsStrings: &streamingArgumentsStrings,
           completedFunctionCalls: &completedFunctionCalls,
-          continuation: continuation
+          continuation: continuation,
         )
       } catch let error as AIError {
         throw error
@@ -1208,7 +1229,7 @@ public final class ResponsesClient: APIClient, Sendable {
     responseId: String,
     apiKey: String?,
     continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
-    logPrefix: String
+    logPrefix: String,
   ) async throws -> Bool {
     do {
       let statusUrl = endpoint.appendingPathComponent(responseId)
@@ -1254,7 +1275,7 @@ public final class ResponsesClient: APIClient, Sendable {
   /// Helper method to parse completed response
   private func parseCompletedResponse(
     _ response: ResponseObject,
-    continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation
+    continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
   ) {
     continuation.yield(response.toGenerationResponse())
   }
@@ -1262,7 +1283,7 @@ public final class ResponsesClient: APIClient, Sendable {
   private func pollBackgroundResponse(
     responseId: String,
     apiKey: String?,
-    continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation
+    continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
   ) async throws {
     let pollUrl = endpoint.appendingPathComponent(responseId)
     var request = URLRequest(url: pollUrl)
@@ -1348,7 +1369,7 @@ public final class ResponsesClient: APIClient, Sendable {
       id: id,
       status: status,
       response: generationResponse,
-      error: response.error?.message
+      error: response.error?.message,
     )
   }
 
@@ -1414,7 +1435,7 @@ public final class ResponsesClient: APIClient, Sendable {
     responseId: String,
     apiKey: String?,
     startingAfter: Int,
-    update: @Sendable @escaping (GenerationResponse) -> Void
+    update: @Sendable @escaping (GenerationResponse) -> Void,
   ) async throws -> GenerationResponse {
     await MainActor.run {
       isGenerating = true
@@ -1443,7 +1464,7 @@ public final class ResponsesClient: APIClient, Sendable {
               responseId: responseId,
               apiKey: apiKey,
               continuation: continuation,
-              startingAfter: startingAfter
+              startingAfter: startingAfter,
             )
             continuation.finish()
           } catch {
@@ -1470,7 +1491,7 @@ public final class ResponsesClient: APIClient, Sendable {
           update(.init(texts: .init(
             reasoning: reasoningCopy,
             response: responseCopy,
-            notes: notesCopy
+            notes: notesCopy,
           ), toolCalls: toolCallsCopy))
         }
       }
@@ -1478,7 +1499,7 @@ public final class ResponsesClient: APIClient, Sendable {
       return .init(texts: .init(
         reasoning: finalReasoningText,
         response: finalResponseText,
-        notes: finalEndnotesText
+        notes: finalEndnotesText,
       ), toolCalls: finalFunctionCalls.filter { !$0.parameters.keys.contains("_parseError") }, metadata: finalMetadata)
     }
 
@@ -1716,7 +1737,7 @@ extension ResponsesClient {
       reasoningEffortLevel: ResponsesClient.ReasoningEffortLevel? = nil,
       verbosityLevel: ResponsesClient.VerbosityLevel? = nil,
       serverSideTools: [ServerSideTool] = [],
-      backgroundMode: Bool = false
+      backgroundMode: Bool = false,
     ) {
       self.reasoningEffortLevel = reasoningEffortLevel
       self.verbosityLevel = verbosityLevel
@@ -1890,7 +1911,7 @@ extension ResponsesClient {
                 toolCalls.append(GenerationResponse.ToolCall(
                   name: name,
                   id: callId,
-                  parameters: parameters
+                  parameters: parameters,
                 ))
               }
             default:
@@ -1935,13 +1956,13 @@ extension ResponsesClient {
         outputTokens: usage?.outputTokens,
         totalTokens: usage?.totalTokens,
         cacheReadInputTokens: usage?.inputTokensDetails?.cachedTokens,
-        reasoningTokens: usage?.outputTokensDetails?.reasoningTokens
+        reasoningTokens: usage?.outputTokensDetails?.reasoningTokens,
       )
 
       return GenerationResponse(
         texts: .init(reasoning: reasoningText, response: responseText, notes: nil),
         toolCalls: toolCalls,
-        metadata: metadata
+        metadata: metadata,
       )
     }
   }
