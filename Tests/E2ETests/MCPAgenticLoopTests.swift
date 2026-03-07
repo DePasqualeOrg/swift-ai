@@ -45,14 +45,14 @@ struct LocalCalculator {
 }
 
 /// End-to-end tests for agentic loops with MCP tools across different providers.
-@Suite("MCP Agentic Loop Tests", .serialized)
+@Suite(.serialized)
 struct MCPAgenticLoopTests {
   static let mcpServerURL = URL(string: "http://localhost:52274/mcp")!
 
   // MARK: - Provider Tests
 
-  @Test("Gemini: Weather in Paris with MCP tools")
-  func geminiWeatherInParis() async throws {
+  @Test
+  func `Gemini: Weather in Paris with MCP tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["GEMINI_API_KEY"] else {
       Issue.record("GEMINI_API_KEY not found in .env file")
@@ -61,7 +61,7 @@ struct MCPAgenticLoopTests {
 
     let result = try await runAgenticLoop(
       prompt: "What's the weather like in Paris?",
-      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview")
+      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -69,8 +69,8 @@ struct MCPAgenticLoopTests {
     print("Gemini result: \(result.finalResponse ?? "nil")")
   }
 
-  @Test("Anthropic: Weather in Paris with MCP tools")
-  func anthropicWeatherInParis() async throws {
+  @Test
+  func `Anthropic: Weather in Paris with MCP tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["ANTHROPIC_API_KEY"] else {
       Issue.record("ANTHROPIC_API_KEY not found in .env file")
@@ -79,7 +79,7 @@ struct MCPAgenticLoopTests {
 
     let result = try await runAgenticLoop(
       prompt: "What's the weather like in Paris?",
-      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101")
+      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -87,8 +87,8 @@ struct MCPAgenticLoopTests {
     print("Anthropic result: \(result.finalResponse ?? "nil")")
   }
 
-  @Test("OpenAI Responses: Weather in Paris with MCP tools")
-  func openAIResponsesWeatherInParis() async throws {
+  @Test
+  func `OpenAI Responses: Weather in Paris with MCP tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["OPENAI_API_KEY"] else {
       Issue.record("OPENAI_API_KEY not found in .env file")
@@ -97,7 +97,7 @@ struct MCPAgenticLoopTests {
 
     let result = try await runAgenticLoop(
       prompt: "What's the weather like in Paris?",
-      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2")
+      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -105,8 +105,8 @@ struct MCPAgenticLoopTests {
     print("OpenAI Responses result: \(result.finalResponse ?? "nil")")
   }
 
-  @Test("xAI: Weather in Paris with MCP tools")
-  func xaiWeatherInParis() async throws {
+  @Test
+  func `xAI: Weather in Paris with MCP tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["XAI_API_KEY"] else {
       Issue.record("XAI_API_KEY not found in .env file")
@@ -118,8 +118,8 @@ struct MCPAgenticLoopTests {
       provider: .chatCompletions(
         apiKey: apiKey,
         modelId: "grok-4-1-fast-reasoning",
-        endpoint: #require(URL(string: "https://api.x.ai/v1/chat/completions"))
-      )
+        endpoint: #require(URL(string: "https://api.x.ai/v1/chat/completions")),
+      ),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -129,8 +129,8 @@ struct MCPAgenticLoopTests {
 
   // MARK: - Multi-Tool Tests
 
-  @Test("Gemini: Chained reasoning with multiple tools")
-  func geminiChainedReasoning() async throws {
+  @Test
+  func `Gemini: Chained reasoning with multiple tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["GEMINI_API_KEY"] else {
       Issue.record("GEMINI_API_KEY not found in .env file")
@@ -139,7 +139,7 @@ struct MCPAgenticLoopTests {
 
     let result = try await runAgenticLoop(
       prompt: "What's the weather in San Francisco? Based on that, use another model to suggest what I should wear today.",
-      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview")
+      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -148,8 +148,8 @@ struct MCPAgenticLoopTests {
     print("Tool calls executed: \(result.toolCallsExecuted)")
   }
 
-  @Test("Anthropic: Chained reasoning with multiple tools")
-  func anthropicChainedReasoning() async throws {
+  @Test
+  func `Anthropic: Chained reasoning with multiple tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["ANTHROPIC_API_KEY"] else {
       Issue.record("ANTHROPIC_API_KEY not found in .env file")
@@ -158,7 +158,7 @@ struct MCPAgenticLoopTests {
 
     let result = try await runAgenticLoop(
       prompt: "What's the weather in San Francisco? Based on that, use another model to suggest what I should wear today.",
-      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101")
+      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -167,8 +167,8 @@ struct MCPAgenticLoopTests {
     print("Tool calls executed: \(result.toolCallsExecuted)")
   }
 
-  @Test("OpenAI Responses: Chained reasoning with multiple tools")
-  func openAIResponsesChainedReasoning() async throws {
+  @Test
+  func `OpenAI Responses: Chained reasoning with multiple tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["OPENAI_API_KEY"] else {
       Issue.record("OPENAI_API_KEY not found in .env file")
@@ -177,7 +177,7 @@ struct MCPAgenticLoopTests {
 
     let result = try await runAgenticLoop(
       prompt: "What's the weather in San Francisco? Based on that, use another model to suggest what I should wear today.",
-      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2")
+      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -186,8 +186,8 @@ struct MCPAgenticLoopTests {
     print("Tool calls executed: \(result.toolCallsExecuted)")
   }
 
-  @Test("xAI: Chained reasoning with multiple tools")
-  func xaiChainedReasoning() async throws {
+  @Test
+  func `xAI: Chained reasoning with multiple tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["XAI_API_KEY"] else {
       Issue.record("XAI_API_KEY not found in .env file")
@@ -199,8 +199,8 @@ struct MCPAgenticLoopTests {
       provider: .chatCompletions(
         apiKey: apiKey,
         modelId: "grok-4-1-fast-reasoning",
-        endpoint: #require(URL(string: "https://api.x.ai/v1/chat/completions"))
-      )
+        endpoint: #require(URL(string: "https://api.x.ai/v1/chat/completions")),
+      ),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -211,8 +211,8 @@ struct MCPAgenticLoopTests {
 
   // MARK: - Mixed MCP + AI Tools Tests
 
-  @Test("Gemini: Mixed MCP and AI tools")
-  func geminiMixedTools() async throws {
+  @Test
+  func `Gemini: Mixed MCP and AI tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["GEMINI_API_KEY"] else {
       Issue.record("GEMINI_API_KEY not found in .env file")
@@ -222,7 +222,7 @@ struct MCPAgenticLoopTests {
     let result = try await runMixedToolsLoop(
       prompt: "What's the weather in Tokyo? Also, use the calculator to compute 42 multiplied by 17.",
       localTools: [LocalCalculator.tool],
-      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview")
+      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -231,8 +231,8 @@ struct MCPAgenticLoopTests {
     print("Tool calls executed: \(result.toolCallsExecuted)")
   }
 
-  @Test("Anthropic: Mixed MCP and AI tools")
-  func anthropicMixedTools() async throws {
+  @Test
+  func `Anthropic: Mixed MCP and AI tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["ANTHROPIC_API_KEY"] else {
       Issue.record("ANTHROPIC_API_KEY not found in .env file")
@@ -242,7 +242,7 @@ struct MCPAgenticLoopTests {
     let result = try await runMixedToolsLoop(
       prompt: "Calculate 99 divided by 3 using the local calculator. Then get the weather in Paris using the weather tool.",
       localTools: [LocalCalculator.tool],
-      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101")
+      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -251,8 +251,8 @@ struct MCPAgenticLoopTests {
     print("Tool calls executed: \(result.toolCallsExecuted)")
   }
 
-  @Test("OpenAI: Mixed MCP and AI tools")
-  func openAIMixedTools() async throws {
+  @Test
+  func `OpenAI: Mixed MCP and AI tools`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["OPENAI_API_KEY"] else {
       Issue.record("OPENAI_API_KEY not found in .env file")
@@ -262,7 +262,7 @@ struct MCPAgenticLoopTests {
     let result = try await runMixedToolsLoop(
       prompt: "What is 1000 subtract 371? Also, what's the current weather in London?",
       localTools: [LocalCalculator.tool],
-      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2")
+      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -302,7 +302,7 @@ struct MCPAgenticLoopTests {
   func runAgenticLoop(
     prompt: String,
     provider: Provider,
-    maxIterations: Int = 10
+    maxIterations: Int = 10,
   ) async throws -> AgenticLoopResult {
     // Connect to MCP server with long-lived SSE configuration
     let mcpClient = MCP.Client(name: "E2ETest-\(provider.name)", version: "1.0.0")
@@ -311,7 +311,7 @@ struct MCPAgenticLoopTests {
     configuration.timeoutIntervalForResource = 3600 // 1 hour for the SSE connection
     let transport = HTTPClientTransport(
       endpoint: Self.mcpServerURL,
-      configuration: configuration
+      configuration: configuration,
     )
     try await mcpClient.connect(transport: transport)
     defer { Task { await mcpClient.disconnect() } }
@@ -336,7 +336,7 @@ struct MCPAgenticLoopTests {
       let response = try await generateResponse(
         messages: messages,
         tools: tools,
-        provider: provider
+        provider: provider,
       )
 
       print("[\(provider.name)] Iteration \(iterations): \(response.toolCalls.count) tool calls")
@@ -373,7 +373,7 @@ struct MCPAgenticLoopTests {
       return AgenticLoopResult(
         finalResponse: finalResponse,
         iterations: iterations,
-        toolCallsExecuted: totalToolCalls
+        toolCallsExecuted: totalToolCalls,
       )
     }
 
@@ -381,7 +381,7 @@ struct MCPAgenticLoopTests {
     return AgenticLoopResult(
       finalResponse: nil,
       iterations: iterations,
-      toolCallsExecuted: totalToolCalls
+      toolCallsExecuted: totalToolCalls,
     )
   }
 
@@ -392,7 +392,7 @@ struct MCPAgenticLoopTests {
     prompt: String,
     localTools: [AI.Tool],
     provider: Provider,
-    maxIterations: Int = 10
+    maxIterations: Int = 10,
   ) async throws -> AgenticLoopResult {
     // Connect to MCP server
     let mcpClient = MCP.Client(name: "E2ETest-Mixed-\(provider.name)", version: "1.0.0")
@@ -401,7 +401,7 @@ struct MCPAgenticLoopTests {
     configuration.timeoutIntervalForResource = 3600
     let transport = HTTPClientTransport(
       endpoint: Self.mcpServerURL,
-      configuration: configuration
+      configuration: configuration,
     )
     try await mcpClient.connect(transport: transport)
     defer { Task { await mcpClient.disconnect() } }
@@ -431,7 +431,7 @@ struct MCPAgenticLoopTests {
       let response = try await generateResponse(
         messages: messages,
         tools: allTools,
-        provider: provider
+        provider: provider,
       )
 
       print("[\(provider.name)] Iteration \(iterations): \(response.toolCalls.count) tool calls")
@@ -492,14 +492,14 @@ struct MCPAgenticLoopTests {
       return AgenticLoopResult(
         finalResponse: finalResponse,
         iterations: iterations,
-        toolCallsExecuted: totalToolCalls
+        toolCallsExecuted: totalToolCalls,
       )
     }
 
     return AgenticLoopResult(
       finalResponse: nil,
       iterations: iterations,
-      toolCallsExecuted: totalToolCalls
+      toolCallsExecuted: totalToolCalls,
     )
   }
 
@@ -508,7 +508,7 @@ struct MCPAgenticLoopTests {
   private func generateResponse(
     messages: [AI.Message],
     tools: [AI.Tool],
-    provider: Provider
+    provider: Provider,
   ) async throws -> GenerationResponse {
     switch provider {
       case let .gemini(apiKey, modelId):
@@ -519,7 +519,7 @@ struct MCPAgenticLoopTests {
           systemPrompt: "You are a helpful assistant with access to tools. Use them when needed.",
           messages: messages,
           maxTokens: 4096,
-          apiKey: apiKey
+          apiKey: apiKey,
         )
 
       case let .anthropic(apiKey, modelId):
@@ -530,7 +530,7 @@ struct MCPAgenticLoopTests {
           systemPrompt: "You are a helpful assistant with access to tools. Use them when needed.",
           messages: messages,
           maxTokens: 4096,
-          apiKey: apiKey
+          apiKey: apiKey,
         )
 
       case let .responses(apiKey, modelId):
@@ -541,7 +541,7 @@ struct MCPAgenticLoopTests {
           systemPrompt: "You are a helpful assistant with access to tools. Use them when needed.",
           messages: messages,
           maxTokens: 4096,
-          apiKey: apiKey
+          apiKey: apiKey,
         )
 
       case let .chatCompletions(apiKey, modelId, endpoint):
@@ -552,7 +552,7 @@ struct MCPAgenticLoopTests {
           systemPrompt: "You are a helpful assistant with access to tools. Use them when needed.",
           messages: messages,
           maxTokens: 4096,
-          apiKey: apiKey
+          apiKey: apiKey,
         )
     }
   }

@@ -1447,7 +1447,7 @@ private let geminiLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "co
 
 public extension GeminiClient {
   /// Configuration options for Gemini API requests.
-  struct Configuration {
+  struct Configuration: Sendable {
     /// Content safety filtering threshold.
     public var safetyThreshold: SafetyThreshold
 
@@ -1495,7 +1495,7 @@ public extension GeminiClient {
   }
 
   /// Thinking level for Gemini 3 models.
-  enum ThinkingLevel: String, CaseIterable, Identifiable, Codable, Equatable, Hashable {
+  enum ThinkingLevel: String, CaseIterable, Identifiable, Codable, Equatable, Hashable, Sendable {
     /// Matches "no thinking" for most queries. Flash-only.
     case minimal
     /// Minimizes latency and cost. Best for simple instruction following, chat, or high-throughput applications.
@@ -1512,7 +1512,7 @@ public extension GeminiClient {
   }
 
   /// Content safety filtering threshold levels.
-  enum SafetyThreshold: String, CaseIterable, Identifiable {
+  enum SafetyThreshold: String, CaseIterable, Identifiable, Sendable {
     /// No content filtering.
     case none = "BLOCK_NONE"
     /// Block only high-probability harmful content.

@@ -101,7 +101,7 @@ public struct Parameter<Value: ParameterValue>: Sendable {
     minLength: Int? = nil,
     maxLength: Int? = nil,
     minimum: Double? = nil,
-    maximum: Double? = nil
+    maximum: Double? = nil,
   ) {
     self.wrappedValue = wrappedValue
     self.key = key
@@ -135,7 +135,7 @@ public extension Parameter where Value: ExpressibleByNilLiteral {
     minLength: Int? = nil,
     maxLength: Int? = nil,
     minimum: Double? = nil,
-    maximum: Double? = nil
+    maximum: Double? = nil,
   ) {
     wrappedValue = nil
     self.key = key
@@ -169,7 +169,7 @@ public extension Parameter {
     minLength: Int? = nil,
     maxLength: Int? = nil,
     minimum: Double? = nil,
-    maximum: Double? = nil
+    maximum: Double? = nil,
   ) {
     wrappedValue = Value.placeholderValue
     self.key = key

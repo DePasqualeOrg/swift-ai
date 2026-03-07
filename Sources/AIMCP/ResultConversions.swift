@@ -120,7 +120,7 @@ public extension MCP.CallTool.Parameters {
   init(_ toolCall: AI.GenerationResponse.ToolCall) {
     self.init(
       name: toolCall.name,
-      arguments: toolCall.parameters.mcpValues
+      arguments: toolCall.parameters.mcpValues,
     )
   }
 }
@@ -135,7 +135,7 @@ public extension AI.GenerationResponse.ToolCall {
     self.init(
       name: params.name,
       id: id,
-      parameters: params.arguments?.aiValues ?? [:]
+      parameters: params.arguments?.aiValues ?? [:],
     )
   }
 }

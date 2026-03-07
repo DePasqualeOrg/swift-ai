@@ -28,7 +28,7 @@ public protocol APIClient: Sendable {
     maxTokens: Int?,
     temperature: Float?,
     apiKey: String?,
-    configuration: Configuration
+    configuration: Configuration,
   ) async throws -> GenerationResponse
 
   /// Generate a text response with streaming.
@@ -40,6 +40,6 @@ public protocol APIClient: Sendable {
     maxTokens: Int?,
     temperature: Float?,
     apiKey: String?,
-    configuration: Configuration
+    configuration: Configuration,
   ) -> AsyncThrowingStream<GenerationResponse, Error>
 }

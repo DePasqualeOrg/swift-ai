@@ -26,7 +26,7 @@ public struct ToolCallProgressUpdate: Sendable {
     toolName: String,
     value: Double,
     total: Double? = nil,
-    message: String? = nil
+    message: String? = nil,
   ) {
     self.toolCallId = toolCallId
     self.toolName = toolName

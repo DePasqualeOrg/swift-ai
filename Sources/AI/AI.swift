@@ -61,14 +61,14 @@ public func generateText(
   temperature: Float? = nil,
   apiKey: String?,
   webSearch: Bool = false,
-  reasoning: Bool = true
+  reasoning: Bool = true,
 ) async throws -> GenerationResponse {
   switch model {
     case let .anthropic(modelId):
       let client = AnthropicClient()
       let configuration = AnthropicClient.Configuration(
         maxThinkingTokens: reasoning ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
-        webSearch: webSearch
+        webSearch: webSearch,
       )
       return try await client.generateText(
         modelId: modelId,
@@ -78,7 +78,7 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration
+        configuration: configuration,
       )
 
     case let .gemini(modelId):
@@ -87,7 +87,7 @@ public func generateText(
       let configuration = GeminiClient.Configuration(
         searchGrounding: webSearch,
         thinkingBudget: thinkingBudget,
-        thinkingLevel: thinkingLevel
+        thinkingLevel: thinkingLevel,
       )
       return try await client.generateText(
         modelId: modelId,
@@ -97,7 +97,7 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration
+        configuration: configuration,
       )
 
     case let .chatCompletions(modelId, endpoint):
@@ -111,7 +111,7 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration
+        configuration: configuration,
       )
 
     case let .responses(modelId, endpoint):
@@ -119,7 +119,7 @@ public func generateText(
       let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil
       let configuration = ResponsesClient.Configuration(
         reasoningEffortLevel: reasoningLevel,
-        serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : []
+        serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
       )
       return try await client.generateText(
         modelId: modelId,
@@ -129,7 +129,7 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration
+        configuration: configuration,
       )
   }
 }
@@ -156,14 +156,14 @@ public func streamText(
   temperature: Float? = nil,
   apiKey: String?,
   webSearch: Bool = false,
-  reasoning: Bool = true
+  reasoning: Bool = true,
 ) -> AsyncThrowingStream<GenerationResponse, Error> {
   switch model {
     case let .anthropic(modelId):
       let client = AnthropicClient()
       let configuration = AnthropicClient.Configuration(
         maxThinkingTokens: reasoning ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
-        webSearch: webSearch
+        webSearch: webSearch,
       )
       return client.streamText(
         modelId: modelId,
@@ -173,7 +173,7 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration
+        configuration: configuration,
       )
 
     case let .gemini(modelId):
@@ -182,7 +182,7 @@ public func streamText(
       let configuration = GeminiClient.Configuration(
         searchGrounding: webSearch,
         thinkingBudget: thinkingBudget,
-        thinkingLevel: thinkingLevel
+        thinkingLevel: thinkingLevel,
       )
       return client.streamText(
         modelId: modelId,
@@ -192,7 +192,7 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration
+        configuration: configuration,
       )
 
     case let .chatCompletions(modelId, endpoint):
@@ -206,7 +206,7 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration
+        configuration: configuration,
       )
 
     case let .responses(modelId, endpoint):
@@ -214,7 +214,7 @@ public func streamText(
       let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil
       let configuration = ResponsesClient.Configuration(
         reasoningEffortLevel: reasoningLevel,
-        serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : []
+        serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
       )
       return client.streamText(
         modelId: modelId,
@@ -224,7 +224,7 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration
+        configuration: configuration,
       )
   }
 }
@@ -266,7 +266,7 @@ public func generateText(
   temperature: Float? = nil,
   apiKey: String?,
   webSearch: Bool = false,
-  reasoning: Bool = true
+  reasoning: Bool = true,
 ) async throws -> GenerationResponse {
   try await generateText(
     model: model,
@@ -277,7 +277,7 @@ public func generateText(
     temperature: temperature,
     apiKey: apiKey,
     webSearch: webSearch,
-    reasoning: reasoning
+    reasoning: reasoning,
   )
 }
 
@@ -306,7 +306,7 @@ public func streamText(
   temperature: Float? = nil,
   apiKey: String?,
   webSearch: Bool = false,
-  reasoning: Bool = true
+  reasoning: Bool = true,
 ) -> AsyncThrowingStream<GenerationResponse, Error> {
   streamText(
     model: model,
@@ -317,7 +317,7 @@ public func streamText(
     temperature: temperature,
     apiKey: apiKey,
     webSearch: webSearch,
-    reasoning: reasoning
+    reasoning: reasoning,
   )
 }
 

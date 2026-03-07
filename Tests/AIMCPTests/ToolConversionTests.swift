@@ -3,10 +3,9 @@
 import AIMCP
 import Testing
 
-@Suite("Tool Conversions")
 struct ToolConversionTests {
-  @Test("AI.Tool to MCP.Tool conversion")
-  func aiToolToMCPTool() {
+  @Test
+  func `AI.Tool to MCP.Tool conversion`() {
     let aiTool = AI.Tool(
       name: "get_weather",
       description: "Get weather for a location",
@@ -17,17 +16,17 @@ struct ToolConversionTests {
           title: "City",
           type: .string,
           description: "The city name",
-          required: true
+          required: true,
         ),
         AI.Tool.Parameter(
           name: "units",
           title: "Units",
           type: .string,
           description: "Temperature units",
-          required: false
+          required: false,
         ),
       ],
-      execute: { _ in [.text("Sunny")] }
+      execute: { _ in [.text("Sunny")] },
     )
 
     let tool = MCP.Tool(from: aiTool)
@@ -63,8 +62,8 @@ struct ToolConversionTests {
     #expect(required[0].stringValue == "city")
   }
 
-  @Test("MCP.Tool to AI.Tool conversion")
-  func mcpToolToAITool() throws {
+  @Test
+  func `MCP.Tool to AI.Tool conversion`() throws {
     let inputSchema: MCP.Value = .object([
       "type": .string("object"),
       "properties": .object([
@@ -84,7 +83,7 @@ struct ToolConversionTests {
       name: "search",
       title: "Search",
       description: "Search for items",
-      inputSchema: inputSchema
+      inputSchema: inputSchema,
     )
 
     let aiTool = try AI.Tool(from: tool) { params in
@@ -108,8 +107,8 @@ struct ToolConversionTests {
     #expect(limitParam?.required == false)
   }
 
-  @Test("Parameter type mapping")
-  func parameterTypeMapping() {
+  @Test
+  func `Parameter type mapping`() {
     let aiTool = AI.Tool(
       name: "test",
       description: "Test tool",
@@ -120,7 +119,7 @@ struct ToolConversionTests {
         AI.Tool.Parameter(name: "int", title: "Int", type: .integer, description: "", required: true),
         AI.Tool.Parameter(name: "bool", title: "Bool", type: .boolean, description: "", required: true),
       ],
-      execute: { _ in [.text("ok")] }
+      execute: { _ in [.text("ok")] },
     )
 
     let tool = MCP.Tool(from: aiTool)
@@ -147,8 +146,8 @@ struct ToolConversionTests {
     }
   }
 
-  @Test("Batch conversion of AI.Tools to MCP.Tools")
-  func batchAIToolsToMCPTools() {
+  @Test
+  func `Batch conversion of AI.Tools to MCP.Tools`() {
     let aiTools = [
       AI.Tool(name: "func1", description: "First", title: "Func 1", parameters: [], execute: { _ in [.text("1")] }),
       AI.Tool(name: "func2", description: "Second", title: "Func 2", parameters: [], execute: { _ in [.text("2")] }),

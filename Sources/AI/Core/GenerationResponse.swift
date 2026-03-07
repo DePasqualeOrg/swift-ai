@@ -70,7 +70,7 @@ public struct GenerationResponse: Sendable, Hashable {
       totalTokens: Int? = nil,
       cacheCreationInputTokens: Int? = nil,
       cacheReadInputTokens: Int? = nil,
-      reasoningTokens: Int? = nil
+      reasoningTokens: Int? = nil,
     ) {
       self.responseId = responseId
       self.model = model
@@ -183,7 +183,7 @@ public struct GenerationResponse: Sendable, Hashable {
       role: Message.Role.assistant,
       content: texts.response,
       toolCalls: toolCalls.isEmpty ? nil : toolCalls,
-      opaqueBlocks: opaqueBlocks
+      opaqueBlocks: opaqueBlocks,
     )
   }
 

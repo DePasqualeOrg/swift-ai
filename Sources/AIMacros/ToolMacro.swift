@@ -26,7 +26,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     of _: AttributeSyntax,
     providingMembersOf declaration: some DeclGroupSyntax,
     conformingTo _: [TypeSyntax],
-    in context: some MacroExpansionContext
+    in context: some MacroExpansionContext,
   ) throws -> [DeclSyntax] {
     // Ensure we're applied to a struct
     guard let structDecl = declaration.as(StructDeclSyntax.self) else {
@@ -56,7 +56,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     // Generate tool property
     let toolDecl = generateToolProperty(
       structName: structName,
-      toolInfo: toolInfo
+      toolInfo: toolInfo,
     )
     members.append(toolDecl)
 
@@ -74,7 +74,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     attachedTo declaration: some DeclGroupSyntax,
     providingExtensionsOf type: some TypeSyntaxProtocol,
     conformingTo _: [TypeSyntax],
-    in _: some MacroExpansionContext
+    in _: some MacroExpansionContext,
   ) throws -> [ExtensionDeclSyntax] {
     // Validate before adding conformance
     guard let structDecl = declaration.as(StructDeclSyntax.self) else {
@@ -176,7 +176,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
 
   private static func extractToolInfo(
     from structDecl: StructDeclSyntax,
-    context: some MacroExpansionContext
+    context: some MacroExpansionContext,
   ) throws -> ToolInfo {
     var name: String?
     var nameSyntax: SyntaxProtocol?
@@ -278,7 +278,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     {
       context.diagnose(Diagnostic(
         node: Syntax(syntax),
-        message: ToolMacroDiagnostic.warning(styleWarning)
+        message: ToolMacroDiagnostic.warning(styleWarning),
       ))
     }
 
@@ -288,14 +288,14 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       parameters: parameters,
       outputType: outputType,
       hasTitle: hasTitle,
-      strictSchema: strictSchema
+      strictSchema: strictSchema,
     )
   }
 
   private static func extractParameterInfo(
     from varDecl: VariableDeclSyntax,
     binding: PatternBindingSyntax,
-    context _: some MacroExpansionContext
+    context _: some MacroExpansionContext,
   ) throws -> ParameterInfo? {
     guard let identifier = binding.pattern.as(IdentifierPatternSyntax.self) else {
       return nil
@@ -395,7 +395,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       minLength: minLength,
       maxLength: maxLength,
       minimum: minimum,
-      maximum: maximum
+      maximum: maximum,
     )
   }
 
@@ -403,7 +403,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
 
   private static func generateToolProperty(
     structName _: String,
-    toolInfo: ToolInfo
+    toolInfo: ToolInfo,
   ) -> DeclSyntax {
     // Generate properties for each parameter
     var propertiesEntries: [String] = []
@@ -521,17 +521,17 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       if param.isOptional {
         // Optional: use flatMap with explicit type
         parseStatements.append(
-          "_instance.\(prop) = _args[\"\(key)\"].flatMap(\(type).init(parameterValue:))"
+          "_instance.\(prop) = _args[\"\(key)\"].flatMap(\(type).init(parameterValue:))",
         )
       } else if param.hasDefault {
         // Has default: only use default if key is absent; throw if wrong type
         parseStatements.append(
-          "if let _value = _args[\"\(key)\"] { guard let _parsed = \(type)(parameterValue: _value) else { throw ToolError.invalidParameterType(parameter: \"\(key)\", expected: \"\(type)\", got: String(describing: _value)) }; _instance.\(prop) = _parsed }"
+          "if let _value = _args[\"\(key)\"] { guard let _parsed = \(type)(parameterValue: _value) else { throw ToolError.invalidParameterType(parameter: \"\(key)\", expected: \"\(type)\", got: String(describing: _value)) }; _instance.\(prop) = _parsed }",
         )
       } else {
         // Required: guard and throw
         parseStatements.append(
-          "guard let _\(prop)Value = _args[\"\(key)\"], let _\(prop) = \(type)(parameterValue: _\(prop)Value) else { throw ToolError.invalidParameterType(parameter: \"\(key)\", expected: \"\(type)\", got: _args[\"\(key)\"].map { String(describing: $0) } ?? \"nil\") }"
+          "guard let _\(prop)Value = _args[\"\(key)\"], let _\(prop) = \(type)(parameterValue: _\(prop)Value) else { throw ToolError.invalidParameterType(parameter: \"\(key)\", expected: \"\(type)\", got: _args[\"\(key)\"].map { String(describing: $0) } ?? \"nil\") }",
         )
         parseStatements.append("_instance.\(prop) = _\(prop)")
       }
@@ -682,7 +682,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
 extension ToolMacro {
   /// Valid characters for tool names: A-Z, a-z, 0-9, _, -, .
   private static let validToolNameCharacters = CharacterSet(
-    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-."
+    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-.",
   )
 
   static func validateToolName(_ name: String) -> String? {
@@ -811,7 +811,7 @@ struct ToolMacroDiagnostic: DiagnosticMessage {
     ToolMacroDiagnostic(
       message: message,
       diagnosticID: MessageID(domain: "ToolMacro", id: "warning"),
-      severity: .warning
+      severity: .warning,
     )
   }
 
@@ -819,7 +819,7 @@ struct ToolMacroDiagnostic: DiagnosticMessage {
     ToolMacroDiagnostic(
       message: message,
       diagnosticID: MessageID(domain: "ToolMacro", id: "error"),
-      severity: .error
+      severity: .error,
     )
   }
 }

@@ -4,7 +4,7 @@
 import Foundation
 import Testing
 
-@Suite("Responses Client", .serialized)
+@Suite(.serialized)
 struct ResponsesClientTests {
   // MARK: - Test Helpers
 
@@ -28,7 +28,7 @@ struct ResponsesClientTests {
         url: request.url!,
         statusCode: statusCode,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       return (response, sseData.data(using: .utf8)!)
     }
@@ -48,17 +48,17 @@ struct ResponsesClientTests {
           title: paramName,
           type: .string,
           description: "Test parameter",
-          required: true
+          required: true,
         ),
       ],
-      execute: { _ in [.text("test result")] }
+      execute: { _ in [.text("test result")] },
     )
   }
 
   /// Consumes an async stream and returns the last element.
   private func consumeStream(
     _ stream: AsyncThrowingStream<GenerationResponse, Error>,
-    collecting: UpdateCollector? = nil
+    collecting: UpdateCollector? = nil,
   ) async throws -> GenerationResponse {
     var last: GenerationResponse?
     for try await response in stream {
@@ -97,8 +97,8 @@ struct ResponsesClientTests {
 
   // MARK: - Basic Response Tests
 
-  @Test("Parses basic text response and accumulates text")
-  func basicTextResponse() async throws {
+  @Test
+  func `Parses basic text response and accumulates text`() async throws {
     let fixture = try loadFixture("responses_basic_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -110,7 +110,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ), collecting: collector)
 
     // Verify the final response contains the accumulated text
@@ -125,8 +125,8 @@ struct ResponsesClientTests {
     #expect(response.metadata?.model == "gpt-4o")
   }
 
-  @Test("Parses function call response")
-  func toolCallResponse() async throws {
+  @Test
+  func `Parses function call response`() async throws {
     let fixture = try loadFixture("responses_function_call_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -138,7 +138,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather in Paris?")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify we got a function call
@@ -159,8 +159,8 @@ struct ResponsesClientTests {
     #expect(response.texts.response?.contains("check the weather") == true)
   }
 
-  @Test("Parses multiple function calls in single response")
-  func multipleToolCallsResponse() async throws {
+  @Test
+  func `Parses multiple function calls in single response`() async throws {
     let fixture = try loadFixture("responses_multiple_function_calls.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -172,7 +172,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify we got multiple function calls
@@ -199,8 +199,8 @@ struct ResponsesClientTests {
     }
   }
 
-  @Test("Extracts token usage metadata")
-  func tokenUsageMetadata() async throws {
+  @Test
+  func `Extracts token usage metadata`() async throws {
     let fixture = try loadFixture("responses_basic_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -211,7 +211,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify token counts from the fixture
@@ -221,8 +221,8 @@ struct ResponsesClientTests {
     #expect(response.metadata?.totalTokens == 13)
   }
 
-  @Test("Extracts cache token metadata")
-  func cacheTokenMetadata() async throws {
+  @Test
+  func `Extracts cache token metadata`() async throws {
     let fixture = try loadFixture("responses_cache_tokens_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -233,7 +233,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify cache token metadata
@@ -245,8 +245,8 @@ struct ResponsesClientTests {
 
   // MARK: - Finish Reason Tests
 
-  @Test("Sets finish reason correctly for normal stop")
-  func finishReasonStop() async throws {
+  @Test
+  func `Sets finish reason correctly for normal stop`() async throws {
     let fixture = try loadFixture("responses_basic_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -257,14 +257,14 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     #expect(response.metadata?.finishReason == .stop)
   }
 
-  @Test("Sets finish reason correctly for max tokens (incomplete)")
-  func maxTokensFinishReason() async throws {
+  @Test
+  func `Sets finish reason correctly for max tokens (incomplete)`() async throws {
     let fixture = try loadFixture("responses_max_tokens_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -275,7 +275,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Write a long story")],
       maxTokens: 15,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify the response was truncated
@@ -285,8 +285,8 @@ struct ResponsesClientTests {
     #expect(response.metadata?.finishReason == .maxTokens)
   }
 
-  @Test("Sets finish reason correctly for tool calls")
-  func toolCallsFinishReason() async throws {
+  @Test
+  func `Sets finish reason correctly for tool calls`() async throws {
     let fixture = try loadFixture("responses_function_call_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -298,7 +298,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather?")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify we got a function call
@@ -308,8 +308,8 @@ struct ResponsesClientTests {
     #expect(response.metadata?.finishReason == .toolUse)
   }
 
-  @Test("Sets finish reason correctly for content filter")
-  func contentFilterFinishReason() async throws {
+  @Test
+  func `Sets finish reason correctly for content filter`() async throws {
     let fixture = try loadFixture("responses_content_filter_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -321,7 +321,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Some inappropriate request")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Verify finish reason is contentFilter
@@ -333,8 +333,8 @@ struct ResponsesClientTests {
 
   // MARK: - Non-Streaming Mode Tests
 
-  @Test("Non-streaming response returns complete response at once")
-  func nonStreamingResponse() async throws {
+  @Test
+  func `Non-streaming response returns complete response at once`() async throws {
     let fixture = try loadFixture("responses_non_streaming_response.json")
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -344,7 +344,7 @@ struct ResponsesClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "application/json"]
+        headerFields: ["Content-Type": "application/json"],
       )!
       return (response, fixture.data(using: .utf8)!)
     }
@@ -357,7 +357,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     )
 
     // Verify the complete response is returned
@@ -376,8 +376,8 @@ struct ResponsesClientTests {
 
   // MARK: - Empty Response Tests
 
-  @Test("Handles response with empty content gracefully")
-  func emptyContentResponse() async throws {
+  @Test
+  func `Handles response with empty content gracefully`() async throws {
     let fixture = try loadFixture("responses_empty_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -389,7 +389,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ))
 
     // Response may be nil or empty string - both are valid for empty content
@@ -405,8 +405,8 @@ struct ResponsesClientTests {
 
   // MARK: - Reasoning/Thinking Content Tests
 
-  @Test("Handles reasoning content in response")
-  func reasoningContentResponse() async throws {
+  @Test
+  func `Handles reasoning content in response`() async throws {
     let fixture = try loadFixture("responses_reasoning_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -419,7 +419,7 @@ struct ResponsesClientTests {
       messages: [Message(role: .user, content: "What is the meaning of life?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
-      configuration: .init(reasoningEffortLevel: .medium)
+      configuration: .init(reasoningEffortLevel: .medium),
     ), collecting: collector)
 
     // Verify we got the final answer
@@ -437,8 +437,8 @@ struct ResponsesClientTests {
 
   // MARK: - Error Handling Tests
 
-  @Test("Throws error for 401 unauthorized")
-  func unauthorizedError() async throws {
+  @Test
+  func `Throws error for 401 unauthorized`() async throws {
     let errorResponse = """
     {"error":{"message":"Invalid API key","type":"invalid_request_error","code":"invalid_api_key"}}
     """
@@ -453,7 +453,7 @@ struct ResponsesClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "invalid-key"
+        apiKey: "invalid-key",
       ))
       Issue.record("Expected authentication error")
     } catch let error as AIError {
@@ -465,8 +465,8 @@ struct ResponsesClientTests {
     }
   }
 
-  @Test("Throws rate limit error for 429 status")
-  func rateLimitError() async throws {
+  @Test
+  func `Throws rate limit error for 429 status`() async throws {
     let errorResponse = """
     {"error":{"message":"Rate limit exceeded","type":"rate_limit_error"}}
     """
@@ -481,7 +481,7 @@ struct ResponsesClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected rate limit error")
     } catch let error as AIError {
@@ -493,8 +493,8 @@ struct ResponsesClientTests {
     }
   }
 
-  @Test("Throws server error for 500 status")
-  func serverError() async throws {
+  @Test
+  func `Throws server error for 500 status`() async throws {
     let errorResponse = """
     {"error":{"message":"Internal server error","type":"server_error"}}
     """
@@ -509,7 +509,7 @@ struct ResponsesClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected server error")
     } catch let error as AIError {
@@ -523,8 +523,8 @@ struct ResponsesClientTests {
 
   // MARK: - Network Error Tests
 
-  @Test("Handles network errors")
-  func networkError() async throws {
+  @Test
+  func `Handles network errors`() async throws {
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
@@ -541,7 +541,7 @@ struct ResponsesClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
       Issue.record("Expected network error")
     } catch {
@@ -552,8 +552,8 @@ struct ResponsesClientTests {
 
   // MARK: - Invalid Response Handling Tests
 
-  @Test("Handles malformed JSON response gracefully")
-  func malformedJsonResponse() async throws {
+  @Test
+  func `Handles malformed JSON response gracefully`() async throws {
     let malformedData = """
     data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
 
@@ -575,7 +575,7 @@ struct ResponsesClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-api-key"
+        apiKey: "test-api-key",
       ))
       Issue.record("Expected parsing error for malformed JSON")
     } catch let error as AIError {
@@ -589,8 +589,8 @@ struct ResponsesClientTests {
 
   // MARK: - Stream Processing Tests
 
-  @Test("Yields all chunks correctly")
-  func yieldsAllChunks() async throws {
+  @Test
+  func `Yields all chunks correctly`() async throws {
     let fixture = try loadFixture("responses_basic_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
     defer { MockURLProtocol.removeHandler(for: testId) }
@@ -602,7 +602,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
-      apiKey: "test-api-key"
+      apiKey: "test-api-key",
     ), collecting: collector)
 
     // Verify we received multiple streaming updates (at least 3 text chunks)
@@ -612,8 +612,8 @@ struct ResponsesClientTests {
 
   // MARK: - Request Body Validation Tests
 
-  @Test("Request body includes instructions correctly")
-  func instructionsInRequestBody() async throws {
+  @Test
+  func `Request body includes instructions correctly`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -624,7 +624,7 @@ struct ResponsesClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       // Return a minimal valid response
       let sseData = """
@@ -648,7 +648,7 @@ struct ResponsesClientTests {
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       temperature: 0.7,
-      apiKey: "test-key"
+      apiKey: "test-key",
     ))
 
     // Verify body was captured
@@ -672,8 +672,8 @@ struct ResponsesClientTests {
     #expect(try !#require(input?.isEmpty))
   }
 
-  @Test("Request body includes tools correctly")
-  func toolsInRequestBody() async throws {
+  @Test
+  func `Request body includes tools correctly`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -684,7 +684,7 @@ struct ResponsesClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       let sseData = """
       data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
@@ -707,7 +707,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "What's the weather?")],
       maxTokens: 1024,
-      apiKey: "test-key"
+      apiKey: "test-key",
     ))
 
     // Verify body was captured
@@ -728,8 +728,8 @@ struct ResponsesClientTests {
     #expect(firstTool?["description"] as? String == "Get current weather")
   }
 
-  @Test("Request includes authorization header")
-  func authorizationHeader() async throws {
+  @Test
+  func `Request includes authorization header`() async throws {
     var capturedRequest: URLRequest?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -740,7 +740,7 @@ struct ResponsesClientTests {
         url: request.url!,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       let sseData = """
       data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
@@ -760,7 +760,7 @@ struct ResponsesClientTests {
       systemPrompt: nil,
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
-      apiKey: "sk-test-api-key"
+      apiKey: "sk-test-api-key",
     ))
 
     // Verify authorization header
@@ -771,8 +771,8 @@ struct ResponsesClientTests {
 
   // MARK: - Cancellation Tests
 
-  @Test("Cancellation propagates correctly")
-  func cancellationPropagates() async throws {
+  @Test
+  func `Cancellation propagates correctly`() async throws {
     // Create a slow-responding fixture
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -783,7 +783,7 @@ struct ResponsesClientTests {
         url: testEndpoint,
         statusCode: 200,
         httpVersion: nil,
-        headerFields: ["Content-Type": "text/event-stream"]
+        headerFields: ["Content-Type": "text/event-stream"],
       )!
       // Return incomplete response that would normally hang
       let sseData = """
@@ -804,7 +804,7 @@ struct ResponsesClientTests {
         systemPrompt: nil,
         messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
-        apiKey: "test-key"
+        apiKey: "test-key",
       ))
     }
 

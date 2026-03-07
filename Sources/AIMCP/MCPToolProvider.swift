@@ -150,7 +150,7 @@ public actor MCPToolProvider {
         if !shouldNamespace, let existingServer = seenNames[toolName] {
           throw MCPToolProviderError.toolNameConflict(
             toolName: toolName,
-            servers: [existingServer, serverName]
+            servers: [existingServer, serverName],
           )
         }
         seenNames[toolName] = serverName
@@ -166,7 +166,7 @@ public actor MCPToolProvider {
             index: index,
             originalName: tool.name,
             displayName: toolName,
-            arguments: parameters.mcpValues
+            arguments: parameters.mcpValues,
           )
           return try Self.convertResult(result)
         }
@@ -203,7 +203,7 @@ public actor MCPToolProvider {
             index: serverIndex,
             originalName: toolName,
             displayName: name,
-            arguments: parameters.mcpValues
+            arguments: parameters.mcpValues,
           )
           return try Self.convertResult(result)
         }
@@ -225,7 +225,7 @@ public actor MCPToolProvider {
           index: index,
           originalName: tool.name,
           displayName: name,
-          arguments: parameters.mcpValues
+          arguments: parameters.mcpValues,
         )
         return try Self.convertResult(result)
       }
@@ -251,12 +251,12 @@ public actor MCPToolProvider {
     let result: MCP.CallTool.Result = if let mcpClient = entry.mcpClient {
       try await mcpClient.callTool(
         name: originalName,
-        arguments: toolCall.parameters.mcpValues
+        arguments: toolCall.parameters.mcpValues,
       )
     } else {
       try await entry.client.callTool(
         name: originalName,
-        arguments: toolCall.parameters.mcpValues
+        arguments: toolCall.parameters.mcpValues,
       )
     }
     return AI.ToolResult(result, name: toolCall.name, id: toolCall.id)
@@ -319,7 +319,7 @@ public actor MCPToolProvider {
     index: Int,
     originalName: String,
     displayName: String,
-    arguments: [String: MCP.Value]?
+    arguments: [String: MCP.Value]?,
   ) async throws -> MCP.CallTool.Result {
     let entry = entries[index]
 
@@ -331,7 +331,7 @@ public actor MCPToolProvider {
           toolName: displayName,
           value: progress.value,
           total: progress.total,
-          message: progress.message
+          message: progress.message,
         ))
       }
 
@@ -339,25 +339,25 @@ public actor MCPToolProvider {
         return try await mcpClient.callTool(
           name: originalName,
           arguments: arguments,
-          onProgress: progressCallback
+          onProgress: progressCallback,
         )
       } else {
         return try await entry.client.callTool(
           name: originalName,
           arguments: arguments,
-          onProgress: progressCallback
+          onProgress: progressCallback,
         )
       }
     } else {
       if let mcpClient = entry.mcpClient {
         return try await mcpClient.callTool(
           name: originalName,
-          arguments: arguments
+          arguments: arguments,
         )
       } else {
         return try await entry.client.callTool(
           name: originalName,
-          arguments: arguments
+          arguments: arguments,
         )
       }
     }

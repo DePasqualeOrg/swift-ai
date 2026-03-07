@@ -39,7 +39,7 @@ extension MCP.Tool {
       title: tool.title,
       description: tool.description,
       inputSchema: .object(inputSchema),
-      annotations: .init()
+      annotations: .init(),
     )
   }
 
@@ -101,7 +101,7 @@ extension AI.Tool {
   /// - Throws: `MCPConversionError` if the tool's schema can't be converted
   public init(
     from tool: MCP.Tool,
-    executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content]
+    executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content],
   ) throws {
     try self.init(from: tool, name: tool.name, executor: executor)
   }
@@ -119,7 +119,7 @@ extension AI.Tool {
   public init(
     from tool: MCP.Tool,
     name: String,
-    executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content]
+    executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content],
   ) throws {
     let parameters = try Self.extractParameters(from: tool.inputSchema)
     let rawSchema = Self.convertMCPValueToJSONValue(tool.inputSchema).objectValue
@@ -130,7 +130,7 @@ extension AI.Tool {
       title: tool.title ?? tool.annotations.title ?? tool.name,
       parameters: parameters,
       rawInputSchema: rawSchema,
-      execute: executor
+      execute: executor,
     )
   }
 
@@ -147,7 +147,7 @@ extension AI.Tool {
     try self.init(from: tool) { parameters in
       let result = try await client.callTool(
         name: tool.name,
-        arguments: parameters.mcpValues
+        arguments: parameters.mcpValues,
       )
       return try Self.convertCallToolResult(result)
     }
@@ -192,7 +192,7 @@ extension AI.Tool {
         type: parameterType,
         description: description,
         required: requiredNames.contains(name),
-        enumValues: enumValues
+        enumValues: enumValues,
       ))
     }
 

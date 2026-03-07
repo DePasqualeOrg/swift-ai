@@ -216,10 +216,9 @@ struct StrictSchemaTool {
 
 // MARK: - Tests
 
-@Suite("Tool Macro Integration Tests")
 struct ToolMacroIntegrationTests {
-  @Test("Basic tool definition is generated correctly")
-  func basicToolDefinition() {
+  @Test
+  func `Basic tool definition is generated correctly`() {
     let tool = GetWeather.tool
 
     #expect(tool.name == "get_weather")
@@ -239,8 +238,8 @@ struct ToolMacroIntegrationTests {
     #expect(required?.contains("unit") == false) // Optional parameter
   }
 
-  @Test("Tool with default parameter value")
-  func toolWithDefaultValue() {
+  @Test
+  func `Tool with default parameter value`() {
     let tool = SearchDocuments.tool
 
     let schema = tool.rawInputSchema
@@ -256,8 +255,8 @@ struct ToolMacroIntegrationTests {
     #expect(required?.contains("limit") == false)
   }
 
-  @Test("Tool with no parameters")
-  func toolWithNoParameters() {
+  @Test
+  func `Tool with no parameters`() {
     let tool = GetServerTime.tool
 
     let schema = tool.rawInputSchema
@@ -268,16 +267,16 @@ struct ToolMacroIntegrationTests {
     #expect(required?.isEmpty == true)
   }
 
-  @Test("Tool with custom title")
-  func toolWithCustomTitle() {
+  @Test
+  func `Tool with custom title`() {
     let tool = ToolWithTitle.tool
 
     #expect(tool.name == "tool_with_title")
     #expect(tool.title == "My Custom Tool")
   }
 
-  @Test("Tool with strictSchema includes additionalProperties false")
-  func toolWithStrictSchema() {
+  @Test
+  func `Tool with strictSchema includes additionalProperties false`() {
     let tool = StrictSchemaTool.tool
     let schema = tool.rawInputSchema
 
@@ -290,8 +289,8 @@ struct ToolMacroIntegrationTests {
     #expect(nonStrictSchema["additionalProperties"] == nil)
   }
 
-  @Test("Tool with enum parameter")
-  func toolWithEnumParameter() {
+  @Test
+  func `Tool with enum parameter`() {
     let tool = SetPriority.tool
 
     let schema = tool.rawInputSchema
@@ -304,8 +303,8 @@ struct ToolMacroIntegrationTests {
     #expect(enumValues?.contains("high") == true)
   }
 
-  @Test("Parse and execute tool")
-  func parseAndExecute() async throws {
+  @Test
+  func `Parse and execute tool`() async throws {
     let arguments: [String: Value] = [
       "city": "Paris",
       "unit": "fahrenheit",
@@ -320,8 +319,8 @@ struct ToolMacroIntegrationTests {
     #expect(result.contains("F"))
   }
 
-  @Test("Parse with optional parameter omitted")
-  func parseWithOptionalOmitted() async throws {
+  @Test
+  func `Parse with optional parameter omitted`() async throws {
     let arguments: [String: Value] = [
       "city": "Tokyo",
     ]
@@ -334,8 +333,8 @@ struct ToolMacroIntegrationTests {
     #expect(result.contains("C")) // Default unit
   }
 
-  @Test("Parse with default value")
-  func parseWithDefaultValue() throws {
+  @Test
+  func `Parse with default value`() throws {
     let arguments: [String: Value] = [
       "query": "swift concurrency",
     ]
@@ -345,8 +344,8 @@ struct ToolMacroIntegrationTests {
     #expect(instance.limit == 10) // Default value
   }
 
-  @Test("Parse with default value overridden")
-  func parseWithDefaultValueOverridden() throws {
+  @Test
+  func `Parse with default value overridden`() throws {
     let arguments: [String: Value] = [
       "query": "swift concurrency",
       "limit": 50,
@@ -357,8 +356,8 @@ struct ToolMacroIntegrationTests {
     #expect(instance.limit == 50)
   }
 
-  @Test("Parse throws error when default parameter has wrong type")
-  func parseThrowsForWrongTypeOnDefault() throws {
+  @Test
+  func `Parse throws error when default parameter has wrong type`() throws {
     let arguments: [String: Value] = [
       "query": "swift concurrency",
       "limit": "not a number", // Wrong type - should throw, not silently use default
@@ -369,8 +368,8 @@ struct ToolMacroIntegrationTests {
     }
   }
 
-  @Test("Parse enum parameter")
-  func parseEnumParameter() throws {
+  @Test
+  func `Parse enum parameter`() throws {
     let arguments: [String: Value] = [
       "priority": "high",
     ]
@@ -379,8 +378,8 @@ struct ToolMacroIntegrationTests {
     #expect(instance.priority == .high)
   }
 
-  @Test("Tool returns image result")
-  func toolReturnsImageResult() async throws {
+  @Test
+  func `Tool returns image result`() async throws {
     let arguments: [String: Value] = [
       "prompt": "A sunset",
     ]
@@ -400,29 +399,29 @@ struct ToolMacroIntegrationTests {
 
   // MARK: - Result Types Derivation Tests
 
-  @Test("String return type derives text resultTypes")
-  func stringResultTypesDerivation() {
+  @Test
+  func `String return type derives text resultTypes`() {
     // GetWeather returns String, so resultTypes should be [.text]
     let tool = GetWeather.tool
     #expect(tool.resultTypes == [.text])
   }
 
-  @Test("ImageResult return type derives image resultTypes")
-  func imageResultTypesDerivation() {
+  @Test
+  func `ImageResult return type derives image resultTypes`() {
     // GenerateImage returns ImageResult, so resultTypes should be [.image]
     let tool = GenerateImage.tool
     #expect(tool.resultTypes == [.image])
   }
 
-  @Test("MultiContent return type derives nil resultTypes")
-  func multiContentResultTypesDerivation() {
+  @Test
+  func `MultiContent return type derives nil resultTypes`() {
     // MultiContentTool returns MultiContent, so resultTypes should be nil
     let tool = MultiContentTool.tool
     #expect(tool.resultTypes == nil)
   }
 
-  @Test("Tools compatible filtering works with derived resultTypes")
-  func toolsCompatibleFiltering() {
+  @Test
+  func `Tools compatible filtering works with derived resultTypes`() {
     let tools = [GetWeather.tool, GenerateImage.tool, GetServerTime.tool]
 
     // ChatCompletions only supports text
@@ -437,8 +436,8 @@ struct ToolMacroIntegrationTests {
     #expect(compatibleWithAnthropic.count == 3)
   }
 
-  @Test("Tools collection executes tool calls")
-  func toolsCollectionExecution() async {
+  @Test
+  func `Tools collection executes tool calls`() async {
     let tools = Tools([
       GetWeather.tool,
       SearchDocuments.tool,
@@ -448,7 +447,7 @@ struct ToolMacroIntegrationTests {
     let toolCall = GenerationResponse.ToolCall(
       name: "get_weather",
       id: "call_1",
-      parameters: ["city": "London"]
+      parameters: ["city": "London"],
     )
 
     let result = await tools.call(toolCall)
@@ -465,14 +464,14 @@ struct ToolMacroIntegrationTests {
     }
   }
 
-  @Test("Tools collection handles unknown tool")
-  func toolsCollectionUnknownTool() async {
+  @Test
+  func `Tools collection handles unknown tool`() async {
     let tools = Tools([GetWeather.tool])
 
     let toolCall = GenerationResponse.ToolCall(
       name: "unknown_tool",
       id: "call_1",
-      parameters: [:]
+      parameters: [:],
     )
 
     let result = await tools.call(toolCall)
@@ -483,8 +482,8 @@ struct ToolMacroIntegrationTests {
     }
   }
 
-  @Test("Tool with nested types generates correct schema")
-  func toolWithNestedTypes() {
+  @Test
+  func `Tool with nested types generates correct schema`() {
     let tool = ProcessNestedData.tool
 
     let schema = tool.rawInputSchema
@@ -515,8 +514,8 @@ struct ToolMacroIntegrationTests {
     #expect(matrixInnerItems?["type"]?.stringValue == "integer")
   }
 
-  @Test("Parse nested types")
-  func parseNestedTypes() throws {
+  @Test
+  func `Parse nested types`() throws {
     let arguments: [String: Value] = [
       "records": .array([
         .object(["name": "Alice", "role": "admin"]),
@@ -541,8 +540,8 @@ struct ToolMacroIntegrationTests {
 
   // MARK: - Custom Key Tests
 
-  @Test("Custom key appears in schema instead of property name")
-  func customKeyInSchema() {
+  @Test
+  func `Custom key appears in schema instead of property name`() {
     let tool = ToolWithCustomKey.tool
     let properties = tool.rawInputSchema["properties"]?.objectValue
 
@@ -558,8 +557,8 @@ struct ToolMacroIntegrationTests {
     #expect(required?.contains("end_date") == false)
   }
 
-  @Test("Parameter title appears in schema")
-  func parameterTitleInSchema() {
+  @Test
+  func `Parameter title appears in schema`() {
     let tool = ToolWithParameterTitles.tool
     let properties = tool.rawInputSchema["properties"]?.objectValue
 
@@ -575,8 +574,8 @@ struct ToolMacroIntegrationTests {
     #expect(otherProp?["title"] == nil)
   }
 
-  @Test("Parse uses custom keys from arguments")
-  func parseWithCustomKeys() throws {
+  @Test
+  func `Parse uses custom keys from arguments`() throws {
     let arguments: [String: Value] = [
       "start_date": "2024-01-01",
       "end_date": "2024-12-31",
@@ -589,8 +588,8 @@ struct ToolMacroIntegrationTests {
 
   // MARK: - Validation Constraint Tests
 
-  @Test("Validation constraints appear in generated schema")
-  func validationConstraintsInSchema() {
+  @Test
+  func `Validation constraints appear in generated schema`() {
     let tool = SearchDocuments.tool
     let properties = tool.rawInputSchema["properties"]?.objectValue
 
@@ -605,14 +604,14 @@ struct ToolMacroIntegrationTests {
     #expect(limitProp?["maximum"]?.doubleValue == 100)
   }
 
-  @Test("Tools.call rejects input that violates minLength constraint")
-  func validationRejectsShortString() async {
+  @Test
+  func `Tools.call rejects input that violates minLength constraint`() async {
     let tools = Tools([SearchDocuments.tool])
 
     let toolCall = GenerationResponse.ToolCall(
       name: "search_documents",
       id: "call_1",
-      parameters: ["query": ""] // Empty string violates minLength: 1
+      parameters: ["query": ""], // Empty string violates minLength: 1
     )
 
     let result = await tools.call(toolCall)
@@ -623,8 +622,8 @@ struct ToolMacroIntegrationTests {
     }
   }
 
-  @Test("Tools.call rejects input that violates maximum constraint")
-  func validationRejectsOutOfRangeNumber() async {
+  @Test
+  func `Tools.call rejects input that violates maximum constraint`() async {
     let tools = Tools([SearchDocuments.tool])
 
     let toolCall = GenerationResponse.ToolCall(
@@ -633,7 +632,7 @@ struct ToolMacroIntegrationTests {
       parameters: [
         "query": "valid query",
         "limit": 999, // Violates maximum: 100
-      ]
+      ],
     )
 
     let result = await tools.call(toolCall)
@@ -644,8 +643,8 @@ struct ToolMacroIntegrationTests {
     }
   }
 
-  @Test("Tools.call accepts valid input within constraints")
-  func validationAcceptsValidInput() async {
+  @Test
+  func `Tools.call accepts valid input within constraints`() async {
     let tools = Tools([SearchDocuments.tool])
 
     let toolCall = GenerationResponse.ToolCall(
@@ -654,7 +653,7 @@ struct ToolMacroIntegrationTests {
       parameters: [
         "query": "valid query",
         "limit": 50,
-      ]
+      ],
     )
 
     let result = await tools.call(toolCall)
@@ -664,8 +663,8 @@ struct ToolMacroIntegrationTests {
 
   // MARK: - Parse Error Handling Tests
 
-  @Test("Parse throws error for missing required parameter")
-  func parseMissingRequiredParameter() {
+  @Test
+  func `Parse throws error for missing required parameter`() {
     let arguments: [String: Value] = [:] // Missing required "city"
 
     #expect(throws: ToolError.self) {
@@ -673,8 +672,8 @@ struct ToolMacroIntegrationTests {
     }
   }
 
-  @Test("Parse throws error for wrong parameter type")
-  func parseWrongParameterType() {
+  @Test
+  func `Parse throws error for wrong parameter type`() {
     let arguments: [String: Value] = [
       "city": .int(123), // Should be string, not int
     ]
@@ -684,8 +683,8 @@ struct ToolMacroIntegrationTests {
     }
   }
 
-  @Test("Parse error contains parameter name")
-  func parseErrorContainsParameterName() {
+  @Test
+  func `Parse error contains parameter name`() {
     let arguments: [String: Value] = [:]
 
     do {
@@ -701,8 +700,8 @@ struct ToolMacroIntegrationTests {
 
   // MARK: - Date and Data Parameter Tests
 
-  @Test("Date parameter schema has date-time format")
-  func dateParameterSchemaFormat() {
+  @Test
+  func `Date parameter schema has date-time format`() {
     let tool = ToolWithDateAndData.tool
     let properties = tool.rawInputSchema["properties"]?.objectValue
     let dateProp = properties?["eventDate"]?.objectValue
@@ -711,8 +710,8 @@ struct ToolMacroIntegrationTests {
     #expect(dateProp?["format"]?.stringValue == "date-time")
   }
 
-  @Test("Data parameter schema has base64 encoding")
-  func dataParameterSchemaEncoding() {
+  @Test
+  func `Data parameter schema has base64 encoding`() {
     let tool = ToolWithDateAndData.tool
     let properties = tool.rawInputSchema["properties"]?.objectValue
     let dataProp = properties?["payload"]?.objectValue
@@ -721,8 +720,8 @@ struct ToolMacroIntegrationTests {
     #expect(dataProp?["contentEncoding"]?.stringValue == "base64")
   }
 
-  @Test("Parse Date from ISO 8601 string")
-  func parseDateParameter() throws {
+  @Test
+  func `Parse Date from ISO 8601 string`() throws {
     let dateString = "2024-06-15T10:30:00Z"
     let arguments: [String: Value] = [
       "eventDate": .string(dateString),
@@ -735,8 +734,8 @@ struct ToolMacroIntegrationTests {
     #expect(instance.eventDate == expectedDate)
   }
 
-  @Test("Parse Date with fractional seconds")
-  func parseDateWithFractionalSeconds() throws {
+  @Test
+  func `Parse Date with fractional seconds`() throws {
     let dateString = "2024-06-15T10:30:00.123Z"
     let arguments: [String: Value] = [
       "eventDate": .string(dateString),
@@ -752,8 +751,8 @@ struct ToolMacroIntegrationTests {
     #expect(components.day == 15)
   }
 
-  @Test("Parse Data from base64 string")
-  func parseDataParameter() throws {
+  @Test
+  func `Parse Data from base64 string`() throws {
     let originalData = Data([0x48, 0x65, 0x6C, 0x6C, 0x6F]) // "Hello"
     let base64String = originalData.base64EncodedString()
 
@@ -767,8 +766,8 @@ struct ToolMacroIntegrationTests {
     #expect(instance.payload == originalData)
   }
 
-  @Test("Invalid base64 returns nil for Data parameter")
-  func parseInvalidBase64() throws {
+  @Test
+  func `Invalid base64 returns nil for Data parameter`() throws {
     let arguments: [String: Value] = [
       "eventDate": "2024-01-01T00:00:00Z",
       "payload": .string("not valid base64!!!"),
@@ -782,8 +781,8 @@ struct ToolMacroIntegrationTests {
 
   // MARK: - Multiple Output Types Tests
 
-  @Test("MultiContent output with audio")
-  func multiContentWithAudio() async throws {
+  @Test
+  func `MultiContent output with audio`() async throws {
     let arguments: [String: Value] = ["outputType": "audio"]
     let instance = try ToolWithAllOutputTypes.parse(from: arguments)
     let result = try await instance.perform()
@@ -805,8 +804,8 @@ struct ToolMacroIntegrationTests {
     }
   }
 
-  @Test("MultiContent output with file")
-  func multiContentWithFile() async throws {
+  @Test
+  func `MultiContent output with file`() async throws {
     let arguments: [String: Value] = ["outputType": "file"]
     let instance = try ToolWithAllOutputTypes.parse(from: arguments)
     let result = try await instance.perform()
@@ -825,8 +824,8 @@ struct ToolMacroIntegrationTests {
 
   // MARK: - Dynamic Tool API Tests
 
-  @Test("Tool.Parameter factory methods generate correct schema")
-  func parameterFactoryMethods() {
+  @Test
+  func `Tool.Parameter factory methods generate correct schema`() {
     let tool = Tool(
       name: "dynamic_tool",
       description: "Tool created with factory methods",
@@ -836,7 +835,7 @@ struct ToolMacroIntegrationTests {
         .number("threshold", description: "Score threshold", minimum: 0.0, maximum: 1.0),
         .boolean("verbose", description: "Enable verbose output", required: false),
         .array("tags", description: "Filter tags", items: .string),
-      ]
+      ],
     ) { _ in [.text("Result")] }
 
     let properties = tool.rawInputSchema["properties"]?.objectValue
@@ -877,8 +876,8 @@ struct ToolMacroIntegrationTests {
     #expect(!required.contains("verbose"))
   }
 
-  @Test("Tool.Parameter factory methods include title in schema")
-  func parameterFactoryMethodsWithTitle() {
+  @Test
+  func `Tool.Parameter factory methods include title in schema`() {
     let tool = Tool(
       name: "titled_params_tool",
       description: "Tool with titled parameters",
@@ -886,7 +885,7 @@ struct ToolMacroIntegrationTests {
         .string("city", title: "City Name", description: "The city to search"),
         .integer("limit", title: "Result Limit", description: "Max results"),
         .number("threshold", description: "Without explicit title"),
-      ]
+      ],
     ) { _ in [.text("Result")] }
 
     let properties = tool.rawInputSchema["properties"]?.objectValue
@@ -904,8 +903,8 @@ struct ToolMacroIntegrationTests {
     #expect(thresholdProp?["title"] == nil)
   }
 
-  @Test("Tool with inputSchema initializer uses raw schema directly")
-  func toolWithRawInputSchema() {
+  @Test
+  func `Tool with inputSchema initializer uses raw schema directly`() {
     let customSchema: [String: Value] = [
       "type": .string("object"),
       "properties": .object([
@@ -920,7 +919,7 @@ struct ToolMacroIntegrationTests {
     let tool = Tool(
       name: "custom_schema_tool",
       description: "Tool with custom schema",
-      inputSchema: customSchema
+      inputSchema: customSchema,
     ) { _ in [.text("OK")] }
 
     // Schema should be used exactly as provided

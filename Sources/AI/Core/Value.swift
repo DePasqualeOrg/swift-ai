@@ -221,7 +221,7 @@ extension Value: Codable {
       self = .object(value)
     } else {
       throw DecodingError.dataCorruptedError(
-        in: container, debugDescription: "Value type not found"
+        in: container, debugDescription: "Value type not found",
       )
     }
   }

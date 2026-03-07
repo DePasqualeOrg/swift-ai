@@ -7,7 +7,7 @@ import SSE
 
 public extension ChatCompletionsClient {
   /// Configuration options for Chat Completions API requests.
-  struct Configuration {
+  struct Configuration: Sendable {
     /// Additional parameters to include in the API request body.
     /// Use this to pass provider-specific options not covered by the standard interface.
     public var extraParameters: [String: any Sendable]?

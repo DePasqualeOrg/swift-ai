@@ -53,7 +53,7 @@ public enum AIError: Error, Sendable {
       url: URL? = nil,
       responseHeaders: [String: String]? = nil,
       responseBody: Data? = nil,
-      providerInfo: ProviderErrorInfo? = nil
+      providerInfo: ProviderErrorInfo? = nil,
     ) {
       self.url = url
       self.responseHeaders = responseHeaders

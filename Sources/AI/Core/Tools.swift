@@ -119,7 +119,7 @@ public struct Tool: Sendable {
       minLength: Int? = nil,
       maxLength: Int? = nil,
       minimum: Double? = nil,
-      maximum: Double? = nil
+      maximum: Double? = nil,
     ) {
       self.name = name
       self.title = title
@@ -143,7 +143,7 @@ public struct Tool: Sendable {
       required: Bool = true,
       enum enumValues: [String]? = nil,
       minLength: Int? = nil,
-      maxLength: Int? = nil
+      maxLength: Int? = nil,
     ) -> Parameter {
       Parameter(
         name: name,
@@ -153,7 +153,7 @@ public struct Tool: Sendable {
         required: required,
         enumValues: enumValues,
         minLength: minLength,
-        maxLength: maxLength
+        maxLength: maxLength,
       )
     }
 
@@ -164,7 +164,7 @@ public struct Tool: Sendable {
       description: String,
       required: Bool = true,
       minimum: Int? = nil,
-      maximum: Int? = nil
+      maximum: Int? = nil,
     ) -> Parameter {
       Parameter(
         name: name,
@@ -173,7 +173,7 @@ public struct Tool: Sendable {
         description: description,
         required: required,
         minimum: minimum.map(Double.init),
-        maximum: maximum.map(Double.init)
+        maximum: maximum.map(Double.init),
       )
     }
 
@@ -184,7 +184,7 @@ public struct Tool: Sendable {
       description: String,
       required: Bool = true,
       minimum: Double? = nil,
-      maximum: Double? = nil
+      maximum: Double? = nil,
     ) -> Parameter {
       Parameter(
         name: name,
@@ -193,7 +193,7 @@ public struct Tool: Sendable {
         description: description,
         required: required,
         minimum: minimum,
-        maximum: maximum
+        maximum: maximum,
       )
     }
 
@@ -202,14 +202,14 @@ public struct Tool: Sendable {
       _ name: String,
       title: String? = nil,
       description: String,
-      required: Bool = true
+      required: Bool = true,
     ) -> Parameter {
       Parameter(
         name: name,
         title: title ?? name,
         type: .boolean,
         description: description,
-        required: required
+        required: required,
       )
     }
 
@@ -219,14 +219,14 @@ public struct Tool: Sendable {
       title: String? = nil,
       description: String,
       items: ParameterType = .string,
-      required: Bool = true
+      required: Bool = true,
     ) -> Parameter {
       Parameter(
         name: name,
         title: title ?? name,
         type: .array(items: items),
         description: description,
-        required: required
+        required: required,
       )
     }
   }
@@ -248,7 +248,7 @@ public struct Tool: Sendable {
     parameters: [Parameter],
     resultTypes: Set<ToolResult.ValueType>? = nil,
     rawInputSchema: [String: Value]? = nil,
-    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content]
+    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
   ) {
     self.name = name
     self.description = description
@@ -276,7 +276,7 @@ public struct Tool: Sendable {
     title: String? = nil,
     parameters: [Parameter] = [],
     resultTypes: Set<ToolResult.ValueType>? = nil,
-    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content]
+    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
   ) {
     self.name = name
     self.description = description
@@ -295,7 +295,7 @@ public struct Tool: Sendable {
     title: String? = nil,
     inputSchema: [String: Value],
     resultTypes: Set<ToolResult.ValueType>? = nil,
-    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content]
+    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
   ) {
     self.name = name
     self.description = description
@@ -721,7 +721,7 @@ public extension [ToolResult] {
     Message(
       role: Message.Role.tool,
       content: nil,
-      toolResults: self
+      toolResults: self,
     )
   }
 }

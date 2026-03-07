@@ -110,7 +110,7 @@ struct Translate {
       modelId: "claude-opus-4-5",
       systemPrompt: "Translate the following text to \(language). Return only the translation, nothing else.",
       prompt: text,
-      apiKey: apiKey
+      apiKey: apiKey,
     )
     guard let translation = response.texts.response else {
       throw TranslateError.emptyResponse
@@ -155,7 +155,7 @@ enum AgenticLoopExample {
         modelId: "gemini-3-flash-preview",
         tools: tools,
         messages: messages,
-        apiKey: apiKey
+        apiKey: apiKey,
       )
 
       // No tool calls means model is done

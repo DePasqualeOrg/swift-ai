@@ -4,10 +4,9 @@ import AIMCP
 import Foundation
 import Testing
 
-@Suite("Result Conversions")
 struct ResultConversionTests {
-  @Test("ToolResult.Content to Tool.Content - text")
-  func toolResultValueToToolContentText() {
+  @Test
+  func `ToolResult.Content to Tool.Content - text`() {
     let value = AI.ToolResult.Content.text("Hello, world!")
     let content = MCP.Tool.Content(value)
 
@@ -18,8 +17,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("ToolResult.Content to Tool.Content - image without mimeType")
-  func toolResultValueToToolContentImage() {
+  @Test
+  func `ToolResult.Content to Tool.Content - image without mimeType`() {
     let imageData = Data([0x89, 0x50, 0x4E, 0x47]) // PNG magic bytes
     let value = AI.ToolResult.Content.image(imageData, mimeType: nil)
     let content = MCP.Tool.Content(value)
@@ -32,8 +31,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("ToolResult.Content to Tool.Content - image with mimeType")
-  func toolResultValueToToolContentImageWithMimeType() {
+  @Test
+  func `ToolResult.Content to Tool.Content - image with mimeType`() {
     let imageData = Data([0xFF, 0xD8, 0xFF])
     let value = AI.ToolResult.Content.image(imageData, mimeType: "image/jpeg")
     let content = MCP.Tool.Content(value)
@@ -46,8 +45,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("ToolResult.Content to Tool.Content - audio")
-  func toolResultValueToToolContentAudio() {
+  @Test
+  func `ToolResult.Content to Tool.Content - audio`() {
     let audioData = Data([0x49, 0x44, 0x33]) // ID3 tag for MP3
     let value = AI.ToolResult.Content.audio(audioData, mimeType: "audio/mpeg")
     let content = MCP.Tool.Content(value)
@@ -60,8 +59,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("ToolResult.Content to Tool.Content - file (image type)")
-  func toolResultValueToToolContentFileImage() {
+  @Test
+  func `ToolResult.Content to Tool.Content - file (image type)`() {
     let fileData = Data([0x89, 0x50, 0x4E, 0x47])
     let value = AI.ToolResult.Content.file(fileData, mimeType: "image/png", filename: "test.png")
     let content = MCP.Tool.Content(value)
@@ -75,8 +74,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("ToolResult.Content to Tool.Content - file (audio type)")
-  func toolResultValueToToolContentFileAudio() {
+  @Test
+  func `ToolResult.Content to Tool.Content - file (audio type)`() {
     let fileData = Data([0x49, 0x44, 0x33])
     let value = AI.ToolResult.Content.file(fileData, mimeType: "audio/wav", filename: "test.wav")
     let content = MCP.Tool.Content(value)
@@ -90,12 +89,12 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("ToolResult to CallTool.Result")
-  func toolResultToCallToolResult() {
+  @Test
+  func `ToolResult to CallTool.Result`() {
     let result = AI.ToolResult(
       name: "test_tool",
       id: "call-123",
-      content: .text("Success!")
+      content: .text("Success!"),
     )
 
     let mcpResult = MCP.CallTool.Result(result)
@@ -107,8 +106,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("ToolResult error to CallTool.Result with isError flag")
-  func toolResultErrorToCallToolResult() {
+  @Test
+  func `ToolResult error to CallTool.Result with isError flag`() {
     let result = AI.ToolResult.error("Failed!", name: "test_tool", id: "call-123")
 
     let mcpResult = MCP.CallTool.Result(result)
@@ -120,8 +119,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("Tool.Content to ToolResult.Content - text")
-  func toolContentToToolResultValueText() {
+  @Test
+  func `Tool.Content to ToolResult.Content - text`() {
     let content = MCP.Tool.Content.text("Test response")
     let value = AI.ToolResult.Content(content)
 
@@ -132,8 +131,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("Tool.Content to ToolResult.Content - image")
-  func toolContentToToolResultValueImage() {
+  @Test
+  func `Tool.Content to ToolResult.Content - image`() {
     let imageData = Data([0xFF, 0xD8, 0xFF]) // JPEG magic bytes
     let base64 = imageData.base64EncodedString()
     let content = MCP.Tool.Content.image(data: base64, mimeType: "image/jpeg")
@@ -147,8 +146,8 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("Tool.Content to ToolResult.Content - audio")
-  func toolContentToToolResultValueAudio() {
+  @Test
+  func `Tool.Content to ToolResult.Content - audio`() {
     let audioData = Data([0x49, 0x44, 0x33])
     let base64 = audioData.base64EncodedString()
     let content = MCP.Tool.Content.audio(data: base64, mimeType: "audio/mpeg")
@@ -162,11 +161,11 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("CallTool.Result to ToolResult")
-  func callToolResultToToolResult() {
+  @Test
+  func `CallTool.Result to ToolResult`() {
     let mcpResult = MCP.CallTool.Result(
       content: [.text("Tool output")],
-      isError: nil
+      isError: nil,
     )
 
     let result = AI.ToolResult(mcpResult, name: "my_tool", id: "call-456")
@@ -183,11 +182,11 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("CallTool.Result with error to ToolResult")
-  func callToolResultErrorToToolResult() {
+  @Test
+  func `CallTool.Result with error to ToolResult`() {
     let mcpResult = MCP.CallTool.Result(
       content: [.text("Error: Permission denied")],
-      isError: true
+      isError: true,
     )
 
     let result = AI.ToolResult(mcpResult, name: "my_tool", id: "call-789")
@@ -202,15 +201,15 @@ struct ResultConversionTests {
     }
   }
 
-  @Test("GenerationResponse.ToolCall to CallTool.Parameters")
-  func toolCallToCallToolParameters() {
+  @Test
+  func `GenerationResponse.ToolCall to CallTool.Parameters`() {
     let toolCall = AI.GenerationResponse.ToolCall(
       name: "search",
       id: "call-001",
       parameters: [
         "query": .string("swift concurrency"),
         "limit": .int(10),
-      ]
+      ],
     )
 
     let params = MCP.CallTool.Parameters(toolCall)
@@ -220,14 +219,14 @@ struct ResultConversionTests {
     #expect(params.arguments?["limit"]?.intValue == 10)
   }
 
-  @Test("CallTool.Parameters to GenerationResponse.ToolCall")
-  func callToolParametersToToolCall() {
+  @Test
+  func `CallTool.Parameters to GenerationResponse.ToolCall`() {
     let params = MCP.CallTool.Parameters(
       name: "get_weather",
       arguments: [
         "city": .string("San Francisco"),
         "units": .string("celsius"),
-      ]
+      ],
     )
 
     let toolCall = AI.GenerationResponse.ToolCall(params, id: "call-002")

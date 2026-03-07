@@ -104,12 +104,12 @@ struct GetCurrentTime {
 // MARK: - E2E Tests
 
 /// End-to-end tests for AI tools (@Tool macro) with real model providers.
-@Suite("AI Tools E2E Tests", .serialized)
+@Suite(.serialized)
 struct AIToolsE2ETests {
   // MARK: - Single Tool Tests
 
-  @Test("Gemini: Single tool call with AI tool")
-  func geminiSingleTool() async throws {
+  @Test
+  func `Gemini: Single tool call with AI tool`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["GEMINI_API_KEY"] else {
       Issue.record("GEMINI_API_KEY not found in .env file")
@@ -119,7 +119,7 @@ struct AIToolsE2ETests {
     let result = try await runAgenticLoop(
       prompt: "What's the current weather in Tokyo? Use celsius.",
       tools: [GetCurrentWeather.tool],
-      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview")
+      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -127,8 +127,8 @@ struct AIToolsE2ETests {
     print("Gemini single tool result: \(result.finalResponse ?? "nil")")
   }
 
-  @Test("Anthropic: Single tool call with AI tool")
-  func anthropicSingleTool() async throws {
+  @Test
+  func `Anthropic: Single tool call with AI tool`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["ANTHROPIC_API_KEY"] else {
       Issue.record("ANTHROPIC_API_KEY not found in .env file")
@@ -138,7 +138,7 @@ struct AIToolsE2ETests {
     let result = try await runAgenticLoop(
       prompt: "What's the current weather in London?",
       tools: [GetCurrentWeather.tool],
-      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101")
+      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -146,8 +146,8 @@ struct AIToolsE2ETests {
     print("Anthropic single tool result: \(result.finalResponse ?? "nil")")
   }
 
-  @Test("OpenAI: Single tool call with AI tool")
-  func openAISingleTool() async throws {
+  @Test
+  func `OpenAI: Single tool call with AI tool`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["OPENAI_API_KEY"] else {
       Issue.record("OPENAI_API_KEY not found in .env file")
@@ -157,7 +157,7 @@ struct AIToolsE2ETests {
     let result = try await runAgenticLoop(
       prompt: "What's the weather like in San Francisco right now?",
       tools: [GetCurrentWeather.tool],
-      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2")
+      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -167,8 +167,8 @@ struct AIToolsE2ETests {
 
   // MARK: - Multiple AI Tools Tests
 
-  @Test("Gemini: Multiple AI tools with chained reasoning")
-  func geminiMultipleTools() async throws {
+  @Test
+  func `Gemini: Multiple AI tools with chained reasoning`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["GEMINI_API_KEY"] else {
       Issue.record("GEMINI_API_KEY not found in .env file")
@@ -178,7 +178,7 @@ struct AIToolsE2ETests {
     let result = try await runAgenticLoop(
       prompt: "What is 15 multiplied by 7? Also, what's the weather in Paris?",
       tools: [CalculateExpression.tool, GetCurrentWeather.tool],
-      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview")
+      provider: .gemini(apiKey: apiKey, modelId: "gemini-3-pro-preview"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -187,8 +187,8 @@ struct AIToolsE2ETests {
     print("Tool calls executed: \(result.toolCallsExecuted)")
   }
 
-  @Test("Anthropic: Multiple AI tools with chained reasoning")
-  func anthropicMultipleTools() async throws {
+  @Test
+  func `Anthropic: Multiple AI tools with chained reasoning`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["ANTHROPIC_API_KEY"] else {
       Issue.record("ANTHROPIC_API_KEY not found in .env file")
@@ -198,7 +198,7 @@ struct AIToolsE2ETests {
     let result = try await runAgenticLoop(
       prompt: "Calculate 100 divided by 4, then tell me the weather in New York.",
       tools: [CalculateExpression.tool, GetCurrentWeather.tool],
-      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101")
+      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -207,8 +207,8 @@ struct AIToolsE2ETests {
     print("Tool calls executed: \(result.toolCallsExecuted)")
   }
 
-  @Test("OpenAI: Multiple AI tools with chained reasoning")
-  func openAIMultipleTools() async throws {
+  @Test
+  func `OpenAI: Multiple AI tools with chained reasoning`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["OPENAI_API_KEY"] else {
       Issue.record("OPENAI_API_KEY not found in .env file")
@@ -218,7 +218,7 @@ struct AIToolsE2ETests {
     let result = try await runAgenticLoop(
       prompt: "What's 256 plus 128? And what time is it in Tokyo?",
       tools: [CalculateExpression.tool, GetCurrentTime.tool],
-      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2")
+      provider: .responses(apiKey: apiKey, modelId: "gpt-5.2"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -229,8 +229,8 @@ struct AIToolsE2ETests {
 
   // MARK: - Tool with Default Parameters
 
-  @Test("Anthropic: Tool uses default parameter value")
-  func anthropicToolWithDefaults() async throws {
+  @Test
+  func `Anthropic: Tool uses default parameter value`() async throws {
     let env = try EnvLoader.loadFromPackageRoot()
     guard let apiKey = env["ANTHROPIC_API_KEY"] else {
       Issue.record("ANTHROPIC_API_KEY not found in .env file")
@@ -240,7 +240,7 @@ struct AIToolsE2ETests {
     let result = try await runAgenticLoop(
       prompt: "What time is it? (Don't specify a timezone, just get the current time)",
       tools: [GetCurrentTime.tool],
-      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101")
+      provider: .anthropic(apiKey: apiKey, modelId: "claude-opus-4-5-20251101"),
     )
 
     #expect(result.finalResponse != nil, "Should have a final response")
@@ -280,7 +280,7 @@ struct AIToolsE2ETests {
     prompt: String,
     tools: [Tool],
     provider: Provider,
-    maxIterations: Int = 10
+    maxIterations: Int = 10,
   ) async throws -> AgenticLoopResult {
     let toolsCollection = Tools(tools)
 
@@ -299,7 +299,7 @@ struct AIToolsE2ETests {
       let response = try await generateResponse(
         messages: messages,
         tools: tools,
-        provider: provider
+        provider: provider,
       )
 
       print("[\(provider.name)] Iteration \(iterations): \(response.toolCalls.count) tool calls")
@@ -331,14 +331,14 @@ struct AIToolsE2ETests {
       return AgenticLoopResult(
         finalResponse: finalResponse,
         iterations: iterations,
-        toolCallsExecuted: totalToolCalls
+        toolCallsExecuted: totalToolCalls,
       )
     }
 
     return AgenticLoopResult(
       finalResponse: nil,
       iterations: iterations,
-      toolCallsExecuted: totalToolCalls
+      toolCallsExecuted: totalToolCalls,
     )
   }
 
@@ -347,7 +347,7 @@ struct AIToolsE2ETests {
   private func generateResponse(
     messages: [AI.Message],
     tools: [AI.Tool],
-    provider: Provider
+    provider: Provider,
   ) async throws -> GenerationResponse {
     switch provider {
       case let .gemini(apiKey, modelId):
@@ -358,7 +358,7 @@ struct AIToolsE2ETests {
           systemPrompt: "You are a helpful assistant with access to tools. Use them when needed to answer questions accurately.",
           messages: messages,
           maxTokens: 4096,
-          apiKey: apiKey
+          apiKey: apiKey,
         )
 
       case let .anthropic(apiKey, modelId):
@@ -369,7 +369,7 @@ struct AIToolsE2ETests {
           systemPrompt: "You are a helpful assistant with access to tools. Use them when needed to answer questions accurately.",
           messages: messages,
           maxTokens: 4096,
-          apiKey: apiKey
+          apiKey: apiKey,
         )
 
       case let .responses(apiKey, modelId):
@@ -380,7 +380,7 @@ struct AIToolsE2ETests {
           systemPrompt: "You are a helpful assistant with access to tools. Use them when needed to answer questions accurately.",
           messages: messages,
           maxTokens: 4096,
-          apiKey: apiKey
+          apiKey: apiKey,
         )
 
       case let .chatCompletions(apiKey, modelId, endpoint):
@@ -391,7 +391,7 @@ struct AIToolsE2ETests {
           systemPrompt: "You are a helpful assistant with access to tools. Use them when needed to answer questions accurately.",
           messages: messages,
           maxTokens: 4096,
-          apiKey: apiKey
+          apiKey: apiKey,
         )
     }
   }

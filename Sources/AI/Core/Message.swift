@@ -53,7 +53,7 @@ public struct Message: Sendable, Hashable {
     attachments: [Attachment] = [],
     toolCalls: [GenerationResponse.ToolCall]? = nil,
     toolResults: [ToolResult]? = nil,
-    opaqueBlocks: [OpaqueBlock]? = nil
+    opaqueBlocks: [OpaqueBlock]? = nil,
   ) {
     self.role = role
     self.content = content
@@ -97,7 +97,7 @@ public extension Message {
             name: toolCall.name,
             id: toolCall.id,
             content: [.text("Function call was not executed. The request may have been canceled or timed out.")],
-            isError: true
+            isError: true,
           ))
         }
       }
@@ -131,7 +131,7 @@ public extension Message {
       attachments: attachments,
       toolCalls: nil,
       toolResults: nil,
-      opaqueBlocks: nil
+      opaqueBlocks: nil,
     )
   }
 
@@ -161,7 +161,7 @@ public extension Message {
       attachments: attachments,
       toolCalls: nil,
       toolResults: nil,
-      opaqueBlocks: nil
+      opaqueBlocks: nil,
     )
   }
 }

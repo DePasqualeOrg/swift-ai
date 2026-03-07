@@ -24,7 +24,7 @@ enum MediaProcessor {
     _ imageData: Data,
     mimeType: String,
     maxDimension: Double = defaultMaxDimension,
-    maxMegapixels: Double = defaultMaxMegapixels
+    maxMegapixels: Double = defaultMaxMegapixels,
   ) async throws -> Data {
     guard let source = CGImageSourceCreateWithData(imageData as CFData, nil) else {
       throw AIError.parsing(message: "Unable to create image source")
@@ -80,7 +80,7 @@ enum MediaProcessor {
         bitsPerComponent: 8,
         bytesPerRow: 0,
         space: colorSpace,
-        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue,
       ) else {
         throw AIError.parsing(message: "Failed to create graphics context")
       }

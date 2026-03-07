@@ -96,7 +96,7 @@ public final class DefaultJSONSchemaValidator: JSONSchemaValidator, @unchecked S
     do {
       return try Schema(
         rawSchema: jsonSchema,
-        context: .init(dialect: .draft2020_12)
+        context: .init(dialect: .draft2020_12),
       )
     } catch {
       throw JSONSchemaValidationError.invalidSchema("\(error)")
