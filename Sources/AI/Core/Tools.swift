@@ -448,7 +448,14 @@ public struct Tools: Collection, Sendable {
   /// The tool is looked up by name, input is validated against its schema,
   /// and the embedded executor is invoked. Thrown errors are caught and
   /// returned as results with `isError: true`.
+  ///
+  /// If the current task has been cancelled before execution begins, an
+  /// aborted error result is returned immediately without running the tool.
   public func call(_ toolCall: GenerationResponse.ToolCall) async -> ToolResult {
+    if Task.isCancelled {
+      return .error("Tool execution aborted", name: toolCall.name, id: toolCall.id)
+    }
+
     guard let tool = self[toolCall.name] else {
       return .error("Unknown tool: \(toolCall.name)", name: toolCall.name, id: toolCall.id)
     }
@@ -468,6 +475,8 @@ public struct Tools: Collection, Sendable {
         try await tool.execute(toolCall.parameters)
       }
       return ToolResult(name: toolCall.name, id: toolCall.id, content: content)
+    } catch is CancellationError {
+      return .error("Tool execution aborted", name: toolCall.name, id: toolCall.id)
     } catch {
       return .error(error.localizedDescription, name: toolCall.name, id: toolCall.id)
     }
@@ -475,24 +484,52 @@ public struct Tools: Collection, Sendable {
 
   /// Calls multiple tools concurrently and returns results in order.
   ///
-  /// Tools are executed in parallel using a task group. Tool implementations
-  /// must be thread-safe as they may run concurrently.
+  /// Tools are executed in parallel. On cancellation, tools that have
+  /// already completed keep their results. Uncollected tool calls receive
+  /// synthesized aborted error results. The method returns promptly on
+  /// cancellation without waiting for noncooperative tools to finish.
   public func call(_ toolCalls: [GenerationResponse.ToolCall]) async -> [ToolResult] {
-    await withTaskGroup(of: (Int, ToolResult).self) { group in
-      for (index, toolCall) in toolCalls.enumerated() {
-        group.addTask {
-          let result = await call(toolCall)
-          return (index, result)
+    guard !toolCalls.isEmpty else { return [] }
+
+    let (stream, continuation) = AsyncStream<(Int, ToolResult)>.makeStream()
+
+    // Spawn each tool call as an unstructured task so that the caller
+    // is not forced to wait for noncooperative tools on cancellation.
+    let tasks = toolCalls.enumerated().map { index, toolCall in
+      Task {
+        let result = await call(toolCall)
+        continuation.yield((index, result))
+      }
+    }
+
+    var results = [(Int, ToolResult)]()
+
+    await withTaskCancellationHandler {
+      for await indexedResult in stream {
+        results.append(indexedResult)
+        if results.count == toolCalls.count {
+          break
         }
       }
-
-      var results = [(Int, ToolResult)]()
-      for await result in group {
-        results.append(result)
+    } onCancel: {
+      // Runs immediately when the parent task is cancelled.
+      // Cancel child tasks so cooperative tools can observe isCancelled,
+      // and finish the stream so the for-await loop exits promptly.
+      // Already-buffered values are still drained by the for-await loop
+      // so that completed tool results are never discarded.
+      for task in tasks {
+        task.cancel()
       }
-
-      return results.sorted { $0.0 < $1.0 }.map { $0.1 }
+      continuation.finish()
     }
+
+    // Synthesize aborted results for any tool calls we didn't collect.
+    let collectedIndices = Set(results.map { $0.0 })
+    for (index, toolCall) in toolCalls.enumerated() where !collectedIndices.contains(index) {
+      results.append((index, .error("Tool execution aborted", name: toolCall.name, id: toolCall.id)))
+    }
+
+    return results.sorted { $0.0 < $1.0 }.map { $0.1 }
   }
 
   // MARK: - Collection Conformance
