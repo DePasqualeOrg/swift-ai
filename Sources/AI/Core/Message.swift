@@ -20,47 +20,128 @@ public struct Message: Sendable, Hashable {
     case tool
   }
 
+  /// Ordered blocks contained in a message.
+  public enum Block: Sendable, Hashable {
+    case text(String)
+    case thinking(text: String, signature: String?)
+    case endnotes(String)
+    case redactedThinking(data: String)
+    case toolCall(ToolCall)
+    case toolResult(ToolResult)
+    case attachment(Attachment)
+    case providerOpaque(OpaqueBlock)
+
+    var opaqueBlock: OpaqueBlock? {
+      switch self {
+        case let .thinking(text, signature) where signature != nil:
+          OpaqueBlock(provider: "anthropic", type: "thinking", content: text, signature: signature)
+        case let .redactedThinking(data):
+          OpaqueBlock(provider: "anthropic", type: "redacted_thinking", data: data)
+        case let .providerOpaque(opaqueBlock):
+          opaqueBlock
+        default:
+          nil
+      }
+    }
+  }
+
   /// The role of this message's sender.
   public let role: Role
 
-  /// The text content of the message, if any.
-  public let content: String?
-
-  /// File attachments included with the message (images, documents, etc.).
-  public let attachments: [Attachment]
-
-  /// Tool calls made by the assistant in this message.
-  public let toolCalls: [GenerationResponse.ToolCall]?
-
-  /// Results from tool executions, when `role` is `.tool`.
-  public let toolResults: [ToolResult]?
-
-  /// Provider-specific opaque blocks for round-tripping (e.g., Anthropic thinking signatures).
-  public let opaqueBlocks: [OpaqueBlock]?
+  /// Ordered content blocks for this message.
+  public let blocks: [Block]
 
   /// Creates a new message.
   ///
   /// - Parameters:
   ///   - role: The role of the message sender.
-  ///   - content: The text content of the message.
-  ///   - attachments: File attachments to include.
-  ///   - toolCalls: Tool calls made by the assistant.
-  ///   - toolResults: Results from tool executions.
-  ///   - opaqueBlocks: Provider-specific opaque blocks for round-tripping.
+  ///   - blocks: Ordered content blocks.
+  public init(role: Role, blocks: [Block]) {
+    self.role = role
+    self.blocks = blocks
+  }
+
+  /// Creates a new message from the deprecated flattened surface.
+  @available(*, deprecated, message: "Use init(role:blocks:) instead.")
   public init(
     role: Role,
     content: String?,
     attachments: [Attachment] = [],
-    toolCalls: [GenerationResponse.ToolCall]? = nil,
+    toolCalls: [ToolCall]? = nil,
     toolResults: [ToolResult]? = nil,
     opaqueBlocks: [OpaqueBlock]? = nil,
   ) {
-    self.role = role
-    self.content = content
-    self.attachments = attachments
-    self.toolCalls = toolCalls
-    self.toolResults = toolResults
-    self.opaqueBlocks = opaqueBlocks
+    var blocks = (opaqueBlocks ?? []).map { opaqueBlock -> Block in
+      switch (opaqueBlock.provider, opaqueBlock.type) {
+        case ("anthropic", "thinking"):
+          .thinking(text: opaqueBlock.content ?? "", signature: opaqueBlock.signature)
+        case ("anthropic", "redacted_thinking"):
+          .redactedThinking(data: opaqueBlock.data ?? "")
+        default:
+          .providerOpaque(opaqueBlock)
+      }
+    }
+    if let content, !content.isEmpty {
+      blocks.append(.text(content))
+    }
+    blocks.append(contentsOf: attachments.map(Block.attachment))
+    if let toolCalls {
+      blocks.append(contentsOf: toolCalls.map(Block.toolCall))
+    }
+    if let toolResults {
+      blocks.append(contentsOf: toolResults.map(Block.toolResult))
+    }
+    self.init(role: role, blocks: blocks)
+  }
+}
+
+// MARK: - Derived Convenience Projections
+
+public extension Message {
+  /// Deprecated flattened text projection derived from `blocks`.
+  @available(*, deprecated, message: "Use blocks as the canonical message content model.")
+  var content: String? {
+    let text = blocks.compactMap { block -> String? in
+      guard case let .text(text) = block else { return nil }
+      return text
+    }.joined()
+    return text.isEmpty ? nil : text
+  }
+
+  /// Deprecated flattened attachment projection derived from `blocks`.
+  @available(*, deprecated, message: "Use blocks as the canonical message content model.")
+  var attachments: [Attachment] {
+    blocks.compactMap { block -> Attachment? in
+      guard case let .attachment(attachment) = block else { return nil }
+      return attachment
+    }
+  }
+
+  /// Deprecated flattened tool-call projection derived from `blocks`.
+  @available(*, deprecated, message: "Use blocks as the canonical message content model.")
+  var toolCalls: [ToolCall]? {
+    let toolCalls = blocks.compactMap { block -> ToolCall? in
+      guard case let .toolCall(toolCall) = block else { return nil }
+      return toolCall
+    }
+    return toolCalls.isEmpty ? nil : toolCalls
+  }
+
+  /// Deprecated flattened tool-result projection derived from `blocks`.
+  @available(*, deprecated, message: "Use blocks as the canonical message content model.")
+  var toolResults: [ToolResult]? {
+    let toolResults = blocks.compactMap { block -> ToolResult? in
+      guard case let .toolResult(toolResult) = block else { return nil }
+      return toolResult
+    }
+    return toolResults.isEmpty ? nil : toolResults
+  }
+
+  /// Deprecated flattened opaque-block projection derived from `blocks`.
+  @available(*, deprecated, message: "Use blocks as the canonical message content model.")
+  var opaqueBlocks: [OpaqueBlock]? {
+    let opaqueBlocks = blocks.compactMap(\.opaqueBlock)
+    return opaqueBlocks.isEmpty ? nil : opaqueBlocks
   }
 }
 
@@ -74,14 +155,14 @@ public extension Message {
     var toolResultIds = Set<String>()
 
     for message in messages {
-      if let toolCalls = message.toolCalls {
-        for toolCall in toolCalls {
-          toolCallIds.insert(toolCall.id)
-        }
-      }
-      if let toolResults = message.toolResults {
-        for toolResult in toolResults {
-          toolResultIds.insert(toolResult.id)
+      for block in message.blocks {
+        switch block {
+          case let .toolCall(toolCall):
+            toolCallIds.insert(toolCall.id)
+          case let .toolResult(toolResult):
+            toolResultIds.insert(toolResult.id)
+          default:
+            break
         }
       }
     }
@@ -91,19 +172,18 @@ public extension Message {
 
     var orphanedResults: [ToolResult] = []
     for message in messages {
-      if let toolCalls = message.toolCalls {
-        for toolCall in toolCalls where orphanedIds.contains(toolCall.id) {
-          orphanedResults.append(ToolResult(
-            name: toolCall.name,
-            id: toolCall.id,
-            content: [.text("Function call was not executed. The request may have been canceled or timed out.")],
-            isError: true,
-          ))
-        }
+      for block in message.blocks {
+        guard case let .toolCall(toolCall) = block, orphanedIds.contains(toolCall.id) else { continue }
+        orphanedResults.append(ToolResult(
+          name: toolCall.name,
+          id: toolCall.id,
+          content: [.text("Function call was not executed. The request may have been canceled or timed out.")],
+          isError: true,
+        ))
       }
     }
 
-    return messages + [Message(role: .tool, content: nil, toolResults: orphanedResults)]
+    return messages + [Message(role: .tool, blocks: orphanedResults.map(Block.toolResult))]
   }
 }
 
@@ -113,9 +193,16 @@ public extension Message {
   /// Returns a new message with tool_use blocks collapsed to descriptive text.
   /// Used when a provider can't satisfy metadata requirements for historical tool turns.
   func collapsingToolCalls() -> Message {
-    guard let toolCalls, !toolCalls.isEmpty else { return self }
-    var text = content ?? ""
-    for toolCall in toolCalls {
+    let attachments = blocks.compactMap { block -> Attachment? in
+      guard case let .attachment(attachment) = block else { return nil }
+      return attachment
+    }
+    var text = blocks.compactMap { block -> String? in
+      guard case let .text(text) = block else { return nil }
+      return text
+    }.joined()
+    for block in blocks {
+      guard case let .toolCall(toolCall) = block else { continue }
       let paramsJSON: String = if let data = toolCall.parametersToData(),
                                   let jsonString = String(data: data, encoding: .utf8)
       {
@@ -125,23 +212,30 @@ public extension Message {
       }
       text += "\n\n[Called tool \"\(toolCall.name)\" with: \(paramsJSON)]"
     }
-    return Message(
-      role: role,
-      content: text,
-      attachments: attachments,
-      toolCalls: nil,
-      toolResults: nil,
-      opaqueBlocks: nil,
-    )
+
+    var collapsedBlocks: [Block] = []
+    if !text.isEmpty {
+      collapsedBlocks.append(.text(text))
+    }
+    collapsedBlocks.append(contentsOf: attachments.map(Block.attachment))
+    return Message(role: role, blocks: collapsedBlocks)
   }
 
   /// Returns a new message with tool_result blocks collapsed to descriptive text.
   /// Used when a provider can't satisfy metadata requirements for historical tool turns.
   func collapsingToolResults() -> Message {
-    guard let toolResults, !toolResults.isEmpty else { return self }
-    var text = content ?? ""
-    for toolResult in toolResults {
-      if let isError = toolResult.isError, isError {
+    let attachments = blocks.compactMap { block -> Attachment? in
+      guard case let .attachment(attachment) = block else { return nil }
+      return attachment
+    }
+    var text = blocks.compactMap { block -> String? in
+      guard case let .text(text) = block else { return nil }
+      return text
+    }.joined()
+
+    for block in blocks {
+      guard case let .toolResult(toolResult) = block else { continue }
+      if toolResult.isError == true {
         let errorText = toolResult.content.compactMap { content -> String? in
           if case let .text(str) = content { return str }
           return nil
@@ -155,13 +249,12 @@ public extension Message {
         text += "\n\n[Result from tool \"\(toolResult.name)\": \(resultText)]"
       }
     }
-    return Message(
-      role: .user,
-      content: text,
-      attachments: attachments,
-      toolCalls: nil,
-      toolResults: nil,
-      opaqueBlocks: nil,
-    )
+
+    var collapsedBlocks: [Block] = []
+    if !text.isEmpty {
+      collapsedBlocks.append(.text(text))
+    }
+    collapsedBlocks.append(contentsOf: attachments.map(Block.attachment))
+    return Message(role: .user, blocks: collapsedBlocks)
   }
 }

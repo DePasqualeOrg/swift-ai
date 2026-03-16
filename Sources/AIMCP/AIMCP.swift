@@ -6,7 +6,7 @@
 // - AI.Value ↔ MCP.Value
 // - AI.Tool ↔ MCP.Tool
 // - AI.ToolResult ↔ MCP.CallTool.Result
-// - AI.GenerationResponse.ToolCall ↔ MCP.CallTool.Parameters
+// - AI.ToolCall ↔ MCP.CallTool.Parameters
 //
 // And a high-level MCPToolProvider for integrating MCP tools with AI providers.
 

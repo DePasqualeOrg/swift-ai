@@ -404,7 +404,10 @@ extension Tool.ParameterType {
 /// let tools = Tools([weatherTool, searchTool])
 ///
 /// // Execute tool calls from a model response
-/// let results = await tools.call(response.toolCalls)
+/// let results = await tools.call(response.blocks.compactMap { block in
+///   guard case let .toolCall(toolCall) = block else { return nil }
+///   return toolCall
+/// })
 /// messages.append(results.message)
 /// ```
 public struct Tools: Collection, Sendable {
@@ -443,7 +446,7 @@ public struct Tools: Collection, Sendable {
 
   // MARK: - Tool Execution
 
-  /// Calls a single tool and returns the result.
+  /// Calls a single tool and returns the execution result.
   ///
   /// The tool is looked up by name, input is validated against its schema,
   /// and the embedded executor is invoked. Thrown errors are caught and
@@ -451,13 +454,23 @@ public struct Tools: Collection, Sendable {
   ///
   /// If the current task has been cancelled before execution begins, an
   /// aborted error result is returned immediately without running the tool.
-  public func call(_ toolCall: GenerationResponse.ToolCall) async -> ToolResult {
+  public func call(_ toolCall: ToolCall) async -> ToolExecutionResult {
+    let startedAt = Date()
     if Task.isCancelled {
-      return .error("Tool execution aborted", name: toolCall.name, id: toolCall.id)
+      return ToolExecutionResult(
+        result: .error("Tool execution aborted", name: toolCall.name, id: toolCall.id),
+        startedAt: startedAt,
+        completedAt: startedAt,
+      )
     }
 
     guard let tool = self[toolCall.name] else {
-      return .error("Unknown tool: \(toolCall.name)", name: toolCall.name, id: toolCall.id)
+      let completedAt = Date()
+      return ToolExecutionResult(
+        result: .error("Unknown tool: \(toolCall.name)", name: toolCall.name, id: toolCall.id),
+        startedAt: startedAt,
+        completedAt: completedAt,
+      )
     }
 
     // Validate input against schema
@@ -466,7 +479,12 @@ public struct Tools: Collection, Sendable {
       let schemaValue = Value.object(tool.rawInputSchema)
       try validator.validate(inputValue, against: schemaValue)
     } catch {
-      return .error("Input validation error: \(error.localizedDescription)", name: toolCall.name, id: toolCall.id)
+      let completedAt = Date()
+      return ToolExecutionResult(
+        result: .error("Input validation error: \(error.localizedDescription)", name: toolCall.name, id: toolCall.id),
+        startedAt: startedAt,
+        completedAt: completedAt,
+      )
     }
 
     // Execute tool, catching errors
@@ -474,24 +492,39 @@ public struct Tools: Collection, Sendable {
       let content = try await ToolCallContext.$currentId.withValue(toolCall.id) {
         try await tool.execute(toolCall.parameters)
       }
-      return ToolResult(name: toolCall.name, id: toolCall.id, content: content)
+      let completedAt = Date()
+      return ToolExecutionResult(
+        result: ToolResult(name: toolCall.name, id: toolCall.id, content: content),
+        startedAt: startedAt,
+        completedAt: completedAt,
+      )
     } catch is CancellationError {
-      return .error("Tool execution aborted", name: toolCall.name, id: toolCall.id)
+      let completedAt = Date()
+      return ToolExecutionResult(
+        result: .error("Tool execution aborted", name: toolCall.name, id: toolCall.id),
+        startedAt: startedAt,
+        completedAt: completedAt,
+      )
     } catch {
-      return .error(error.localizedDescription, name: toolCall.name, id: toolCall.id)
+      let completedAt = Date()
+      return ToolExecutionResult(
+        result: .error(error.localizedDescription, name: toolCall.name, id: toolCall.id),
+        startedAt: startedAt,
+        completedAt: completedAt,
+      )
     }
   }
 
-  /// Calls multiple tools concurrently and returns results in order.
+  /// Calls multiple tools concurrently and returns execution results in order.
   ///
   /// Tools are executed in parallel. On cancellation, tools that have
   /// already completed keep their results. Uncollected tool calls receive
   /// synthesized aborted error results. The method returns promptly on
   /// cancellation without waiting for noncooperative tools to finish.
-  public func call(_ toolCalls: [GenerationResponse.ToolCall]) async -> [ToolResult] {
+  public func call(_ toolCalls: [ToolCall]) async -> [ToolExecutionResult] {
     guard !toolCalls.isEmpty else { return [] }
 
-    let (stream, continuation) = AsyncStream<(Int, ToolResult)>.makeStream()
+    let (stream, continuation) = AsyncStream<(Int, ToolExecutionResult)>.makeStream()
 
     // Spawn each tool call as an unstructured task so that the caller
     // is not forced to wait for noncooperative tools on cancellation.
@@ -502,7 +535,7 @@ public struct Tools: Collection, Sendable {
       }
     }
 
-    var results = [(Int, ToolResult)]()
+    var results = [(Int, ToolExecutionResult)]()
 
     await withTaskCancellationHandler {
       for await indexedResult in stream {
@@ -526,7 +559,12 @@ public struct Tools: Collection, Sendable {
     // Synthesize aborted results for any tool calls we didn't collect.
     let collectedIndices = Set(results.map { $0.0 })
     for (index, toolCall) in toolCalls.enumerated() where !collectedIndices.contains(index) {
-      results.append((index, .error("Tool execution aborted", name: toolCall.name, id: toolCall.id)))
+      let timestamp = Date()
+      results.append((index, ToolExecutionResult(
+        result: .error("Tool execution aborted", name: toolCall.name, id: toolCall.id),
+        startedAt: timestamp,
+        completedAt: timestamp,
+      )))
     }
 
     return results.sorted { $0.0 < $1.0 }.map { $0.1 }
@@ -750,15 +788,70 @@ public struct ToolResult: Hashable, Sendable {
   }
 }
 
+/// Metadata about a completed tool execution.
+///
+/// Wraps the tool's semantic `ToolResult` with exact execution timing so callers can
+/// reason about runtime chronology without inventing timestamps after the fact.
+public struct ToolExecutionResult: Hashable, Sendable {
+  /// The semantic tool result to send back to the model or render in a transcript.
+  public let result: ToolResult
+
+  /// When tool execution actually began.
+  public let startedAt: Date
+
+  /// When the tool finished and the result became available.
+  public let completedAt: Date
+
+  /// Creates a new execution result.
+  public init(result: ToolResult, startedAt: Date, completedAt: Date) {
+    self.result = result
+    self.startedAt = startedAt
+    self.completedAt = completedAt
+  }
+
+  /// How long the tool ran for.
+  public var duration: TimeInterval {
+    completedAt.timeIntervalSince(startedAt)
+  }
+
+  /// Convenience projection of the tool name.
+  public var name: String {
+    result.name
+  }
+
+  /// Convenience projection of the tool call identifier.
+  public var id: String {
+    result.id
+  }
+
+  /// Convenience projection of the execution payload.
+  public var content: [ToolResult.Content] {
+    result.content
+  }
+
+  /// Convenience projection of the execution error flag.
+  public var isError: Bool? {
+    result.isError
+  }
+}
+
 // MARK: - Tool Results Message
 
 public extension [ToolResult] {
   /// A tool message containing these results, suitable for adding to conversation history.
   var message: Message {
-    Message(
-      role: Message.Role.tool,
-      content: nil,
-      toolResults: self,
-    )
+    Message(role: .tool, blocks: map(Message.Block.toolResult))
+  }
+}
+
+public extension [ToolExecutionResult] {
+  /// The semantic tool results extracted from these executions.
+  var results: [ToolResult] {
+    map(\.result)
+  }
+
+  /// A tool message containing these execution results, suitable for adding to conversation history.
+  var message: Message {
+    results.message
   }
 }

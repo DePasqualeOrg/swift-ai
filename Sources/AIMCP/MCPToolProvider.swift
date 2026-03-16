@@ -244,7 +244,7 @@ public actor MCPToolProvider {
   /// - Parameter toolCall: The tool call from an AI response
   /// - Returns: The tool result
   /// - Throws: `MCPToolProviderError.toolNotFound` if the tool is not provided by any server
-  public func execute(_ toolCall: AI.GenerationResponse.ToolCall) async throws -> AI.ToolResult {
+  public func execute(_ toolCall: AI.ToolCall) async throws -> AI.ToolResult {
     let (index, originalName) = try resolveClientIndex(for: toolCall.name)
     let entry = entries[index]
 
@@ -268,7 +268,7 @@ public actor MCPToolProvider {
   ///
   /// - Parameter toolCalls: The tool calls from an AI response
   /// - Returns: Array of tool results in the same order as input
-  public func execute(_ toolCalls: [AI.GenerationResponse.ToolCall]) async throws -> [AI.ToolResult] {
+  public func execute(_ toolCalls: [AI.ToolCall]) async throws -> [AI.ToolResult] {
     try await withThrowingTaskGroup(of: (Int, AI.ToolResult).self) { group in
       for (index, call) in toolCalls.enumerated() {
         group.addTask {

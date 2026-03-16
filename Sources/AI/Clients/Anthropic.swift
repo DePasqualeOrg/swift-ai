@@ -906,7 +906,7 @@ extension AnthropicClient {
 ///   prompt: "Hello, Claude!",
 ///   apiKey: "your-api-key"
 /// )
-/// print(response.texts.response ?? "")
+/// print(response.blocks)
 /// ```
 @Observable
 public final class AnthropicClient: APIClient, Sendable {
@@ -1005,6 +1005,318 @@ public final class AnthropicClient: APIClient, Sendable {
     self.timeout = timeout
     self.session = session
     self.messagesEndpoint = messagesEndpoint ?? baseURL.appendingPathComponent("messages")
+  }
+
+  private static func metadata(from message: APIMessage?) -> GenerationResponse.Metadata? {
+    guard let message else { return nil }
+
+    let finishReason: GenerationResponse.FinishReason? = switch message.stopReason {
+      case "end_turn", "stop_sequence": .stop
+      case "max_tokens": .maxTokens
+      case "tool_use": .toolUse
+      case "refusal": .refusal
+      case "pause_turn": .pauseTurn
+      case .some: .other
+      case .none: nil
+    }
+
+    return GenerationResponse.Metadata(
+      responseId: message.id,
+      finishReason: finishReason,
+      inputTokens: message.usage.inputTokens,
+      outputTokens: message.usage.outputTokens,
+      cacheCreationInputTokens: message.usage.cacheCreationInputTokens,
+      cacheReadInputTokens: message.usage.cacheReadInputTokens,
+    )
+  }
+
+  private static func toolCall(from toolUseBlock: ToolUseBlock) -> ToolCall {
+    var parameters: [String: Value] = [:]
+    if case let .object(dict) = toolUseBlock.input {
+      for (key, value) in dict where key != Value.jsonBufKey {
+        parameters[key] = value
+      }
+    }
+    return .init(name: toolUseBlock.name, id: toolUseBlock.id, parameters: parameters)
+  }
+
+  private static func textBlock(from serverToolUse: ServerToolUseBlock) -> Message.Block? {
+    guard serverToolUse.name == "code_execution",
+          case let .object(inputDict) = serverToolUse.input,
+          case let .string(code) = inputDict["code"]
+    else {
+      return nil
+    }
+    return .text("\n\n```python\n\(code)\n```\n\n")
+  }
+
+  private static func textBlocks(from codeExecutionResultBlock: CodeExecutionToolResultBlock) -> [Message.Block] {
+    var blocks: [Message.Block] = []
+
+    for item in codeExecutionResultBlock.content {
+      let text: String?
+      switch item {
+        case let .result(resultDetails):
+          var resultText = ""
+          if !resultDetails.stdout.isEmpty {
+            resultText += "\n\n```\n\(resultDetails.stdout)\(resultDetails.stdout.hasSuffix("\n") ? "" : "\n")```\n\n"
+          }
+          if !resultDetails.stderr.isEmpty {
+            resultText += "\n\n**Error:**\n```\n\(resultDetails.stderr)\(resultDetails.stderr.hasSuffix("\n") ? "" : "\n")```\n\n"
+          }
+          if resultDetails.returnCode != 0 || !resultDetails.stderr.isEmpty {
+            if resultText.isEmpty {
+              resultText += "\n\n"
+            }
+            resultText += "```Exit code: \(resultDetails.returnCode)```\n\n"
+          }
+          text = resultText.isEmpty ? nil : resultText
+        case let .error(errorDetails):
+          text = "\n\n**Code execution error:** \(errorDetails.errorCode)\n\n"
+        case let .output(outputBlock):
+          text = "\n\n**File Output Generated:** `\(outputBlock.fileId)` (Content not displayed)\n\n"
+      }
+
+      if let text, !text.isEmpty {
+        blocks.append(.text(text))
+      }
+    }
+
+    return blocks
+  }
+
+  private static func blocks(from message: APIMessage) -> [Message.Block] {
+    var blocks: [Message.Block] = []
+    var citationURLs: [String] = []
+    var seenCitationURLs = Set<String>()
+
+    func appendCitationURL(_ url: String) {
+      guard seenCitationURLs.insert(url).inserted else { return }
+      citationURLs.append(url)
+    }
+
+    for contentBlock in message.content {
+      switch contentBlock.type {
+        case .text:
+          if let text = contentBlock.text, !text.isEmpty {
+            blocks.append(.text(text))
+          }
+          for citation in contentBlock.citations ?? [] {
+            if let url = citation.url {
+              appendCitationURL(url)
+            }
+          }
+        case .thinking:
+          if let thinking = contentBlock.thinking {
+            blocks.append(.thinking(text: thinking, signature: contentBlock.signature))
+          }
+        case .redactedThinking:
+          if let data = contentBlock.data {
+            blocks.append(.redactedThinking(data: data))
+          }
+        case .toolUse:
+          if let toolUse = contentBlock.toolUse {
+            blocks.append(.toolCall(toolCall(from: toolUse)))
+          }
+        case .toolResult:
+          if let toolResult = contentBlock.toolResult {
+            blocks.append(.toolResult(.init(
+              name: toolResult.toolUseId,
+              id: toolResult.toolUseId,
+              content: [.text(toolResult.content)],
+              isError: toolResult.isError,
+            )))
+          }
+        case .serverToolUse:
+          if let serverToolUse = contentBlock.serverToolUse,
+             let textBlock = textBlock(from: serverToolUse)
+          {
+            blocks.append(textBlock)
+          }
+        case .webSearchToolResult:
+          if let webSearchToolResult = contentBlock.webSearchToolResult,
+             case let .results(items) = webSearchToolResult.content
+          {
+            for item in items {
+              appendCitationURL(item.url)
+            }
+          }
+        case .webFetchToolResult:
+          if let webFetchToolResult = contentBlock.webFetchToolResult {
+            switch webFetchToolResult.content {
+              case let .result(result):
+                appendCitationURL(result.url)
+                if result.content.source.type == "text", !result.content.source.data.isEmpty {
+                  blocks.append(.text(result.content.source.data))
+                }
+              case .error:
+                break
+            }
+          }
+        case .codeExecutionToolResult:
+          if let codeExecutionToolResult = contentBlock.codeExecutionToolResult {
+            blocks.append(contentsOf: textBlocks(from: codeExecutionToolResult))
+          }
+        case .image, .document:
+          break
+      }
+    }
+
+    if let endnotes = formatEndnotesList(urlStrings: citationURLs), !endnotes.isEmpty {
+      blocks.append(.endnotes(endnotes))
+    }
+
+    return blocks
+  }
+
+  private static func generationResponse(from message: APIMessage) -> GenerationResponse {
+    GenerationResponse(blocks: blocks(from: message), metadata: metadata(from: message))
+  }
+
+  private static func hasToolCallBlocks(_ message: Message) -> Bool {
+    message.blocks.contains { block in
+      if case .toolCall = block { return true }
+      return false
+    }
+  }
+
+  private static func hasToolResultBlocks(_ message: Message) -> Bool {
+    message.blocks.contains { block in
+      if case .toolResult = block { return true }
+      return false
+    }
+  }
+
+  private static func hasAnthropicThinkingBlocks(_ message: Message) -> Bool {
+    message.blocks.contains { block in
+      switch block {
+        case let .thinking(_, signature):
+          signature != nil
+        case .redactedThinking:
+          true
+        case let .providerOpaque(opaqueBlock):
+          opaqueBlock.provider == "anthropic"
+        default:
+          false
+      }
+    }
+  }
+
+  private func anthropicContentBlocks(for message: Message) async throws -> [AnthropicClient.ContentBlockParam] {
+    var contentBlocks: [AnthropicClient.ContentBlockParam] = []
+
+    for block in message.blocks {
+      switch block {
+        case let .thinking(text, signature) where signature != nil:
+          contentBlocks.append(.init(
+            type: .thinking,
+            thinking: text,
+            signature: signature,
+          ))
+        case let .redactedThinking(data):
+          contentBlocks.append(.init(type: .redactedThinking, data: data))
+        case let .providerOpaque(opaqueBlock):
+          switch (opaqueBlock.provider, opaqueBlock.type) {
+            case ("anthropic", "thinking"):
+              contentBlocks.append(.init(
+                type: .thinking,
+                thinking: opaqueBlock.content,
+                signature: opaqueBlock.signature,
+              ))
+            case ("anthropic", "redacted_thinking"):
+              contentBlocks.append(.init(type: .redactedThinking, data: opaqueBlock.data))
+            default:
+              break
+          }
+        case let .text(text) where !text.isEmpty:
+          contentBlocks.append(.init(type: .text, text: text))
+        case let .toolCall(toolCall):
+          contentBlocks.append(.init(
+            type: .toolUse,
+            toolUse: .init(
+              id: toolCall.id,
+              name: toolCall.name,
+              input: .object(toolCall.parameters),
+            ),
+          ))
+        case let .toolResult(toolResult):
+          var resultContentBlocks: [AnthropicClient.ToolResultContentBlock] = []
+          for content in toolResult.content {
+            switch content {
+              case let .text(text):
+                resultContentBlocks.append(.text(text))
+              case let .image(data, mimeType):
+                resultContentBlocks.append(.image(
+                  mediaType: mimeType ?? "image/png",
+                  data: data.base64EncodedString(),
+                ))
+              case let .audio(data, mimeType):
+                anthropicLogger.warning("Tool '\(toolResult.name)' returned audio, which is not supported by Anthropic. Using fallback text.")
+                resultContentBlocks.append(.text(ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription))
+              case let .file(data, mimeType, filename):
+                if mimeType.hasPrefix("image/") {
+                  resultContentBlocks.append(.image(
+                    mediaType: mimeType,
+                    data: data.base64EncodedString(),
+                  ))
+                } else {
+                  anthropicLogger.warning("Tool '\(toolResult.name)' returned a file (\(mimeType)), which is not supported by Anthropic. Using fallback text.")
+                  resultContentBlocks.append(.text(ToolResult.Content.file(data, mimeType: mimeType, filename: filename).fallbackDescription))
+                }
+            }
+          }
+
+          let resultContent: AnthropicClient.ToolResultContent = if resultContentBlocks.count == 1, let text = resultContentBlocks[0].text, resultContentBlocks[0].source == nil {
+            .text(text)
+          } else if resultContentBlocks.isEmpty {
+            .text("")
+          } else {
+            .blocks(resultContentBlocks)
+          }
+
+          contentBlocks.append(.init(
+            type: .toolResult,
+            toolResult: .init(
+              toolUseId: toolResult.id,
+              content: resultContent,
+              isError: toolResult.isError,
+            ),
+          ))
+        case let .attachment(attachment):
+          switch attachment.kind {
+            case let .image(data, mimeType):
+              let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+              contentBlocks.append(.init(
+                type: .image,
+                source: .init(
+                  type: "base64",
+                  mediaType: mimeType,
+                  data: processedImageData.base64EncodedString(),
+                  url: nil,
+                ),
+              ))
+            case let .document(data, mimeType) where mimeType == "application/pdf":
+              if data.count > 32 * 1024 * 1024 {
+                throw AIError.invalidRequest(message: "PDF exceeds maximum size of 32MB")
+              }
+              contentBlocks.append(.init(
+                type: .document,
+                source: .init(
+                  type: "base64",
+                  mediaType: mimeType,
+                  data: data.base64EncodedString(),
+                  url: nil,
+                ),
+              ))
+            case .video, .audio, .document:
+              break
+          }
+        default:
+          break
+      }
+    }
+
+    return contentBlocks
   }
 
   func buildMessagesRequest(params: MessageCreateParams, stream: Bool, apiKey: String) async throws -> URLRequest {
@@ -1729,7 +2041,7 @@ public extension AnthropicClient {
       modelId: modelId,
       tools: tools,
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, content: prompt)],
+      messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -1752,7 +2064,7 @@ public extension AnthropicClient {
       modelId: modelId,
       tools: tools,
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, content: prompt)],
+      messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -1783,11 +2095,8 @@ public extension AnthropicClient {
           currentTask = nil
         }
       }
-      var fullReasoningText = ""
-      var fullResponseText = ""
-      var webSearchCitationUrls: Set<String> = [] // Using a set because duplicate URLs are returned in the stream
-      var toolUseBlocks: [ToolUseBlock] = []
       var wasCancelled = false
+      var latestSnapshot: APIMessage? = nil
       var finalMessage: APIMessage? = nil
       // Patch orphaned tool calls (e.g., from canceled or timed-out generation)
       let patchedMessages = Message.patchingOrphanedToolCalls(messages)
@@ -1804,17 +2113,15 @@ public extension AnthropicClient {
               skipNext = false
               continue
             }
-            if message.role == .assistant,
-               let toolCalls = message.toolCalls, !toolCalls.isEmpty
-            {
-              let hasAnthropicBlocks = message.opaqueBlocks?.contains(where: { $0.provider == "anthropic" }) ?? false
+            if message.role == .assistant, Self.hasToolCallBlocks(message) {
+              let hasAnthropicBlocks = Self.hasAnthropicThinkingBlocks(message)
               if !hasAnthropicBlocks {
                 // Collapse this assistant message's tool calls to text
                 result.append(message.collapsingToolCalls())
                 // Also collapse the following tool result message if present
-                if index + 1 < messages.count {
-                  let nextMessage = messages[index + 1]
-                  if nextMessage.toolResults != nil, !nextMessage.toolResults!.isEmpty {
+                if index + 1 < patchedMessages.count {
+                  let nextMessage = patchedMessages[index + 1]
+                  if Self.hasToolResultBlocks(nextMessage) {
                     result.append(nextMessage.collapsingToolResults())
                     skipNext = true
                   }
@@ -1832,140 +2139,15 @@ public extension AnthropicClient {
         patchedMessages
       }
       // Convert Message to AnthropicClient.MessageParam
-      let messageParams = processedMessages.map { message in
-        if let toolResults = message.toolResults, !toolResults.isEmpty {
-          // Handle messages with function results (tool results)
-          var contentBlocks: [AnthropicClient.ContentBlockParam] = []
-          // Add text content if present
-          if let content = message.content, !content.isEmpty {
-            contentBlocks.append(AnthropicClient.ContentBlockParam(
-              type: .text,
-              text: content,
-              source: nil,
-              toolUse: nil,
-              toolResult: nil,
-              codeExecutionToolResult: nil,
-            ))
-          }
-          // Add function results as tool_result blocks
-          // Anthropic natively supports multiple content blocks per tool result.
-          // Supported: text, images. Unsupported: audio, non-image files (fallback to text).
-          // TODO: Monitor Anthropic API updates for expanded content type support.
-          for toolResult in toolResults {
-            // Create a tool result block
-            let resultContent: AnthropicClient.ToolResultContent
-
-            // Process content items
-            var resultContentBlocks: [AnthropicClient.ToolResultContentBlock] = []
-            for content in toolResult.content {
-              switch content {
-                case let .text(text):
-                  resultContentBlocks.append(.text(text))
-                case let .image(data, mimeType):
-                  let mediaType = mimeType ?? "image/png"
-                  let base64Data = data.base64EncodedString()
-                  resultContentBlocks.append(.image(mediaType: mediaType, data: base64Data))
-                case let .audio(data, mimeType):
-                  anthropicLogger.warning("Tool '\(toolResult.name)' returned audio, which is not supported by Anthropic. Using fallback text.")
-                  resultContentBlocks.append(.text(ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription))
-                case let .file(data, mimeType, filename):
-                  if mimeType.hasPrefix("image/") {
-                    let base64Data = data.base64EncodedString()
-                    resultContentBlocks.append(.image(mediaType: mimeType, data: base64Data))
-                  } else {
-                    anthropicLogger.warning("Tool '\(toolResult.name)' returned a file (\(mimeType)), which is not supported by Anthropic. Using fallback text.")
-                    resultContentBlocks.append(.text(ToolResult.Content.file(data, mimeType: mimeType, filename: filename).fallbackDescription))
-                  }
-              }
-            }
-
-            // Use text if single text block, otherwise use blocks array
-            if resultContentBlocks.count == 1, let text = resultContentBlocks[0].text, resultContentBlocks[0].source == nil {
-              resultContent = .text(text)
-            } else if resultContentBlocks.isEmpty {
-              resultContent = .text("")
-            } else {
-              resultContent = .blocks(resultContentBlocks)
-            }
-
-            let toolResultBlock = AnthropicClient.ToolResultBlockParam(
-              toolUseId: toolResult.id,
-              content: resultContent,
-              isError: toolResult.isError,
-            )
-            contentBlocks.append(AnthropicClient.ContentBlockParam(
-              type: .toolResult,
-              text: nil,
-              source: nil,
-              toolUse: nil,
-              toolResult: toolResultBlock,
-              codeExecutionToolResult: nil,
-            ))
-          }
-          return AnthropicClient.MessageParam(
-            role: mapRole(message.role),
-            text: nil, // Text is included in contentBlocks
-            contentBlocks: contentBlocks,
-            attachments: message.attachments.isEmpty ? nil : message.attachments,
-          )
-        } else if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
-          // Handle messages with function calls
-          var contentBlocks: [AnthropicClient.ContentBlockParam] = []
-          // Prepend thinking blocks from opaqueBlocks (required by Anthropic for round-tripping)
-          if let opaqueBlocks = message.opaqueBlocks {
-            for block in opaqueBlocks where block.provider == "anthropic" {
-              switch block.type {
-                case "thinking":
-                  contentBlocks.append(AnthropicClient.ContentBlockParam(
-                    type: .thinking, thinking: block.content, signature: block.signature,
-                  ))
-                case "redacted_thinking":
-                  contentBlocks.append(AnthropicClient.ContentBlockParam(
-                    type: .redactedThinking, data: block.data,
-                  ))
-                default:
-                  break
-              }
-            }
-          }
-          // Add text content if present
-          if let content = message.content, !content.isEmpty {
-            contentBlocks.append(AnthropicClient.ContentBlockParam(
-              type: .text,
-              text: content,
-            ))
-          }
-          // Add function calls as tool_use blocks
-          for toolCall in toolCalls {
-            let toolUseBlock = AnthropicClient.ToolUseBlockParam(
-              id: toolCall.id,
-              name: toolCall.name,
-              input: Value.object(toolCall.parameters),
-            )
-            contentBlocks.append(AnthropicClient.ContentBlockParam(
-              type: .toolUse,
-              text: nil,
-              source: nil,
-              toolUse: toolUseBlock,
-              toolResult: nil,
-              codeExecutionToolResult: nil,
-            ))
-          }
-          return AnthropicClient.MessageParam(
-            role: mapRole(message.role),
-            text: nil, // Text is included in contentBlocks
-            contentBlocks: contentBlocks,
-            attachments: message.attachments.isEmpty ? nil : message.attachments,
-          )
-        } else {
-          // Simple text message
-          return AnthropicClient.MessageParam(
-            role: mapRole(message.role),
-            text: message.content,
-            contentBlocks: nil,
-            attachments: message.attachments.isEmpty ? nil : message.attachments,
-          )
-        }
+      var messageParams: [AnthropicClient.MessageParam] = []
+      for message in processedMessages {
+        let contentBlocks = try await anthropicContentBlocks(for: message)
+        messageParams.append(AnthropicClient.MessageParam(
+          role: mapRole(message.role),
+          text: nil,
+          contentBlocks: contentBlocks.isEmpty ? nil : contentBlocks,
+          attachments: nil,
+        ))
       }
       // Temperature must be set to 1 when thinking is enabled.
       let adjustedTemperature = configuration.thinkingConfig != nil ? 1.0 : temperature
@@ -2017,182 +2199,32 @@ public extension AnthropicClient {
 //          print(event)
           try Task.checkCancellation()
           switch event {
-            case let .thinking(delta, _):
-              fullReasoningText += delta
-              await MainActor.run {
-                update(
-                  .init(texts: .init(
-                    reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                    response: fullResponseText.isEmpty ? nil : fullResponseText,
-                    notes: nil,
-                  ), toolCalls: []),
-                )
-              }
-            case let .text(delta, _):
-              fullResponseText += delta
-              await MainActor.run {
-                update(.init(texts: .init(
-                  reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                  response: fullResponseText.isEmpty ? nil : fullResponseText,
-                  notes: nil,
-                ), toolCalls: []))
-              }
-            case let .toolUse(toolUse):
-              toolUseBlocks.append(toolUse)
-            case let .serverToolUse(serverToolUse):
-              // Handle server tool use (like code execution)
-              if serverToolUse.name == "code_execution" {
-                // Extract the code from the input
-                if case let .object(inputDict) = serverToolUse.input,
-                   case let .string(code) = inputDict["code"]
-                {
-                  // Format as markdown code block
-                  let markdownCode = "\n\n```python\n\(code)\n```\n\n"
-                  fullResponseText += markdownCode
-                  await MainActor.run {
-                    update(.init(texts: .init(
-                      reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                      response: fullResponseText.isEmpty ? nil : fullResponseText,
-                      notes: nil,
-                    ), toolCalls: []))
-                  }
-                }
-              }
-            case let .codeExecutionResult(codeExecutionResultBlock):
-              // Handle code execution results by iterating through its content array
-              for item in codeExecutionResultBlock.content {
-                switch item {
-                  case let .result(resultDetails):
-                    // Extract stdout, stderr, and return_code
-                    let stdout = resultDetails.stdout
-                    let stderr = resultDetails.stderr
-                    let returnCode = resultDetails.returnCode
-                    // Format the output
-                    var resultText = ""
-                    if !stdout.isEmpty {
-                      resultText += "\n\n```\n\(stdout)\(stdout.hasSuffix("\n") ? "" : "\n")```\n\n"
-                    }
-                    if !stderr.isEmpty {
-                      resultText += "\n\n**Error:**\n```\n\(stderr)\(stderr.hasSuffix("\n") ? "" : "\n")```\n\n"
-                    }
-                    if returnCode != 0 || !stderr.isEmpty {
-                      if resultText.isEmpty { resultText += "\n\n" } // Ensure spacing if only return code
-                      resultText += "```Exit code: \(returnCode)```\n\n"
-                    }
-                    fullResponseText += resultText
-                    await MainActor.run {
-                      update(.init(texts: .init(
-                        reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                        response: fullResponseText.isEmpty ? nil : fullResponseText,
-                        notes: nil,
-                      ), toolCalls: []))
-                    }
-                  case let .error(errorDetails):
-                    // Handle errors
-                    let errorCode = errorDetails.errorCode
-                    let errorText = "\n\n**Code execution error:** \(errorCode)\n\n"
-                    fullResponseText += errorText
-                    await MainActor.run {
-                      update(.init(texts: .init(
-                        reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                        response: fullResponseText.isEmpty ? nil : fullResponseText,
-                        notes: nil,
-                      ), toolCalls: []))
-                    }
-                  case let .output(outputBlock): // New case for file outputs
-                    let fileOutputText = "\n\n**File Output Generated:** `\(outputBlock.fileId)` (Content not displayed)\n\n"
-                    fullResponseText += fileOutputText
-                    await MainActor.run {
-                      update(.init(texts: .init(
-                        reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                        response: fullResponseText.isEmpty ? nil : fullResponseText,
-                        notes: nil,
-                      ), toolCalls: []))
-                    }
-                }
-              }
-            case let .citation(citation, _):
-              switch citation {
-                case .text:
+            case let .streamEvent(streamEvent, snapshot):
+              latestSnapshot = snapshot
+              switch streamEvent.type {
+                case .messageStart, .ping:
                   break
-                case let .webSearch(webSearchCitation):
-                  webSearchCitationUrls.insert(webSearchCitation.url)
-                  update(.init(texts: .init(
-                    reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                    response: fullResponseText.isEmpty ? nil : fullResponseText,
-                    notes: nil,
-                  ), toolCalls: []))
+                case .messageDelta, .contentBlockStart, .contentBlockDelta, .contentBlockStop, .messageStop:
+                  await MainActor.run {
+                    update(Self.generationResponse(from: snapshot))
+                  }
+                  if streamEvent.type == .messageStop {
+                    finalMessage = snapshot
+                  }
+                case .error:
+                  break
               }
             case let .finalMessage(message):
               finalMessage = message
+              latestSnapshot = message
             case let .error(error):
               throw error
             case let .abort(error):
               wasCancelled = true
               throw error
             case .end:
-              let toolCalls = toolUseBlocks.map { toolUseBlock -> GenerationResponse.ToolCall in
-                let name = toolUseBlock.name
-                var parameters: [String: Value] = [:]
-                if case let .object(dict) = toolUseBlock.input {
-                  // Copy all values except the internal jsonBuf key
-                  for (key, value) in dict {
-                    if key != Value.jsonBufKey {
-                      parameters[key] = value
-                    }
-                  }
-                }
-                return .init(name: name, id: toolUseBlock.id, parameters: parameters)
-              }
-
-              // Extract thinking blocks as OpaqueBlocks for round-tripping (only needed when tool calls are present)
-              let opaqueBlocks: [OpaqueBlock]? = if !toolCalls.isEmpty, let msg = finalMessage {
-                msg.content.compactMap { block -> OpaqueBlock? in
-                  switch block.type {
-                    case .thinking:
-                      OpaqueBlock(provider: "anthropic", type: "thinking",
-                                  content: block.thinking, signature: block.signature)
-                    case .redactedThinking:
-                      OpaqueBlock(provider: "anthropic", type: "redacted_thinking",
-                                  data: block.data)
-                    default:
-                      nil
-                  }
-                }
-              } else {
-                nil
-              }
-
-              // Build metadata from final message
-              let metadata: GenerationResponse.Metadata?
-              if let msg = finalMessage {
-                let finishReason: GenerationResponse.FinishReason? = switch msg.stopReason {
-                  case "end_turn", "stop_sequence": .stop
-                  case "max_tokens": .maxTokens
-                  case "tool_use": .toolUse
-                  case "refusal": .refusal
-                  case "pause_turn": .pauseTurn
-                  case .some: .other
-                  case .none: nil
-                }
-                metadata = GenerationResponse.Metadata(
-                  responseId: msg.id,
-                  finishReason: finishReason,
-                  inputTokens: msg.usage.inputTokens,
-                  outputTokens: msg.usage.outputTokens,
-                  cacheCreationInputTokens: msg.usage.cacheCreationInputTokens,
-                  cacheReadInputTokens: msg.usage.cacheReadInputTokens,
-                )
-              } else {
-                metadata = nil
-              }
-
-              return (GenerationResponse(texts: .init(
-                  reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-                  response: fullResponseText.isEmpty ? nil : fullResponseText,
-                  notes: formatEndnotesList(urlStrings: Array(webSearchCitationUrls)),
-                ), toolCalls: toolCalls, metadata: metadata,
-                opaqueBlocks: opaqueBlocks?.isEmpty == false ? opaqueBlocks : nil), wasCancelled)
+              let finalSnapshot = finalMessage ?? latestSnapshot
+              return (finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(blocks: []), wasCancelled)
             default:
               continue
           }
@@ -2212,35 +2244,8 @@ public extension AnthropicClient {
           throw AIError.network(underlying: error)
         }
       }
-      // Return the current results and cancellation status
-      // Build metadata from final message if available
-      let metadata: GenerationResponse.Metadata?
-      if let msg = finalMessage {
-        let finishReason: GenerationResponse.FinishReason? = switch msg.stopReason {
-          case "end_turn", "stop_sequence": .stop
-          case "max_tokens": .maxTokens
-          case "tool_use": .toolUse
-          case "refusal": .refusal
-          case "pause_turn": .pauseTurn
-          case .some: .other
-          case .none: nil
-        }
-        metadata = GenerationResponse.Metadata(
-          responseId: msg.id,
-          finishReason: finishReason,
-          inputTokens: msg.usage.inputTokens,
-          outputTokens: msg.usage.outputTokens,
-          cacheCreationInputTokens: msg.usage.cacheCreationInputTokens,
-          cacheReadInputTokens: msg.usage.cacheReadInputTokens,
-        )
-      } else {
-        metadata = nil
-      }
-      let result = GenerationResponse(texts: .init(
-        reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-        response: fullResponseText.isEmpty ? nil : fullResponseText,
-        notes: formatEndnotesList(urlStrings: Array(webSearchCitationUrls)),
-      ), toolCalls: [], metadata: metadata)
+      let finalSnapshot = finalMessage ?? latestSnapshot
+      let result = finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(blocks: [])
       return (result, wasCancelled)
     }
     // Store the task so we can cancel it
@@ -2260,14 +2265,14 @@ public extension AnthropicClient {
         throw aiError
       } else if error is CancellationError {
         // This should be rare since we handle cancellation in the task
-        return .init(texts: .init(reasoning: nil, response: nil, notes: nil), toolCalls: [])
+        return .init(blocks: [])
       } else {
         throw AIError.network(underlying: error)
       }
     }
   }
 
-  private func formatEndnotesList(urlStrings: [String]) -> String? {
+  private static func formatEndnotesList(urlStrings: [String]) -> String? {
     guard !urlStrings.isEmpty else {
       return nil
     }

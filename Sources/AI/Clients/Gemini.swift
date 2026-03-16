@@ -19,7 +19,7 @@ import SSE
 ///   prompt: "Hello, Gemini!",
 ///   apiKey: "your-api-key"
 /// )
-/// print(response.texts.response ?? "")
+/// print(response.blocks)
 /// ```
 @Observable
 public final class GeminiClient: APIClient, Sendable {
@@ -171,9 +171,180 @@ public final class GeminiClient: APIClient, Sendable {
     let text: String?
     let thought: Bool?
     let groundingMetadata: GroundingMetadata?
-    let toolCall: GenerationResponse.ToolCall?
+    let toolCall: ToolCall?
     let usageMetadata: UsageMetadata?
     let finishReason: FinishReason?
+  }
+
+  private static func assistantBlocks(
+    reasoningText: String?,
+    responseText: String?,
+    notesText: String? = nil,
+    toolCalls: [ToolCall] = [],
+  ) -> [Message.Block] {
+    var blocks: [Message.Block] = []
+    if let reasoningText, !reasoningText.isEmpty {
+      blocks.append(.thinking(text: reasoningText, signature: nil))
+    }
+    if let responseText, !responseText.isEmpty {
+      blocks.append(.text(responseText))
+    }
+    if let notesText, !notesText.isEmpty {
+      blocks.append(.endnotes(notesText))
+    }
+    blocks.append(contentsOf: toolCalls.map(Message.Block.toolCall))
+    return blocks
+  }
+
+  private func requestParts(for message: Message, apiKey: String) async throws -> [[String: any Sendable]] {
+    var parts: [[String: any Sendable]] = []
+
+    for block in message.blocks {
+      switch block {
+        case let .toolCall(toolCall):
+          var nativeArgs: [String: any Sendable] = [:]
+          for (key, value) in toolCall.parameters {
+            nativeArgs[key] = value.toAny()
+          }
+          let toolCallDict: [String: any Sendable] = [
+            "name": toolCall.name,
+            "args": nativeArgs,
+          ]
+          var partDict: [String: any Sendable] = [
+            "functionCall": toolCallDict,
+          ]
+          if let thoughtSignature = toolCall.providerMetadata?["thoughtSignature"] {
+            partDict["thoughtSignature"] = thoughtSignature
+          }
+          parts.append(partDict)
+
+        case let .toolResult(toolResult):
+          var functionResponse: [String: any Sendable] = [
+            "name": toolResult.name,
+          ]
+
+          if toolResult.isError == true {
+            let errorText = toolResult.content.compactMap { content -> String? in
+              if case let .text(text) = content { return text }
+              return nil
+            }.joined(separator: "\n")
+            functionResponse["response"] = ["error": errorText.isEmpty ? "Unknown error" : errorText] as [String: any Sendable]
+          } else {
+            var inlineDataParts: [[String: any Sendable]] = []
+            var textOutputs: [String] = []
+
+            for content in toolResult.content {
+              switch content {
+                case let .text(text):
+                  textOutputs.append(text)
+                case let .image(data, mimeType):
+                  let mediaType = mimeType ?? "image/png"
+                  inlineDataParts.append([
+                    "inlineData": [
+                      "mimeType": mediaType,
+                      "data": data.base64EncodedString(),
+                    ] as [String: any Sendable],
+                  ])
+                case let .audio(data, mimeType):
+                  inlineDataParts.append([
+                    "inlineData": [
+                      "mimeType": mimeType,
+                      "data": data.base64EncodedString(),
+                    ] as [String: any Sendable],
+                  ])
+                case let .file(data, mimeType, _):
+                  inlineDataParts.append([
+                    "inlineData": [
+                      "mimeType": mimeType,
+                      "data": data.base64EncodedString(),
+                    ] as [String: any Sendable],
+                  ])
+              }
+            }
+
+            functionResponse["response"] = [
+              "output": textOutputs.joined(separator: "\n").isEmpty ? (inlineDataParts.isEmpty ? "" : "Content provided") : textOutputs.joined(separator: "\n"),
+            ] as [String: any Sendable]
+            if !inlineDataParts.isEmpty {
+              functionResponse["parts"] = inlineDataParts
+            }
+          }
+
+          parts.append(["functionResponse": functionResponse])
+
+        case let .attachment(attachment):
+          switch attachment.kind {
+            case let .image(data, mimeType):
+              let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+              parts.append([
+                "inline_data": [
+                  "mime_type": mimeType,
+                  "data": processedImageData.base64EncodedString(),
+                ],
+              ])
+            case let .video(data, mimeType):
+              let fileUri = try await uploadFile(
+                data: data,
+                mimeType: mimeType,
+                displayName: attachment.filename ?? "Video",
+                apiKey: apiKey,
+              )
+              parts.append([
+                "file_data": [
+                  "mime_type": mimeType,
+                  "file_uri": fileUri,
+                ],
+              ])
+            case let .audio(data, mimeType):
+              let fileUri = try await uploadFile(
+                data: data,
+                mimeType: mimeType,
+                displayName: attachment.filename ?? "Audio",
+                apiKey: apiKey,
+              )
+              parts.append([
+                "file_data": [
+                  "mime_type": mimeType,
+                  "file_uri": fileUri,
+                ],
+              ])
+            case let .document(data, mimeType):
+              let mimeTypeForGemini = switch mimeType {
+                case "net.daringfireball.markdown", "text/x-markdown": "text/md"
+                default: mimeType
+              }
+              if data.count < 20_000_000 {
+                parts.append([
+                  "inline_data": [
+                    "mime_type": mimeTypeForGemini,
+                    "data": data.base64EncodedString(),
+                  ],
+                ])
+              } else {
+                let fileUri = try await uploadFile(
+                  data: data,
+                  mimeType: mimeTypeForGemini,
+                  displayName: attachment.filename ?? "Document",
+                  apiKey: apiKey,
+                )
+                parts.append([
+                  "file_data": [
+                    "mime_type": mimeTypeForGemini,
+                    "file_uri": fileUri,
+                  ],
+                ])
+              }
+          }
+
+        case let .text(text) where !text.isEmpty:
+          parts.append(["text": text])
+
+        default:
+          break
+      }
+    }
+
+    return parts
   }
 
   private func streamResponse(
@@ -205,190 +376,7 @@ public final class GeminiClient: APIClient, Sendable {
     let patchedMessages = Message.patchingOrphanedToolCalls(messages)
     var processedMessages: [[String: any Sendable]] = []
     for message in patchedMessages {
-      var parts: [[String: any Sendable]] = []
-
-      // Handle function calls
-      if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
-        for toolCall in toolCalls {
-          // Convert swift types from parameters to native types compatible with JSON serialization
-          var nativeArgs: [String: any Sendable] = [:]
-          for (key, value) in toolCall.parameters {
-            nativeArgs[key] = value.toAny()
-          }
-          let toolCallDict: [String: any Sendable] = [
-            "name": toolCall.name,
-            "args": nativeArgs,
-          ]
-          var partDict: [String: any Sendable] = [
-            "functionCall": toolCallDict,
-          ]
-          // Include thoughtSignature if present (required for Gemini tool use)
-          if let thoughtSignature = toolCall.providerMetadata?["thoughtSignature"] {
-            partDict["thoughtSignature"] = thoughtSignature
-          }
-          parts.append(partDict)
-        }
-      }
-
-      // Handle function results (tool results)
-      // TODO: Verify Gemini's support for multi-content tool results.
-      // Current approach: text goes in response.output, binary data in inlineData parts.
-      // Need to confirm this structure is correct per Gemini API docs and test with
-      // actual multi-content responses (text + image, multiple images, etc.)
-      if let toolResults = message.toolResults, !toolResults.isEmpty {
-        // Create a separate functionResponse part for each function result
-        for toolResult in toolResults {
-          var functionResponse: [String: any Sendable] = [
-            "name": toolResult.name,
-          ]
-
-          // Handle error results
-          if toolResult.isError == true {
-            let errorText = toolResult.content.compactMap { content -> String? in
-              if case let .text(text) = content { return text }
-              return nil
-            }.joined(separator: "\n")
-            functionResponse["response"] = ["error": errorText.isEmpty ? "Unknown error" : errorText] as [String: any Sendable]
-          } else {
-            // Process content items
-            var inlineDataParts: [[String: any Sendable]] = []
-            var textOutput: String? = nil
-
-            for content in toolResult.content {
-              switch content {
-                case let .text(text):
-                  textOutput = text
-                case let .image(data, mimeType):
-                  let mediaType = mimeType ?? "image/png"
-                  inlineDataParts.append([
-                    "inlineData": [
-                      "mimeType": mediaType,
-                      "data": data.base64EncodedString(),
-                    ] as [String: any Sendable],
-                  ])
-                case let .audio(data, mimeType):
-                  inlineDataParts.append([
-                    "inlineData": [
-                      "mimeType": mimeType,
-                      "data": data.base64EncodedString(),
-                    ] as [String: any Sendable],
-                  ])
-                case let .file(data, mimeType, _):
-                  inlineDataParts.append([
-                    "inlineData": [
-                      "mimeType": mimeType,
-                      "data": data.base64EncodedString(),
-                    ] as [String: any Sendable],
-                  ])
-              }
-            }
-
-            functionResponse["response"] = ["output": textOutput ?? (inlineDataParts.isEmpty ? "" : "Content provided")] as [String: any Sendable]
-            if !inlineDataParts.isEmpty {
-              functionResponse["parts"] = inlineDataParts
-            }
-          }
-
-          parts.append(["functionResponse": functionResponse])
-        }
-      }
-
-      // Add attachments
-      if !message.attachments.isEmpty {
-        for attachment in message.attachments {
-          switch attachment.kind {
-            case let .image(data, mimeType):
-              do {
-                // Resize image if necessary before encoding
-                let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
-                parts.append([
-                  "inline_data": [
-                    "mime_type": mimeType,
-                    "data": processedImageData.base64EncodedString(),
-                  ],
-                ])
-              } catch {
-                geminiLogger.error("Failed to process image: \(error.localizedDescription)")
-                throw error
-              }
-            case let .video(data, mimeType):
-              // Videos must use the File API due to size
-              do {
-                let fileUri = try await uploadFile(
-                  data: data,
-                  mimeType: mimeType,
-                  displayName: attachment.filename ?? "Video",
-                  apiKey: apiKey,
-                )
-                parts.append([
-                  "file_data": [
-                    "mime_type": mimeType,
-                    "file_uri": fileUri,
-                  ],
-                ])
-              } catch {
-                geminiLogger.error("Failed to upload video: \(error.localizedDescription)")
-                throw error
-              }
-            case let .audio(data, mimeType):
-              do {
-                let fileUri = try await uploadFile(
-                  data: data,
-                  mimeType: mimeType,
-                  displayName: attachment.filename ?? "Audio",
-                  apiKey: apiKey,
-                )
-                parts.append([
-                  "file_data": [
-                    "mime_type": mimeType,
-                    "file_uri": fileUri,
-                  ],
-                ])
-              } catch {
-                geminiLogger.error("Failed to upload audio: \(error.localizedDescription)")
-                throw error
-              }
-            case let .document(data, mimeType):
-              // For documents under 20MB, use inline data
-              let mimeTypeForGemini = switch mimeType {
-                case "net.daringfireball.markdown", "text/x-markdown": "text/md"
-                default: mimeType
-              }
-              if data.count < 20_000_000 {
-                parts.append([
-                  "inline_data": [
-                    "mime_type": mimeTypeForGemini,
-                    "data": data.base64EncodedString(),
-                  ],
-                ])
-              } else {
-                // For larger documents, use the File API
-                do {
-                  let fileUri = try await uploadFile(
-                    data: data,
-                    mimeType: mimeTypeForGemini,
-                    displayName: attachment.filename ?? "Document",
-                    apiKey: apiKey,
-                  )
-                  parts.append([
-                    "file_data": [
-                      "mime_type": mimeTypeForGemini,
-                      "file_uri": fileUri,
-                    ],
-                  ])
-                } catch {
-                  geminiLogger.error("Failed to upload document: \(error.localizedDescription)")
-                  throw error
-                }
-              }
-          }
-        }
-      }
-
-      // Add text part after attachments
-      if let content = message.content, !content.isEmpty {
-        parts.append(["text": content])
-      }
+      let parts = try await requestParts(for: message, apiKey: apiKey)
 
       let role = switch message.role {
         case .assistant: "model" // Gemini uses "model" instead of "assistant"
@@ -686,7 +674,7 @@ public final class GeminiClient: APIClient, Sendable {
                     if let thoughtSignature = part["thoughtSignature"] as? String {
                       providerMetadata = ["thoughtSignature": thoughtSignature]
                     }
-                    let toolCallResponse = GenerationResponse.ToolCall(
+                    let toolCallResponse = ToolCall(
                       name: name,
                       id: generateShortId(),
                       parameters: parameters,
@@ -918,7 +906,7 @@ public final class GeminiClient: APIClient, Sendable {
       modelId: modelId,
       tools: tools,
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, content: prompt)],
+      messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -941,7 +929,7 @@ public final class GeminiClient: APIClient, Sendable {
       modelId: modelId,
       tools: tools,
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, content: prompt)],
+      messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -976,7 +964,7 @@ public final class GeminiClient: APIClient, Sendable {
       var fullReasoningText = ""
       var fullResponseText = ""
       var notesText: String? = nil
-      var toolCalls: [GenerationResponse.ToolCall] = []
+      var toolCalls: [ToolCall] = []
       var usageMetadata: UsageMetadata?
       var finishReason: FinishReason?
 
@@ -1012,7 +1000,12 @@ public final class GeminiClient: APIClient, Sendable {
             let notesTextCopy = notesText
             let toolCallsCopy = toolCalls
             await MainActor.run {
-              update(.init(texts: .init(reasoning: fullReasoningTextCopy, response: fullResponseTextCopy, notes: notesTextCopy), toolCalls: toolCallsCopy))
+              update(.init(blocks: Self.assistantBlocks(
+                reasoningText: fullReasoningTextCopy,
+                responseText: fullResponseTextCopy,
+                notesText: notesTextCopy,
+                toolCalls: toolCallsCopy,
+              )))
             }
           }
 
@@ -1024,7 +1017,12 @@ public final class GeminiClient: APIClient, Sendable {
             let notesTextCopy = notesText
             let toolCallsCopy = toolCalls
             await MainActor.run {
-              update(.init(texts: .init(reasoning: fullReasoningTextCopy, response: fullResponseTextCopy, notes: notesTextCopy), toolCalls: toolCallsCopy))
+              update(.init(blocks: Self.assistantBlocks(
+                reasoningText: fullReasoningTextCopy,
+                responseText: fullResponseTextCopy,
+                notesText: notesTextCopy,
+                toolCalls: toolCallsCopy,
+              )))
             }
           }
 
@@ -1037,7 +1035,12 @@ public final class GeminiClient: APIClient, Sendable {
               let notesTextCopy = notesText
               let toolCallsCopy = toolCalls
               await MainActor.run {
-                update(.init(texts: .init(reasoning: fullReasoningTextCopy, response: fullResponseTextCopy, notes: notesTextCopy), toolCalls: toolCallsCopy))
+                update(.init(blocks: Self.assistantBlocks(
+                  reasoningText: fullReasoningTextCopy,
+                  responseText: fullResponseTextCopy,
+                  notesText: notesTextCopy,
+                  toolCalls: toolCallsCopy,
+                )))
               }
             }
           }
@@ -1073,11 +1076,15 @@ public final class GeminiClient: APIClient, Sendable {
         )
 
         // Return texts
-        return .init(texts: .init(
-          reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-          response: fullResponseText.isEmpty ? nil : fullResponseText,
-          notes: notesText,
-        ), toolCalls: toolCalls, metadata: metadata)
+        return .init(
+          blocks: Self.assistantBlocks(
+            reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+            responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+            notesText: notesText,
+            toolCalls: toolCalls,
+          ),
+          metadata: metadata,
+        )
       } catch let error as GeminiError {
         // Check if the task was cancelled
         if Task.isCancelled {
@@ -1090,11 +1097,14 @@ public final class GeminiClient: APIClient, Sendable {
             reasoningTokens: usageMetadata?.thoughtsTokenCount,
           )
           // Return partial results without throwing an error
-          return .init(texts: .init(
-            reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-            response: fullResponseText.isEmpty ? nil : fullResponseText,
-            notes: notesText,
-          ), toolCalls: [], metadata: partialMetadata)
+          return .init(
+            blocks: Self.assistantBlocks(
+              reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+              responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+              notesText: notesText,
+            ),
+            metadata: partialMetadata,
+          )
         }
 
         geminiLogger.warning("Gemini error: \(error.message)")
@@ -1117,11 +1127,15 @@ public final class GeminiClient: APIClient, Sendable {
             cacheReadInputTokens: usageMetadata?.cachedContentTokenCount,
             reasoningTokens: usageMetadata?.thoughtsTokenCount,
           )
-          return .init(texts: .init(
-            reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-            response: fullResponseText.isEmpty ? nil : fullResponseText,
-            notes: notesText,
-          ), toolCalls: toolCalls, metadata: partialMetadata)
+          return .init(
+            blocks: Self.assistantBlocks(
+              reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+              responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+              notesText: notesText,
+              toolCalls: toolCalls,
+            ),
+            metadata: partialMetadata,
+          )
         } else {
           throw error
         }

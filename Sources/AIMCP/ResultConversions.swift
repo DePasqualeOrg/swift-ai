@@ -113,11 +113,11 @@ public extension AI.ToolResult {
   }
 }
 
-// MARK: - GenerationResponse.ToolCall ↔ CallTool.Parameters
+// MARK: - ToolCall ↔ CallTool.Parameters
 
 public extension MCP.CallTool.Parameters {
   /// Creates MCP CallTool Parameters from an AI ToolCall.
-  init(_ toolCall: AI.GenerationResponse.ToolCall) {
+  init(_ toolCall: AI.ToolCall) {
     self.init(
       name: toolCall.name,
       arguments: toolCall.parameters.mcpValues,
@@ -125,7 +125,7 @@ public extension MCP.CallTool.Parameters {
   }
 }
 
-public extension AI.GenerationResponse.ToolCall {
+public extension AI.ToolCall {
   /// Creates an AI ToolCall from MCP CallTool Parameters.
   ///
   /// - Parameters:

@@ -35,7 +35,7 @@ public extension ChatCompletionsClient {
 ///   prompt: "Hello!",
 ///   apiKey: "your-api-key"
 /// )
-/// print(response.texts.response ?? "")
+/// print(response.blocks)
 /// ```
 @Observable
 public final class ChatCompletionsClient: APIClient, Sendable {
@@ -87,6 +87,156 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     self.session = session
   }
 
+  private static func assistantBlocks(
+    reasoningText: String? = nil,
+    responseText: String? = nil,
+    notesText: String? = nil,
+    toolCalls: [AI.ToolCall] = [],
+  ) -> [Message.Block] {
+    var blocks: [Message.Block] = []
+    if let reasoningText, !reasoningText.isEmpty {
+      blocks.append(.thinking(text: reasoningText, signature: nil))
+    }
+    if let responseText, !responseText.isEmpty {
+      blocks.append(.text(responseText))
+    }
+    if let notesText, !notesText.isEmpty {
+      blocks.append(.endnotes(notesText))
+    }
+    blocks.append(contentsOf: toolCalls.map { .toolCall($0) })
+    return blocks
+  }
+
+  private static func assistantSnapshot(from response: GenerationResponse) -> (reasoning: String?, response: String?, notes: String?, toolCalls: [AI.ToolCall]) {
+    var reasoningParts: [String] = []
+    var responseParts: [String] = []
+    var notesParts: [String] = []
+    var toolCalls: [AI.ToolCall] = []
+
+    for block in response.blocks {
+      switch block {
+        case let .thinking(text, _):
+          reasoningParts.append(text)
+        case let .text(text):
+          responseParts.append(text)
+        case let .endnotes(text):
+          notesParts.append(text)
+        case let .toolCall(toolCall):
+          toolCalls.append(toolCall)
+        default:
+          break
+      }
+    }
+
+    return (
+      reasoningParts.isEmpty ? nil : reasoningParts.joined(),
+      responseParts.isEmpty ? nil : responseParts.joined(),
+      notesParts.isEmpty ? nil : notesParts.joined(),
+      toolCalls,
+    )
+  }
+
+  private static func serializedToolCall(_ toolCall: AI.ToolCall) throws -> [String: any Sendable] {
+    let argumentsData = try JSONSerialization.data(withJSONObject: convertValueToSendable(toolCall.parameters), options: [])
+    guard let argumentsString = String(data: argumentsData, encoding: .utf8) else {
+      throw AIError.invalidRequest(message: "Failed to serialize function call arguments to JSON string")
+    }
+    return [
+      "id": toolCall.id,
+      "type": "function",
+      "function": [
+        "name": toolCall.name,
+        "arguments": argumentsString,
+      ],
+    ]
+  }
+
+  private static func requestMessages(for message: Message) async throws -> [[String: any Sendable]] {
+    if message.role == .tool {
+      return message.blocks.compactMap { block -> [String: any Sendable]? in
+        guard case let .toolResult(toolResult) = block else { return nil }
+
+        let resultContent = toolResult.content.map { content -> String in
+          switch content {
+            case let .text(text):
+              return text
+            case .image, .audio, .file:
+              openAILogger.warning("Tool '\(toolResult.name)' returned \(content.type.rawValue), which is not supported by ChatCompletions. Using fallback text.")
+              return content.fallbackDescription
+          }
+        }.joined(separator: "\n")
+
+        return [
+          "role": "function",
+          "name": toolResult.name,
+          "content": resultContent,
+        ]
+      }
+    }
+
+    var textParts: [String] = []
+    var toolCalls: [[String: any Sendable]] = []
+    var multimodalContent: [[String: any Sendable]] = []
+    var hasNonTextContent = false
+
+    for block in message.blocks {
+      switch block {
+        case let .text(text) where !text.isEmpty:
+          textParts.append(text)
+          multimodalContent.append([
+            "type": "text",
+            "text": text,
+          ])
+        case let .attachment(attachment):
+          hasNonTextContent = true
+          switch attachment.kind {
+            case let .image(data, mimeType):
+              let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+              multimodalContent.append([
+                "type": "image_url",
+                "image_url": [
+                  "url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: mimeType),
+                ],
+              ])
+            case .video, .audio:
+              break
+            case let .document(data, mimeType):
+              var fileDict: [String: any Sendable] = [
+                "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
+              ]
+              if let filename = attachment.filename {
+                fileDict["filename"] = filename
+              }
+              multimodalContent.append([
+                "type": "file",
+                "file": fileDict,
+              ])
+          }
+        case let .toolCall(toolCall):
+          try toolCalls.append(serializedToolCall(toolCall))
+        default:
+          break
+      }
+    }
+
+    var requestMessage: [String: any Sendable] = [
+      "role": message.role.rawValue,
+    ]
+
+    if !toolCalls.isEmpty {
+      requestMessage["tool_calls"] = toolCalls
+      requestMessage["content"] = textParts.joined()
+    } else if hasNonTextContent {
+      requestMessage["content"] = multimodalContent
+    } else if !textParts.isEmpty {
+      requestMessage["content"] = textParts.joined()
+    } else {
+      return []
+    }
+
+    return [requestMessage]
+  }
+
   private func streamResponse(
     messages: [Message],
     systemPrompt: String?,
@@ -114,100 +264,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       ])
     }
     for message in patchedMessages {
-      if let toolResults = message.toolResults, !toolResults.isEmpty {
-        // Handle function results (tool results)
-        // ChatCompletions only supports text in tool results
-        // TODO: Determine optimal handling for multi-content tool results.
-        // Current approach: concatenate text, use fallbackDescription for non-text.
-        // Alternatives to consider:
-        // - Base64 encode binary data inline (preserves data but bloated)
-        // - Upload to external storage and return URL
-        // - Structured JSON representation of all content
-        for toolResult in toolResults {
-          let resultContent: String
-          var texts: [String] = []
-          for content in toolResult.content {
-            switch content {
-              case let .text(text):
-                texts.append(text)
-              case .image, .audio, .file:
-                openAILogger.warning("Tool '\(toolResult.name)' returned \(content.type.rawValue), which is not supported by ChatCompletions. Using fallback text.")
-                texts.append(content.fallbackDescription)
-            }
-          }
-          resultContent = texts.joined(separator: "\n")
-          processedMessages.append([
-            "role": "function",
-            "name": toolResult.name,
-            "content": resultContent,
-          ])
-        }
-        // Add the user message text if it exists
-        if let content = message.content, !content.isEmpty {
-          processedMessages.append([
-            "role": message.role.rawValue,
-            "content": content,
-          ])
-        }
-      } else if !message.attachments.isEmpty {
-        var messageContent: [[String: any Sendable]] = []
-        // Add text content if present
-        if let content = message.content, !content.isEmpty {
-          messageContent.append([
-            "type": "text",
-            "text": content,
-          ])
-        }
-        // Process attachments
-        for attachment in message.attachments {
-          switch attachment.kind {
-            case let .image(data, mimeType):
-              do {
-                // Resize image if necessary before encoding
-                let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
-                messageContent.append([
-                  "type": "image_url",
-                  "image_url": [
-                    "url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: mimeType),
-                  ],
-                ])
-              } catch {
-                openAILogger.error("Failed to process image: \(error.localizedDescription)")
-                throw error
-              }
-            case .video:
-              // Not supported
-              break
-            case .audio:
-              // Not supported
-              break
-            case let .document(data, mimeType):
-              // Some OpenAI models support PDF files.
-              var fileDict: [String: any Sendable] = [
-                "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
-              ]
-              if let filename = attachment.filename {
-                fileDict["filename"] = filename
-              }
-              messageContent.append([
-                "type": "file",
-                "file": fileDict,
-              ])
-          }
-        }
-        processedMessages.append([
-          "role": message.role.rawValue,
-          "content": messageContent,
-        ])
-      } else {
-        // Handle text-only messages
-        if let content = message.content {
-          processedMessages.append([
-            "role": message.role.rawValue,
-            "content": content,
-          ])
-        }
-      }
+      try await processedMessages.append(contentsOf: Self.requestMessages(for: message))
     }
     var body: [String: any Sendable] = [
       "model": modelId,
@@ -270,7 +327,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               }
               try handleErrorResponse(httpResponse, data: errorData)
             }
-            var toolCalls: [GenerationResponse.ToolCall] = []
+            var toolCalls: [AI.ToolCall] = []
             var functionCallArguments: [Int: String] = [:] // Accumulate arguments by index
             var metadata = GenerationResponse.Metadata()
             var lastFinishReason: String?
@@ -321,7 +378,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                          let name = function.name,
                          index >= toolCalls.count
                       {
-                        toolCalls.append(GenerationResponse.ToolCall(
+                        toolCalls.append(AI.ToolCall(
                           name: name,
                           id: id,
                           parameters: [:],
@@ -337,7 +394,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                         if let argsData = accumulatedArgs.data(using: .utf8),
                            let parsedArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
                         {
-                          toolCalls[index] = GenerationResponse.ToolCall(
+                          toolCalls[index] = AI.ToolCall(
                             name: toolCalls[index].name,
                             id: toolCalls[index].id,
                             parameters: parsedArgs,
@@ -352,11 +409,15 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                   if reasoningText != nil || responseText != nil || notesText != nil || !toolCalls.isEmpty || lastFinishReason != nil {
                     var currentMetadata = metadata
                     currentMetadata.finishReason = parseFinishReason(lastFinishReason)
-                    continuation.yield(GenerationResponse(texts: .init(
-                      reasoning: reasoningText,
-                      response: responseText,
-                      notes: notesText,
-                    ), toolCalls: toolCalls, metadata: currentMetadata))
+                    continuation.yield(GenerationResponse(
+                      blocks: Self.assistantBlocks(
+                        reasoningText: reasoningText,
+                        responseText: responseText,
+                        notesText: notesText,
+                        toolCalls: toolCalls,
+                      ),
+                      metadata: currentMetadata,
+                    ))
                   } else {
                     continue
                   }
@@ -365,11 +426,10 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                   if lastFinishReason != nil {
                     var currentMetadata = metadata
                     currentMetadata.finishReason = parseFinishReason(lastFinishReason)
-                    continuation.yield(GenerationResponse(texts: .init(
-                      reasoning: nil,
-                      response: nil,
-                      notes: nil,
-                    ), toolCalls: toolCalls, metadata: currentMetadata))
+                    continuation.yield(GenerationResponse(
+                      blocks: Self.assistantBlocks(toolCalls: toolCalls),
+                      metadata: currentMetadata,
+                    ))
                   }
                   continue
                 }
@@ -400,7 +460,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               }
               let reasoningText = message.reasoningContent
               let responseText = message.content
-              var toolCalls: [GenerationResponse.ToolCall] = []
+              var toolCalls: [AI.ToolCall] = []
 
               // Get tool calls if available
               if let messageToolCalls = message.toolCalls {
@@ -419,7 +479,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                       openAILogger.error("Failed to parse function call arguments for call ID \(id): \(arguments)")
                       parameters = ["_parseError": .string("Failed to parse arguments JSON"), "_rawArguments": .string(arguments)]
                     }
-                    toolCalls.append(GenerationResponse.ToolCall(
+                    toolCalls.append(AI.ToolCall(
                       name: name,
                       id: id,
                       parameters: parameters,
@@ -441,11 +501,15 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               )
               // Perplexity citations
               let notesText = formatCitations(completionResponse.citations)
-              continuation.yield(.init(texts: .init(
-                reasoning: reasoningText,
-                response: responseText,
-                notes: notesText,
-              ), toolCalls: toolCalls, metadata: metadata))
+              continuation.yield(.init(
+                blocks: Self.assistantBlocks(
+                  reasoningText: reasoningText,
+                  responseText: responseText,
+                  notesText: notesText,
+                  toolCalls: toolCalls,
+                ),
+                metadata: metadata,
+              ))
             } catch {
               openAILogger.error("Failed to parse non-streamed content: \(error.localizedDescription)")
               throw error
@@ -611,7 +675,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       modelId: modelId,
       tools: tools,
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, content: prompt)],
+      messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -634,7 +698,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       modelId: modelId,
       tools: tools,
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, content: prompt)],
+      messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -665,7 +729,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       var fullReasoningText = ""
       var fullResponseText = ""
       var notesText: String?
-      var toolCalls: [GenerationResponse.ToolCall] = []
+      var toolCalls: [AI.ToolCall] = []
       var finalMetadata: GenerationResponse.Metadata?
       do {
         let stream = try await streamResponse(
@@ -682,16 +746,16 @@ public final class ChatCompletionsClient: APIClient, Sendable {
         )
         for try await chunk in stream {
           try Task.checkCancellation()
-          if let reasoningTextChunk = chunk.texts.reasoning {
+          let snapshot = Self.assistantSnapshot(from: chunk)
+          if let reasoningTextChunk = snapshot.reasoning {
             fullReasoningText += reasoningTextChunk
           }
-          if let responseTextChunk = chunk.texts.response {
+          if let responseTextChunk = snapshot.response {
             fullResponseText += responseTextChunk
           }
-          notesText = chunk.texts.notes
-          // Add any function calls from the response
-          if !chunk.toolCalls.isEmpty {
-            toolCalls = chunk.toolCalls
+          notesText = snapshot.notes
+          if !snapshot.toolCalls.isEmpty {
+            toolCalls = snapshot.toolCalls
           }
           // Capture metadata from chunks (metadata accumulates, later values override)
           if let chunkMetadata = chunk.metadata {
@@ -703,25 +767,37 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           let toolCallsCopy = toolCalls
           let metadataCopy = finalMetadata
           await MainActor.run {
-            update(.init(texts: .init(
-              reasoning: fullReasoningTextCopy.isEmpty ? nil : fullReasoningTextCopy,
-              response: fullResponseTextCopy.isEmpty ? nil : fullResponseTextCopy,
-              notes: notesTextCopy,
-            ), toolCalls: toolCallsCopy, metadata: metadataCopy))
+            update(.init(
+              blocks: Self.assistantBlocks(
+                reasoningText: fullReasoningTextCopy.isEmpty ? nil : fullReasoningTextCopy,
+                responseText: fullResponseTextCopy.isEmpty ? nil : fullResponseTextCopy,
+                notesText: notesTextCopy,
+                toolCalls: toolCallsCopy,
+              ),
+              metadata: metadataCopy,
+            ))
           }
         }
-        return .init(texts: .init(
-          reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-          response: fullResponseText.isEmpty ? nil : fullResponseText,
-          notes: notesText,
-        ), toolCalls: toolCalls, metadata: finalMetadata)
+        return .init(
+          blocks: Self.assistantBlocks(
+            reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+            responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+            notesText: notesText,
+            toolCalls: toolCalls,
+          ),
+          metadata: finalMetadata,
+        )
       } catch {
         if error is CancellationError {
-          return .init(texts: .init(
-            reasoning: fullReasoningText.isEmpty ? nil : fullReasoningText,
-            response: fullResponseText.isEmpty ? nil : fullResponseText,
-            notes: notesText,
-          ), toolCalls: toolCalls, metadata: finalMetadata)
+          return .init(
+            blocks: Self.assistantBlocks(
+              reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+              responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+              notesText: notesText,
+              toolCalls: toolCalls,
+            ),
+            metadata: finalMetadata,
+          )
         } else {
           throw error
         }

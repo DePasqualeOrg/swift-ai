@@ -112,7 +112,11 @@ struct Translate {
       prompt: text,
       apiKey: apiKey,
     )
-    guard let translation = response.texts.response else {
+    let translation = response.blocks.compactMap { block -> String? in
+      guard case let .text(text) = block else { return nil }
+      return text
+    }.joined()
+    guard !translation.isEmpty else {
       throw TranslateError.emptyResponse
     }
     return translation
@@ -139,7 +143,7 @@ enum AgenticLoopExample {
     print()
 
     // Conversation history for multi-turn use
-    var messages = [Message(role: .user, content: prompt)]
+    var messages = [Message(role: .user, blocks: [.text(prompt)])]
     var iteration = 0
     let maxIterations = 50
 
@@ -158,34 +162,43 @@ enum AgenticLoopExample {
         apiKey: apiKey,
       )
 
+      let toolCalls = response.blocks.compactMap { block -> ToolCall? in
+        guard case let .toolCall(toolCall) = block else { return nil }
+        return toolCall
+      }
+      let responseText = response.blocks.compactMap { block -> String? in
+        guard case let .text(text) = block else { return nil }
+        return text
+      }.joined()
+
       // No tool calls means model is done
-      if response.toolCalls.isEmpty {
+      if toolCalls.isEmpty {
         print("[Model returned final response]")
         print()
-        print(response.texts.response ?? "")
+        print(responseText)
         print()
         break
       }
 
-      print("[Model requested \(response.toolCalls.count) tool \(response.toolCalls.count == 1 ? "call" : "calls")]")
+      print("[Model requested \(toolCalls.count) tool \(toolCalls.count == 1 ? "call" : "calls")]")
       print()
 
       // Add assistant message (with tool calls) to history
       messages.append(response.message)
 
-      for call in response.toolCalls {
+      for call in toolCalls {
         print("Tool call: \(call.name)")
         print("Arguments: \(call.parameters)")
         print()
       }
 
-      print("[Calling \(response.toolCalls.count == 1 ? "tool" : "tools in parallel")...]")
-      let results = await Tools(tools).call(response.toolCalls)
+      print("[Calling \(toolCalls.count == 1 ? "tool" : "tools in parallel")...]")
+      let results = await Tools(tools).call(toolCalls)
       print()
 
-      for result in results {
-        let text = result.content.map { $0.fallbackDescription }.joined()
-        print("Tool result (\(result.name)): \(text)")
+      for execution in results {
+        let text = execution.result.content.map { $0.fallbackDescription }.joined()
+        print("Tool result (\(execution.result.name)): \(text)")
       }
       print()
 

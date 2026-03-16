@@ -40,7 +40,11 @@
 /// )
 ///
 /// // Execute tool calls
-/// let results = await tools.call(response.toolCalls)
+/// let toolCalls = response.blocks.compactMap { block -> ToolCall? in
+///   guard case let .toolCall(toolCall) = block else { return nil }
+///   return toolCall
+/// }
+/// let results = await tools.call(toolCalls)
 /// messages.append(results.message)
 /// ```
 public protocol ToolSpec: Sendable {

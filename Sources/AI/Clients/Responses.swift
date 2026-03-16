@@ -20,7 +20,7 @@ import SSE
 ///   prompt: "Hello!",
 ///   apiKey: "your-api-key"
 /// )
-/// print(response.texts.response ?? "")
+/// print(response.blocks)
 /// ```
 @Observable
 public final class ResponsesClient: APIClient, Sendable {
@@ -85,6 +85,287 @@ public final class ResponsesClient: APIClient, Sendable {
     static let functionCallOutput = "function_call_output"
   }
 
+  private static func filteringParseErrorToolCalls(in blocks: [Message.Block]) -> [Message.Block] {
+    blocks.filter { block in
+      guard case let .toolCall(toolCall) = block else { return true }
+      return !toolCall.parameters.keys.contains("_parseError")
+    }
+  }
+
+  private struct StreamingResponseState {
+    var indexedBlocks: [Int: Message.Block] = [:]
+    var fallbackBlocks: [Message.Block] = []
+    var toolCallArgumentBuffers: [Int: String] = [:]
+
+    var blocks: [Message.Block] {
+      indexedBlocks.keys.sorted().compactMap { indexedBlocks[$0] } + fallbackBlocks
+    }
+
+    mutating func appendTextDelta(_ delta: String, outputIndex: Int?) {
+      append(delta: delta, outputIndex: outputIndex, as: { .text($0) })
+    }
+
+    mutating func appendReasoningDelta(_ delta: String, outputIndex: Int?) {
+      append(delta: delta, outputIndex: outputIndex) { existing in
+        let separator = existing.isEmpty || delta.isEmpty || existing.hasSuffix("\n") ? "" : "\n"
+        return .thinking(text: existing + separator + delta, signature: nil)
+      } create: {
+        .thinking(text: delta, signature: nil)
+      }
+    }
+
+    mutating func setToolCall(_ toolCall: ToolCall, outputIndex: Int?) {
+      guard let outputIndex else {
+        appendFallback(.toolCall(toolCall))
+        return
+      }
+      indexedBlocks[outputIndex] = .toolCall(toolCall)
+      toolCallArgumentBuffers[outputIndex] = ""
+    }
+
+    mutating func appendToolCallArgumentsDelta(_ delta: String, outputIndex: Int) {
+      let existingArgsString = toolCallArgumentBuffers[outputIndex] ?? ""
+      let newArgsString = existingArgsString + delta
+      toolCallArgumentBuffers[outputIndex] = newArgsString
+
+      guard case let .toolCall(currentToolCall)? = indexedBlocks[outputIndex] else { return }
+      guard let argsData = newArgsString.data(using: .utf8),
+            let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
+      else {
+        return
+      }
+
+      var updatedToolCall = currentToolCall
+      updatedToolCall.parameters = partialArgs
+      indexedBlocks[outputIndex] = .toolCall(updatedToolCall)
+    }
+
+    mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int) {
+      toolCallArgumentBuffers.removeValue(forKey: outputIndex)
+      guard case let .toolCall(currentToolCall)? = indexedBlocks[outputIndex] else { return }
+
+      var updatedToolCall = currentToolCall
+      if let argumentsData = argumentsString.data(using: .utf8),
+         let parsedArguments = try? JSONDecoder().decode([String: Value].self, from: argumentsData)
+      {
+        updatedToolCall.parameters = parsedArguments
+      } else {
+        openAIResponsesLogger.error("Failed to parse final function call arguments for output index \(outputIndex): \(argumentsString)")
+        updatedToolCall.parameters = ["_parseError": .string("Failed to parse arguments JSON")]
+      }
+
+      indexedBlocks[outputIndex] = .toolCall(updatedToolCall)
+    }
+
+    private mutating func append(
+      delta: String,
+      outputIndex: Int?,
+      as createBlock: (String) -> Message.Block,
+    ) {
+      append(delta: delta, outputIndex: outputIndex) { existing in
+        createBlock(existing + delta)
+      } create: {
+        createBlock(delta)
+      }
+    }
+
+    private mutating func append(
+      delta _: String,
+      outputIndex: Int?,
+      update: (String) -> Message.Block,
+      create: () -> Message.Block,
+    ) {
+      guard let outputIndex else {
+        appendFallback(create())
+        return
+      }
+
+      switch indexedBlocks[outputIndex] {
+        case let .text(existingText)?:
+          indexedBlocks[outputIndex] = update(existingText)
+        case let .thinking(text: existingText, signature: nil)?:
+          indexedBlocks[outputIndex] = update(existingText)
+        default:
+          indexedBlocks[outputIndex] = create()
+      }
+    }
+
+    private mutating func appendFallback(_ block: Message.Block) {
+      guard let lastBlock = fallbackBlocks.last else {
+        fallbackBlocks.append(block)
+        return
+      }
+
+      switch (lastBlock, block) {
+        case let (.text(existing), .text(delta)):
+          fallbackBlocks[fallbackBlocks.count - 1] = .text(existing + delta)
+        case let (.thinking(text: existing, signature: existingSignature), .thinking(text: delta, signature: nil)):
+          fallbackBlocks[fallbackBlocks.count - 1] = .thinking(text: existing + (existing.hasSuffix("\n") ? "" : "\n") + delta, signature: existingSignature)
+        default:
+          fallbackBlocks.append(block)
+      }
+    }
+  }
+
+  private static func inputItems(for message: Message) async throws -> [[String: any Sendable]] {
+    switch message.role {
+      case .user:
+        var contentItems: [[String: any Sendable]] = []
+        for block in message.blocks {
+          switch block {
+            case let .text(text) where !text.isEmpty:
+              contentItems.append([
+                "type": ContentType.inputText,
+                "text": text,
+              ])
+            case let .attachment(attachment):
+              switch attachment.kind {
+                case let .image(data, mimeType):
+                  let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+                  contentItems.append([
+                    "type": ContentType.inputImage,
+                    "detail": "auto",
+                    "image_url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: mimeType),
+                  ])
+                case let .document(data, mimeType):
+                  var contentItem: [String: any Sendable] = [
+                    "type": ContentType.inputFile,
+                    "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
+                  ]
+                  if let fileName = attachment.filename {
+                    contentItem["filename"] = fileName
+                  }
+                  contentItems.append(contentItem)
+                case .video, .audio:
+                  break
+              }
+            default:
+              break
+          }
+        }
+        guard !contentItems.isEmpty else { return [] }
+        return [[
+          "type": ContentType.message,
+          "role": "user",
+          "content": contentItems,
+        ]]
+
+      case .assistant:
+        var items: [[String: any Sendable]] = []
+        var contentItems: [[String: any Sendable]] = []
+
+        func flushContentItems() {
+          guard !contentItems.isEmpty else { return }
+          items.append([
+            "type": ContentType.message,
+            "role": "assistant",
+            "content": contentItems,
+          ])
+          contentItems.removeAll(keepingCapacity: true)
+        }
+
+        for block in message.blocks {
+          switch block {
+            case let .text(text) where !text.isEmpty:
+              contentItems.append([
+                "type": ContentType.outputText,
+                "text": text,
+              ])
+            case let .toolCall(toolCall):
+              flushContentItems()
+              let foundationParams = Self.convertValueToSendable(toolCall.parameters)
+              let argumentsData = try JSONSerialization.data(withJSONObject: foundationParams, options: [])
+              guard let argumentsString = String(data: argumentsData, encoding: .utf8) else {
+                throw AIError.invalidRequest(message: "Failed to serialize function call arguments to JSON string")
+              }
+              items.append([
+                "type": ContentType.functionCall,
+                "call_id": toolCall.id,
+                "name": toolCall.name,
+                "arguments": argumentsString,
+              ])
+            default:
+              break
+          }
+        }
+
+        flushContentItems()
+        return items
+
+      case .tool:
+        return message.blocks.compactMap { block -> [String: any Sendable]? in
+          guard case let .toolResult(toolResult) = block else { return nil }
+
+          let resultOutput: any Sendable
+          if toolResult.isError == true {
+            let errorText = toolResult.content.compactMap { content -> String? in
+              if case let .text(text) = content { return text }
+              return nil
+            }.joined(separator: "\n")
+            resultOutput = "{\"error\": \"\((errorText.isEmpty ? "Unknown error" : errorText).replacingOccurrences(of: "\"", with: "\\\""))\"}"
+          } else {
+            var outputItems: [[String: any Sendable]] = []
+            var textOutputs: [String] = []
+
+            for content in toolResult.content {
+              switch content {
+                case let .text(text):
+                  textOutputs.append(text)
+                case let .image(data, mimeType):
+                  let mediaType = mimeType ?? "image/png"
+                  let dataURL = "data:\(mediaType);base64,\(data.base64EncodedString())"
+                  outputItems.append([
+                    "type": ContentType.inputImage,
+                    "detail": "auto",
+                    "image_url": dataURL,
+                  ])
+                case let .audio(data, mimeType):
+                  openAIResponsesLogger.warning("Tool '\(toolResult.name)' returned audio, which is not supported by Responses API. Using fallback text.")
+                  textOutputs.append(ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription)
+                case let .file(data, mimeType, filename):
+                  if mimeType.hasPrefix("image/") {
+                    let dataURL = "data:\(mimeType);base64,\(data.base64EncodedString())"
+                    outputItems.append([
+                      "type": ContentType.inputImage,
+                      "detail": "auto",
+                      "image_url": dataURL,
+                    ])
+                  } else {
+                    var fileItem: [String: any Sendable] = [
+                      "type": ContentType.inputFile,
+                      "file_data": data.base64EncodedString(),
+                    ]
+                    if let filename {
+                      fileItem["filename"] = filename
+                    }
+                    outputItems.append(fileItem)
+                  }
+              }
+            }
+
+            let textOutput = textOutputs.joined(separator: "\n")
+            if !textOutput.isEmpty, outputItems.isEmpty {
+              resultOutput = textOutput
+            } else if !outputItems.isEmpty {
+              resultOutput = outputItems
+            } else {
+              resultOutput = textOutput
+            }
+          }
+
+          return [
+            "type": ContentType.functionCallOutput,
+            "call_id": toolResult.id,
+            "output": resultOutput,
+          ]
+        }
+
+      case .system, .developer:
+        openAIResponsesLogger.warning("System/Developer message found in input array for ResponsesClient. Ignoring, use 'instructions' parameter instead.")
+        return []
+    }
+  }
+
   // MARK: - Streaming Event Types
 
   private enum StreamEventType {
@@ -137,177 +418,7 @@ public final class ResponsesClient: APIClient, Sendable {
     let patchedInput = Message.patchingOrphanedToolCalls(input)
     var inputContent: [[String: any Sendable]] = []
     for message in patchedInput {
-      switch message.role {
-        case .user:
-          var contentItems: [[String: any Sendable]] = []
-          // Add text content if present
-          if let content = message.content, !content.isEmpty {
-            contentItems.append([
-              "type": ContentType.inputText,
-              "text": content,
-            ])
-          }
-          // Process attachments
-          if !message.attachments.isEmpty {
-            for attachment in message.attachments {
-              switch attachment.kind {
-                case let .image(data, mimeType):
-                  do {
-                    let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
-                    contentItems.append([
-                      "type": ContentType.inputImage,
-                      "detail": "auto",
-                      "image_url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: mimeType),
-                    ])
-                  } catch {
-                    openAIResponsesLogger.error("Failed to process image: \(error.localizedDescription)")
-                    throw error
-                  }
-                case let .document(data, mimeType):
-                  var contentItem = [
-                    "type": ContentType.inputFile,
-                    "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
-                  ]
-                  if let fileName = attachment.filename {
-                    contentItem["filename"] = fileName
-                  }
-                  contentItems.append(contentItem)
-                case .video, .audio:
-                  // Not supported yet
-                  break
-              }
-            }
-          }
-          // Only add user message if it has content
-          if !contentItems.isEmpty {
-            inputContent.append([
-              "type": ContentType.message,
-              "role": "user",
-              "content": contentItems,
-            ])
-          }
-
-        case .assistant:
-          var contentItems: [[String: any Sendable]] = []
-          // Add text output if present
-          if let content = message.content, !content.isEmpty {
-            contentItems.append([
-              "type": ContentType.outputText,
-              "text": content,
-            ])
-          }
-          // Only add assistant message if it has content
-          if !contentItems.isEmpty {
-            inputContent.append([
-              "type": ContentType.message,
-              "role": "assistant",
-              "content": contentItems,
-            ])
-          }
-
-          // If the assistant message contained function calls that were executed,
-          // add them now as separate top-level items before the function results.
-          // This represents the model's turn where it decided to call functions.
-          if let toolCalls = message.toolCalls, !toolCalls.isEmpty {
-            for toolCall in toolCalls {
-              // Convert parameters to Foundation types before serializing
-              let foundationParams = Self.convertValueToSendable(toolCall.parameters)
-              let argumentsData = try JSONSerialization.data(withJSONObject: foundationParams, options: [])
-              guard let argumentsString = String(data: argumentsData, encoding: .utf8) else {
-                throw AIError.invalidRequest(message: "Failed to serialize function call arguments to JSON string")
-              }
-              inputContent.append([
-                "type": ContentType.functionCall,
-                "call_id": toolCall.id,
-                "name": toolCall.name,
-                "arguments": argumentsString,
-              ])
-            }
-          }
-
-        case .tool:
-          // Handle function results. These become top-level items.
-          // TODO: Verify OpenAI Responses API support for multi-content tool results.
-          // Current approach: text as string output, images as data URLs, files as input_file.
-          // Audio falls back to description text. Need to test with actual multi-content
-          // responses and confirm the output format is correct per API docs.
-          if let toolResults = message.toolResults, !toolResults.isEmpty {
-            for toolResult in toolResults {
-              let callId = toolResult.id
-              // The output can be a string or an array of content items
-              let resultOutput: any Sendable
-
-              // Handle error results
-              if toolResult.isError == true {
-                let errorText = toolResult.content.compactMap { content -> String? in
-                  if case let .text(text) = content { return text }
-                  return nil
-                }.joined(separator: "\n")
-                resultOutput = "{\"error\": \"\((errorText.isEmpty ? "Unknown error" : errorText).replacingOccurrences(of: "\"", with: "\\\""))\"}"
-              } else {
-                // Process content items
-                var outputItems: [[String: any Sendable]] = []
-                var textOutput: String? = nil
-
-                for content in toolResult.content {
-                  switch content {
-                    case let .text(text):
-                      textOutput = text
-                    case let .image(data, mimeType):
-                      let mediaType = mimeType ?? "image/png"
-                      let dataUrl = "data:\(mediaType);base64,\(data.base64EncodedString())"
-                      outputItems.append([
-                        "type": "input_image",
-                        "detail": "auto",
-                        "image_url": dataUrl,
-                      ])
-                    case let .audio(data, mimeType):
-                      openAIResponsesLogger.warning("Tool '\(toolResult.name)' returned audio, which is not supported by Responses API. Using fallback text.")
-                      textOutput = ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription
-                    case let .file(data, mimeType, filename):
-                      if mimeType.hasPrefix("image/") {
-                        let dataUrl = "data:\(mimeType);base64,\(data.base64EncodedString())"
-                        outputItems.append([
-                          "type": "input_image",
-                          "detail": "auto",
-                          "image_url": dataUrl,
-                        ])
-                      } else {
-                        var fileItem: [String: any Sendable] = [
-                          "type": "input_file",
-                          "file_data": data.base64EncodedString(),
-                        ]
-                        if let name = filename {
-                          fileItem["filename"] = name
-                        }
-                        outputItems.append(fileItem)
-                      }
-                  }
-                }
-
-                // Use text if only text, otherwise use output items array
-                if let text = textOutput, outputItems.isEmpty {
-                  resultOutput = text
-                } else if !outputItems.isEmpty {
-                  resultOutput = outputItems
-                } else {
-                  resultOutput = textOutput ?? ""
-                }
-              }
-
-              inputContent.append([
-                "type": ContentType.functionCallOutput,
-                "call_id": callId,
-                "output": resultOutput,
-              ])
-            }
-          }
-
-        case .system, .developer:
-          // System/Developer roles are handled by the 'instructions' parameter, not in the input array.
-          // If they appear here, it might be an issue with how history is managed.
-          openAIResponsesLogger.warning("System/Developer message found in input array for ResponsesClient. Ignoring, use 'instructions' parameter instead.")
-      }
+      try await inputContent.append(contentsOf: Self.inputItems(for: message))
     }
 
     var body: [String: any Sendable] = [
@@ -618,7 +729,7 @@ public final class ResponsesClient: APIClient, Sendable {
       modelId: modelId,
       tools: tools,
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, content: prompt)],
+      messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -641,7 +752,7 @@ public final class ResponsesClient: APIClient, Sendable {
       modelId: modelId,
       tools: tools,
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, content: prompt)],
+      messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -674,10 +785,7 @@ public final class ResponsesClient: APIClient, Sendable {
         }
       }
 
-      var finalReasoningText: String? = nil
-      var finalResponseText: String? = nil
-      var finalEndnotesText: String? = nil
-      var finalFunctionCalls: [GenerationResponse.ToolCall] = []
+      var finalBlocks: [Message.Block] = []
       var finalMetadata: GenerationResponse.Metadata? = nil
 
       do {
@@ -699,54 +807,28 @@ public final class ResponsesClient: APIClient, Sendable {
         for try await chunk in stream {
           try Task.checkCancellation()
 
-          // Update final state from the latest yielded response
-          finalReasoningText = chunk.texts.reasoning
-          finalResponseText = chunk.texts.response
-          finalEndnotesText = chunk.texts.notes
-          finalFunctionCalls = chunk.toolCalls // This now includes completed and streaming calls
+          finalBlocks = chunk.blocks
           finalMetadata = chunk.metadata
 
-          // Create copies for the MainActor update closure
-          let reasoningCopy = finalReasoningText
-          let responseCopy = finalResponseText
-          let notesCopy = finalEndnotesText
-          let toolCallsCopy = finalFunctionCalls
-
           await MainActor.run {
-            update(.init(texts: .init(
-              reasoning: reasoningCopy, // Pass nil if empty handled by GenerationResponse init
-              response: responseCopy,
-              notes: notesCopy,
-            ), toolCalls: toolCallsCopy))
+            update(chunk)
           }
         }
 
         // If cancelled, return the state as it was when cancellation was detected
         if Task.isCancelled {
           openAIResponsesLogger.log("Generation task returning cancelled state")
-          return .init(texts: .init(
-            reasoning: finalReasoningText,
-            response: finalResponseText,
-            notes: finalEndnotesText,
-          ), toolCalls: finalFunctionCalls, metadata: finalMetadata)
+          return .init(blocks: finalBlocks, metadata: finalMetadata)
         }
 
         // Stream finished normally, return the final state
-        return .init(texts: .init(
-          reasoning: finalReasoningText,
-          response: finalResponseText,
-          notes: finalEndnotesText,
-        ), toolCalls: finalFunctionCalls.filter { !$0.parameters.keys.contains("_parseError") }, metadata: finalMetadata) // Filter out calls that failed final parsing
+        return .init(blocks: Self.filteringParseErrorToolCalls(in: finalBlocks), metadata: finalMetadata)
 
       } catch {
         // Handle cancellation error specifically if it bubbles up
         if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
           openAIResponsesLogger.log("Generation task caught cancellation error.")
-          return .init(texts: .init(
-            reasoning: finalReasoningText,
-            response: finalResponseText,
-            notes: finalEndnotesText,
-          ), toolCalls: finalFunctionCalls, metadata: finalMetadata)
+          return .init(blocks: finalBlocks, metadata: finalMetadata)
         } else {
           // Rethrow other errors
           openAIResponsesLogger.error("Generation failed: \(error)")
@@ -780,11 +862,7 @@ public final class ResponsesClient: APIClient, Sendable {
 
   private func processStreamingEvent(
     event: StreamEvent,
-    reasoningText: inout String,
-    responseText: inout String,
-    streamingFunctionCalls: inout [Int: GenerationResponse.ToolCall],
-    streamingArgumentsStrings: inout [Int: String],
-    completedFunctionCalls: inout [GenerationResponse.ToolCall],
+    streamingState: inout StreamingResponseState,
     continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
   ) throws {
     if let errorMessage = event.error?.message {
@@ -793,56 +871,44 @@ public final class ResponsesClient: APIClient, Sendable {
 
     guard let eventType = event.type else { return }
 
+    func yieldCurrentState() {
+      continuation.yield(GenerationResponse(blocks: streamingState.blocks))
+    }
+
     switch eventType {
       case StreamEventType.outputTextDelta:
         if let delta = event.delta {
-          responseText += delta
-          continuation.yield(GenerationResponse(texts: .init(
-            reasoning: reasoningText.isEmpty ? nil : reasoningText,
-            response: responseText,
-            notes: nil,
-          ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
+          streamingState.appendTextDelta(delta, outputIndex: event.outputIndex)
+          yieldCurrentState()
         }
 
       case StreamEventType.reasoningDelta, StreamEventType.reasoningSummaryDelta:
         if let delta = event.delta {
-          reasoningText += delta
-          continuation.yield(GenerationResponse(texts: .init(
-            reasoning: reasoningText,
-            response: responseText.isEmpty ? nil : responseText,
-            notes: nil,
-          ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
+          streamingState.appendReasoningDelta(delta, outputIndex: event.outputIndex)
+          yieldCurrentState()
         }
 
       case StreamEventType.outputItemAdded:
         if let item = event.item, let itemType = item.type {
           switch itemType {
             case OutputItemType.functionCall:
-              if let name = item.name, let callId = item.callId, let outputIndex = event.outputIndex {
-                streamingFunctionCalls[outputIndex] = GenerationResponse.ToolCall(
+              if let name = item.name, let callId = item.callId {
+                streamingState.setToolCall(ToolCall(
                   name: name,
                   id: callId,
                   parameters: [:],
-                )
-                streamingArgumentsStrings[outputIndex] = ""
-                continuation.yield(GenerationResponse(texts: .init(
-                  reasoning: reasoningText.isEmpty ? nil : reasoningText,
-                  response: responseText.isEmpty ? nil : responseText,
-                  notes: nil,
-                ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
+                ), outputIndex: event.outputIndex)
+                yieldCurrentState()
               }
             case OutputItemType.reasoning:
               if let summaryArray = item.summary {
-                for summaryItem in summaryArray {
-                  if let text = summaryItem.text {
-                    reasoningText = reasoningText + text + "\n"
-                  }
+                let summaryText = summaryArray
+                  .compactMap(\.text)
+                  .joined(separator: "\n")
+                if !summaryText.isEmpty {
+                  streamingState.appendReasoningDelta(summaryText, outputIndex: event.outputIndex)
+                  yieldCurrentState()
                 }
-                continuation.yield(GenerationResponse(texts: .init(
-                  reasoning: reasoningText.isEmpty ? nil : reasoningText,
-                  response: responseText.isEmpty ? nil : responseText,
-                  notes: nil,
-                ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
               } else {
                 openAIResponsesLogger.warning("Received reasoning item without expected summary array")
               }
@@ -859,88 +925,43 @@ public final class ResponsesClient: APIClient, Sendable {
 
       case StreamEventType.functionCallArgumentsDelta:
         if let delta = event.delta,
-           let outputIndex = event.outputIndex,
-           var currentCall = streamingFunctionCalls[outputIndex]
+           let outputIndex = event.outputIndex
         {
-          let existingArgsString = streamingArgumentsStrings[outputIndex] ?? ""
-          let newArgsString = existingArgsString + delta
-          streamingArgumentsStrings[outputIndex] = newArgsString
-
-          if let argsData = newArgsString.data(using: .utf8),
-             let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
-          {
-            currentCall.parameters = partialArgs
-            streamingFunctionCalls[outputIndex] = currentCall
-          }
-
-          continuation.yield(GenerationResponse(texts: .init(
-            reasoning: reasoningText.isEmpty ? nil : reasoningText,
-            response: responseText.isEmpty ? nil : responseText,
-            notes: nil,
-          ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
+          streamingState.appendToolCallArgumentsDelta(delta, outputIndex: outputIndex)
+          yieldCurrentState()
         }
 
       case StreamEventType.functionCallArgumentsDone:
         if let argumentsString = event.arguments,
-           let outputIndex = event.outputIndex,
-           var completedCall = streamingFunctionCalls.removeValue(forKey: outputIndex)
+           let outputIndex = event.outputIndex
         {
-          streamingArgumentsStrings.removeValue(forKey: outputIndex)
-
-          if let argumentsData = argumentsString.data(using: .utf8),
-             let parsedArguments = try? JSONDecoder().decode([String: Value].self, from: argumentsData)
-          {
-            completedCall.parameters = parsedArguments
-          } else {
-            openAIResponsesLogger.error("Failed to parse final function call arguments for output index \(outputIndex): \(argumentsString)")
-            completedCall.parameters = ["_parseError": .string("Failed to parse arguments JSON")]
-          }
-          completedFunctionCalls.append(completedCall)
-
-          continuation.yield(GenerationResponse(texts: .init(
-            reasoning: reasoningText.isEmpty ? nil : reasoningText,
-            response: responseText.isEmpty ? nil : responseText,
-            notes: nil,
-          ), toolCalls: completedFunctionCalls + Array(streamingFunctionCalls.values)))
+          streamingState.completeToolCallArguments(argumentsString, outputIndex: outputIndex)
+          yieldCurrentState()
         }
 
       case StreamEventType.completed:
-        // Fallback: Extract thinking text from completion if it wasn't streamed
-        if let outputArray = event.response?.output {
-          for item in outputArray {
-            if item.type == OutputItemType.reasoning, let summaryArray = item.summary {
-              for summaryItem in summaryArray {
-                if let text = summaryItem.text, reasoningText.isEmpty {
-                  reasoningText = text
-                }
-              }
-            }
-          }
-        }
-
         // Build and yield final response with metadata
         if let response = event.response {
           let generationResponse = response.toGenerationResponse()
-          var mergedToolCalls = completedFunctionCalls + Array(streamingFunctionCalls.values)
+          var finalBlocks = generationResponse.blocks
 
           // Some Responses API streams omit output_index on intermediate
           // function-call events. In that case, recover tool calls from the
           // final completed response payload instead of dropping them.
-          if !generationResponse.toolCalls.isEmpty {
-            var seenToolCallIDs = Set(mergedToolCalls.map(\.id))
-            for toolCall in generationResponse.toolCalls where !seenToolCallIDs.contains(toolCall.id) {
-              mergedToolCalls.append(toolCall)
-              seenToolCallIDs.insert(toolCall.id)
-            }
+          var seenToolCallIDs = Set(finalBlocks.compactMap { block -> String? in
+            guard case let .toolCall(toolCall) = block else { return nil }
+            return toolCall.id
+          })
+          for toolCall in streamingState.blocks.compactMap({ block -> ToolCall? in
+            guard case let .toolCall(toolCall) = block else { return nil }
+            return toolCall
+          }) where !seenToolCallIDs.contains(toolCall.id) {
+            finalBlocks.append(.toolCall(toolCall))
+            seenToolCallIDs.insert(toolCall.id)
           }
 
           continuation.yield(GenerationResponse(
-            texts: .init(
-              reasoning: reasoningText.isEmpty ? nil : reasoningText,
-              response: responseText.isEmpty ? generationResponse.texts.response : responseText,
-              notes: nil,
-            ),
-            toolCalls: mergedToolCalls,
+            blocks: finalBlocks,
             metadata: generationResponse.metadata,
           ))
         }
@@ -1173,11 +1194,7 @@ public final class ResponsesClient: APIClient, Sendable {
       try handleErrorResponse(httpResponse, data: errorData)
     }
 
-    var reasoningText = ""
-    var responseText = ""
-    var streamingFunctionCalls: [Int: GenerationResponse.ToolCall] = [:]
-    var streamingArgumentsStrings: [Int: String] = [:]
-    var completedFunctionCalls: [GenerationResponse.ToolCall] = []
+    var streamingState = StreamingResponseState()
 
     for try await event in result.events {
       try Task.checkCancellation()
@@ -1208,11 +1225,7 @@ public final class ResponsesClient: APIClient, Sendable {
 
         try processStreamingEvent(
           event: event,
-          reasoningText: &reasoningText,
-          responseText: &responseText,
-          streamingFunctionCalls: &streamingFunctionCalls,
-          streamingArgumentsStrings: &streamingArgumentsStrings,
-          completedFunctionCalls: &completedFunctionCalls,
+          streamingState: &streamingState,
           continuation: continuation,
         )
       } catch let error as AIError {
@@ -1451,10 +1464,7 @@ public final class ResponsesClient: APIClient, Sendable {
         }
       }
 
-      var finalReasoningText: String? = nil
-      var finalResponseText: String? = nil
-      var finalEndnotesText: String? = nil
-      var finalFunctionCalls: [GenerationResponse.ToolCall] = []
+      var finalBlocks: [Message.Block] = []
       var finalMetadata: GenerationResponse.Metadata? = nil
 
       let stream = AsyncThrowingStream<GenerationResponse, Error> { continuation in
@@ -1476,31 +1486,15 @@ public final class ResponsesClient: APIClient, Sendable {
       for try await chunk in stream {
         try Task.checkCancellation()
 
-        finalReasoningText = chunk.texts.reasoning
-        finalResponseText = chunk.texts.response
-        finalEndnotesText = chunk.texts.notes
-        finalFunctionCalls = chunk.toolCalls
+        finalBlocks = chunk.blocks
         finalMetadata = chunk.metadata
 
-        let reasoningCopy = finalReasoningText
-        let responseCopy = finalResponseText
-        let notesCopy = finalEndnotesText
-        let toolCallsCopy = finalFunctionCalls
-
         await MainActor.run {
-          update(.init(texts: .init(
-            reasoning: reasoningCopy,
-            response: responseCopy,
-            notes: notesCopy,
-          ), toolCalls: toolCallsCopy))
+          update(chunk)
         }
       }
 
-      return .init(texts: .init(
-        reasoning: finalReasoningText,
-        response: finalResponseText,
-        notes: finalEndnotesText,
-      ), toolCalls: finalFunctionCalls.filter { !$0.parameters.keys.contains("_parseError") }, metadata: finalMetadata)
+      return .init(blocks: Self.filteringParseErrorToolCalls(in: finalBlocks), metadata: finalMetadata)
     }
 
     await MainActor.run {
@@ -1871,31 +1865,28 @@ extension ResponsesClient {
 
     /// Converts the response object to a GenerationResponse
     func toGenerationResponse() -> GenerationResponse {
-      var responseText: String? = outputText
-      var reasoningText: String? = nil
-      var toolCalls: [GenerationResponse.ToolCall] = []
+      var blocks: [Message.Block] = []
 
-      if let outputArray = output {
+      if let outputArray = output, !outputArray.isEmpty {
         for item in outputArray {
           guard let itemType = item.type else { continue }
 
           switch itemType {
             case OutputItemType.message:
               if let contentArray = item.content {
-                for contentItem in contentArray {
-                  if contentItem.type == OutputItemType.outputText, let text = contentItem.text {
-                    if responseText == nil { responseText = "" }
-                    responseText! += text
+                for contentItem in contentArray where contentItem.type == OutputItemType.outputText {
+                  if let text = contentItem.text, !text.isEmpty {
+                    blocks.append(.text(text))
                   }
                 }
               }
             case OutputItemType.reasoning:
-              if let summaryArray = item.summary {
-                for summaryItem in summaryArray {
-                  if let text = summaryItem.text {
-                    reasoningText = (reasoningText ?? "") + text + "\n"
-                  }
-                }
+              let reasoningText = item.summary?
+                .compactMap(\.text)
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+              if let reasoningText, !reasoningText.isEmpty {
+                blocks.append(.thinking(text: reasoningText, signature: nil))
               }
             case OutputItemType.functionCall:
               if let name = item.name,
@@ -1908,26 +1899,31 @@ extension ResponsesClient {
                 {
                   parameters = parsedArgs
                 }
-                toolCalls.append(GenerationResponse.ToolCall(
+                blocks.append(.toolCall(ToolCall(
                   name: name,
                   id: callId,
                   parameters: parameters,
-                ))
+                )))
               }
             default:
               break
           }
         }
+      } else if let outputText, !outputText.isEmpty {
+        blocks.append(.text(outputText))
       }
 
-      reasoningText = reasoningText?.trimmingCharacters(in: .whitespacesAndNewlines)
-
       // Build metadata from response
+      let toolCallCount = blocks.reduce(into: 0) { count, block in
+        if case .toolCall = block {
+          count += 1
+        }
+      }
       let finishReason: GenerationResponse.FinishReason? = if let status {
         switch status {
           case "completed":
             // If there are function calls, the finish reason is tool use
-            toolCalls.isEmpty ? .stop : .toolUse
+            toolCallCount == 0 ? .stop : .toolUse
           case "incomplete":
             // Check the reason for incomplete status
             switch incompleteDetails?.reason {
@@ -1959,11 +1955,7 @@ extension ResponsesClient {
         reasoningTokens: usage?.outputTokensDetails?.reasoningTokens,
       )
 
-      return GenerationResponse(
-        texts: .init(reasoning: reasoningText, response: responseText, notes: nil),
-        toolCalls: toolCalls,
-        metadata: metadata,
-      )
+      return GenerationResponse(blocks: blocks, metadata: metadata)
     }
   }
 

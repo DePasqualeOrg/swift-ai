@@ -447,8 +447,8 @@ struct MCPAgenticLoopTests {
 
         // Route tool calls to the appropriate executor
         var results: [ToolResult] = []
-        var mcpCalls: [GenerationResponse.ToolCall] = []
-        var localCalls: [GenerationResponse.ToolCall] = []
+        var mcpCalls: [ToolCall] = []
+        var localCalls: [ToolCall] = []
 
         for call in response.toolCalls {
           if localToolsCollection.contains(named: call.name) {
@@ -467,7 +467,7 @@ struct MCPAgenticLoopTests {
         // Execute local tool calls
         if !localCalls.isEmpty {
           let localResults = await localToolsCollection.call(localCalls)
-          results.append(contentsOf: localResults)
+          results.append(contentsOf: localResults.results)
         }
 
         // Sort results back to original order
