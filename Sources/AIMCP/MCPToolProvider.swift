@@ -140,6 +140,14 @@ public actor MCPToolProvider {
     var allTools: [AI.Tool] = []
     var seenNames: [String: String] = [:] // toolName -> serverName (for conflict detection)
 
+    // Build server display titles for composing tool display names
+    var serverTitles: [Int: String] = [:]
+    for (index, entry) in entries.enumerated() {
+      if let info = await entry.client.serverInfo {
+        serverTitles[index] = info.title ?? info.name
+      }
+    }
+
     for (index, serverName) in serverNames.enumerated() {
       guard let mcpTools = cachedTools[serverName] else { continue }
 
@@ -158,7 +166,16 @@ public actor MCPToolProvider {
         // Track which client handles this tool
         toolToClientIndex[toolName] = index
 
-        let aiTool = try AI.Tool(from: tool, name: toolName) { [weak self] parameters in
+        // Compose display title from server title and tool title
+        let toolTitle = tool.title ?? tool.annotations.title ?? tool.name
+        let serverTitle = serverTitles[index]
+        let composedTitle = if let serverTitle, shouldNamespace {
+          "\(serverTitle): \(toolTitle)"
+        } else {
+          toolTitle
+        }
+
+        let aiTool = try AI.Tool(from: tool, name: toolName, title: composedTitle) { [weak self] parameters in
           guard let self else {
             throw MCPToolProviderError.toolNotFound(toolName)
           }

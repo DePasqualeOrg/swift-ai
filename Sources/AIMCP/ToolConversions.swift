@@ -119,6 +119,7 @@ extension AI.Tool {
   public init(
     from tool: MCP.Tool,
     name: String,
+    title: String? = nil,
     executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content],
   ) throws {
     let parameters = try Self.extractParameters(from: tool.inputSchema)
@@ -127,7 +128,7 @@ extension AI.Tool {
     self.init(
       name: name,
       description: tool.description ?? "",
-      title: tool.title ?? tool.annotations.title ?? tool.name,
+      title: title ?? tool.title ?? tool.annotations.title ?? tool.name,
       parameters: parameters,
       rawInputSchema: rawSchema,
       execute: executor,
