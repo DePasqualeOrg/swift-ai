@@ -313,7 +313,9 @@ public struct Tool: Sendable {
 
     for param in parameters {
       var property: [String: Value] = [
-        "type": .string(param.type.jsonSchemaType),
+        "type": param.required
+          ? .string(param.type.jsonSchemaType)
+          : .array([.string(param.type.jsonSchemaType), .string("null")]),
         "description": .string(param.description),
       ]
 

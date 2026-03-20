@@ -497,17 +497,17 @@ struct ToolMacroIntegrationTests {
     let recordsAdditionalProps = recordsItems?["additionalProperties"]?.objectValue
     #expect(recordsAdditionalProps?["type"]?.stringValue == "string")
 
-    // Check [String: [Int]] - dictionary with array values
+    // Check [String: [Int]]? - optional dictionary with array values (nullable type)
     let groupedProp = properties?["grouped"]?.objectValue
-    #expect(groupedProp?["type"]?.stringValue == "object")
+    #expect(groupedProp?["type"]?.arrayValue == [.string("object"), .string("null")])
     let groupedAdditionalProps = groupedProp?["additionalProperties"]?.objectValue
     #expect(groupedAdditionalProps?["type"]?.stringValue == "array")
     let groupedItems = groupedAdditionalProps?["items"]?.objectValue
     #expect(groupedItems?["type"]?.stringValue == "integer")
 
-    // Check [[Int]] - nested arrays
+    // Check [[Int]]? - optional nested arrays (nullable type)
     let matrixProp = properties?["matrix"]?.objectValue
-    #expect(matrixProp?["type"]?.stringValue == "array")
+    #expect(matrixProp?["type"]?.arrayValue == [.string("array"), .string("null")])
     let matrixItems = matrixProp?["items"]?.objectValue
     #expect(matrixItems?["type"]?.stringValue == "array")
     let matrixInnerItems = matrixItems?["items"]?.objectValue
@@ -716,7 +716,7 @@ struct ToolMacroIntegrationTests {
     let properties = tool.rawInputSchema["properties"]?.objectValue
     let dataProp = properties?["payload"]?.objectValue
 
-    #expect(dataProp?["type"]?.stringValue == "string")
+    #expect(dataProp?["type"]?.arrayValue == [.string("string"), .string("null")])
     #expect(dataProp?["contentEncoding"]?.stringValue == "base64")
   }
 
@@ -846,9 +846,9 @@ struct ToolMacroIntegrationTests {
     #expect(queryProp?["minLength"]?.intValue == 1)
     #expect(queryProp?["maxLength"]?.intValue == 100)
 
-    // Integer with constraints
+    // Integer with constraints (optional — nullable type)
     let countProp = properties?["count"]?.objectValue
-    #expect(countProp?["type"]?.stringValue == "integer")
+    #expect(countProp?["type"]?.arrayValue == [.string("integer"), .string("null")])
     #expect(countProp?["minimum"]?.doubleValue == 0)
     #expect(countProp?["maximum"]?.doubleValue == 1000)
 
@@ -858,9 +858,9 @@ struct ToolMacroIntegrationTests {
     #expect(thresholdProp?["minimum"]?.doubleValue == 0.0)
     #expect(thresholdProp?["maximum"]?.doubleValue == 1.0)
 
-    // Boolean
+    // Boolean (optional — nullable type)
     let verboseProp = properties?["verbose"]?.objectValue
-    #expect(verboseProp?["type"]?.stringValue == "boolean")
+    #expect(verboseProp?["type"]?.arrayValue == [.string("boolean"), .string("null")])
 
     // Array with items type
     let tagsProp = properties?["tags"]?.objectValue
