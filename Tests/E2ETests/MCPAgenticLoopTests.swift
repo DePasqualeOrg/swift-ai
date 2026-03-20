@@ -45,7 +45,9 @@ struct LocalCalculator {
 }
 
 /// End-to-end tests for agentic loops with MCP tools across different providers.
-@Suite(.serialized)
+/// These tests connect to the local MCP server and can manipulate the UI, clipboard, etc.
+/// Set the `ENABLE_MCP_TESTS` environment variable to run them.
+@Suite(.serialized, .enabled(if: ProcessInfo.processInfo.environment["ENABLE_MCP_TESTS"] != nil))
 struct MCPAgenticLoopTests {
   static let mcpServerURL = URL(string: "http://localhost:52274/mcp")!
 
