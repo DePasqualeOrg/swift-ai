@@ -1388,7 +1388,27 @@ extension GeminiClient {
   static func convertSchemaForGemini(_ schema: [String: Value]) -> [String: any Sendable] {
     var result: [String: any Sendable] = [:]
 
-    for (key, value) in schema {
+    // Pre-process: if schema has anyOf with a null type, extract nullable and unwrap
+    var effectiveSchema = schema
+    if let anyOf = schema["anyOf"]?.arrayValue {
+      let nullTypes = anyOf.filter { $0.objectValue?["type"]?.stringValue == "null" }
+      let nonNullTypes = anyOf.filter { $0.objectValue?["type"]?.stringValue != "null" }
+      if !nullTypes.isEmpty {
+        result["nullable"] = true
+      }
+      if nonNullTypes.count == 1, let single = nonNullTypes.first?.objectValue {
+        // Single non-null type: unwrap the anyOf and merge into the schema
+        effectiveSchema = schema.filter { $0.key != "anyOf" }
+        for (k, v) in single {
+          effectiveSchema[k] = v
+        }
+      } else if nonNullTypes.count > 1 {
+        // Multiple non-null types: keep as anyOf with null types removed
+        effectiveSchema = schema
+      }
+    }
+
+    for (key, value) in effectiveSchema {
       // Skip additionalProperties - Gemini doesn't support this field
       if key == "additionalProperties" {
         continue
@@ -1398,6 +1418,21 @@ extension GeminiClient {
         // Convert type values to uppercase
         if case let .string(typeStr) = value {
           result[key] = typeStr.uppercased()
+        } else if case let .array(types) = value {
+          // Handle nullable type arrays like ["string", "null"] → type: "STRING", nullable: true
+          let typeStrings = types.compactMap(\.stringValue)
+          let nonNullTypes = typeStrings.filter { $0 != "null" }
+          if typeStrings.contains("null") {
+            result["nullable"] = true
+          }
+          if nonNullTypes.count == 1 {
+            result[key] = nonNullTypes[0].uppercased()
+          } else if nonNullTypes.count > 1 {
+            result["anyOf"] = nonNullTypes.map { ["type": $0.uppercased()] as [String: any Sendable] }
+            continue
+          } else {
+            result[key] = "STRING"
+          }
         } else {
           result[key] = convertValueToSendable(value)
         }
@@ -1428,13 +1463,30 @@ extension GeminiClient {
         } else {
           result[key] = convertValueToSendable(value)
         }
+      } else if key == "anyOf" {
+        // Recursively convert anyOf schemas, extracting null types
+        if case let .array(schemas) = value {
+          var converted: [[String: any Sendable]] = []
+          for item in schemas {
+            if item.objectValue?["type"]?.stringValue == "null" {
+              result["nullable"] = true
+              continue
+            }
+            if let obj = item.objectValue {
+              converted.append(convertSchemaForGemini(obj))
+            }
+          }
+          if !converted.isEmpty {
+            result[key] = converted
+          }
+        }
       } else {
         result[key] = convertValueToSendable(value)
       }
     }
 
     // Ensure schema has a type if it's missing
-    if result["type"] == nil, !schema.isEmpty {
+    if result["type"] == nil, result["anyOf"] == nil, !schema.isEmpty {
       result["type"] = "STRING"
     }
 
