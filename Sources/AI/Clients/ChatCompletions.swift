@@ -519,41 +519,8 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       .joined(separator: "\n")
   }
 
-  private func handleHTTPError(_ statusCode: Int, message: String?) throws -> Never {
-    let errorMessage = message ?? "HTTP error \(statusCode)"
-
-    switch statusCode {
-      case 401:
-        throw AIError.authentication(message: "Ensure the correct API key is being used.")
-      case 403:
-        throw AIError.authentication(message: "You may be accessing the API from an unsupported country, region, or territory.")
-      case 429:
-        throw AIError.rateLimit(retryAfter: nil)
-      case 500 ... 599:
-        throw AIError.serverError(statusCode: statusCode, message: errorMessage, context: nil)
-      default:
-        throw AIError.invalidRequest(message: errorMessage)
-    }
-  }
-
   private func handleErrorResponse(_ httpResponse: HTTPURLResponse, data: Data) throws {
-    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: any Sendable] {
-      openAILogger.warning("Error: \(errorJson)")
-      // Try OpenAI nested format
-      if let error = errorJson["error"] as? [String: any Sendable], let message = error["message"] as? String {
-        try handleHTTPError(httpResponse.statusCode, message: message)
-      }
-      // Try Fireworks format
-      if let message = errorJson["error"] as? String {
-        try handleHTTPError(httpResponse.statusCode, message: message)
-      }
-      // Try Mistral format
-      if let message = errorJson["message"] as? String {
-        try handleHTTPError(httpResponse.statusCode, message: message)
-      }
-    }
-    // Fall back to default error handling
-    try handleHTTPError(httpResponse.statusCode, message: nil)
+    try AIError.throwOpenAIHTTPError(httpResponse, data: data, logger: openAILogger)
   }
 
   /// Generates a text response from the given conversation messages.

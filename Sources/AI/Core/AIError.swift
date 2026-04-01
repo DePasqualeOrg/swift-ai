@@ -112,3 +112,45 @@ extension AIError: LocalizedError {
     }
   }
 }
+
+// MARK: - OpenAI-Format HTTP Error Handling
+
+import os.log
+
+extension AIError {
+  /// Parses an HTTP error response in OpenAI-compatible format (also Fireworks, Mistral)
+  /// and throws the appropriate `AIError`.
+  static func throwOpenAIHTTPError(
+    _ httpResponse: HTTPURLResponse,
+    data: Data,
+    logger: Logger,
+  ) throws -> Never {
+    if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: any Sendable] {
+      logger.warning("Error: \(errorJson)")
+      // OpenAI nested format
+      if let error = errorJson["error"] as? [String: any Sendable], let message = error["message"] as? String {
+        throw fromHTTPStatusCode(httpResponse.statusCode, message: message)
+      }
+      // Fireworks format
+      if let message = errorJson["error"] as? String {
+        throw fromHTTPStatusCode(httpResponse.statusCode, message: message)
+      }
+      // Mistral format
+      if let message = errorJson["message"] as? String {
+        throw fromHTTPStatusCode(httpResponse.statusCode, message: message)
+      }
+    }
+    throw fromHTTPStatusCode(httpResponse.statusCode, message: nil)
+  }
+
+  static func fromHTTPStatusCode(_ statusCode: Int, message: String? = nil) -> AIError {
+    let errorMessage = message ?? "HTTP error \(statusCode)"
+    return switch statusCode {
+      case 401: .authentication(message: "Ensure the correct API key is being used.")
+      case 403: .authentication(message: "You may be accessing the API from an unsupported country, region, or territory.")
+      case 429: .rateLimit(retryAfter: nil)
+      case 500 ... 599: .serverError(statusCode: statusCode, message: errorMessage, context: nil)
+      default: .invalidRequest(message: errorMessage)
+    }
+  }
+}
