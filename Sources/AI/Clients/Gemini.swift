@@ -19,7 +19,7 @@ import SSE
 ///   prompt: "Hello, Gemini!",
 ///   apiKey: "your-api-key"
 /// )
-/// print(response.blocks)
+/// print(response.content)
 /// ```
 @Observable
 public final class GeminiClient: APIClient, Sendable {
@@ -176,19 +176,19 @@ public final class GeminiClient: APIClient, Sendable {
     let finishReason: FinishReason?
   }
 
-  private static func assistantBlocks(
+  private static func assistantContent(
     reasoningText: String? = nil,
     responseText: String? = nil,
     notesText: String? = nil,
     toolCalls: [ToolCall] = [],
-  ) -> [Message.Block] {
-    Message.assistantBlocks(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
+  ) -> [Message.Content] {
+    Message.assistantContent(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
   }
 
   private func requestParts(for message: Message, apiKey: String) async throws -> [[String: any Sendable]] {
     var parts: [[String: any Sendable]] = []
 
-    for block in message.blocks {
+    for block in message.content {
       switch block {
         case let .toolCall(toolCall):
           var nativeArgs: [String: any Sendable] = [:]
@@ -862,7 +862,7 @@ public final class GeminiClient: APIClient, Sendable {
       modelId: modelId,
       tools: Array(tools),
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, blocks: [.text(prompt)])],
+      messages: [Message(role: .user, content: prompt)],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -885,7 +885,7 @@ public final class GeminiClient: APIClient, Sendable {
       modelId: modelId,
       tools: Array(tools),
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, blocks: [.text(prompt)])],
+      messages: [Message(role: .user, content: prompt)],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -942,14 +942,14 @@ public final class GeminiClient: APIClient, Sendable {
         )
 
         let sendUpdate = {
-          let blocks = Self.assistantBlocks(
+          let blocks = Self.assistantContent(
             reasoningText: fullReasoningText,
             responseText: fullResponseText,
             notesText: notesText,
             toolCalls: toolCalls,
           )
           await MainActor.run {
-            update(.init(blocks: blocks))
+            update(.init(content: blocks))
           }
         }
 
@@ -1012,7 +1012,7 @@ public final class GeminiClient: APIClient, Sendable {
 
         // Return texts
         return .init(
-          blocks: Self.assistantBlocks(
+          content: Self.assistantContent(
             reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
             responseText: fullResponseText.isEmpty ? nil : fullResponseText,
             notesText: notesText,
@@ -1033,7 +1033,7 @@ public final class GeminiClient: APIClient, Sendable {
           )
           // Return partial results without throwing an error
           return .init(
-            blocks: Self.assistantBlocks(
+            content: Self.assistantContent(
               reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
               notesText: notesText,
@@ -1063,7 +1063,7 @@ public final class GeminiClient: APIClient, Sendable {
             reasoningTokens: usageMetadata?.thoughtsTokenCount,
           )
           return .init(
-            blocks: Self.assistantBlocks(
+            content: Self.assistantContent(
               reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
               notesText: notesText,

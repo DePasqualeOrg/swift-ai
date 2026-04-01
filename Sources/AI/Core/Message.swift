@@ -20,8 +20,8 @@ public struct Message: Sendable, Hashable {
     case tool
   }
 
-  /// Ordered blocks contained in a message.
-  public enum Block: Sendable, Hashable {
+  /// A content item within a message.
+  public enum Content: Sendable, Hashable {
     case text(String)
     case thinking(text: String, signature: String?)
     case endnotes(String)
@@ -48,38 +48,48 @@ public struct Message: Sendable, Hashable {
   /// The role of this message's sender.
   public let role: Role
 
-  /// Ordered content blocks for this message.
-  public let blocks: [Block]
+  /// Ordered content items for this message.
+  public let content: [Content]
 
-  /// Creates a new message.
+  /// Creates a new message with content items.
   ///
   /// - Parameters:
   ///   - role: The role of the message sender.
-  ///   - blocks: Ordered content blocks.
-  public init(role: Role, blocks: [Block]) {
+  ///   - content: Ordered content items.
+  public init(role: Role, content: [Content]) {
     self.role = role
-    self.blocks = blocks
+    self.content = content
   }
 
-  /// Builds an ordered array of assistant content blocks from optional text components and tool calls.
-  static func assistantBlocks(
+  /// Creates a new message with text content.
+  ///
+  /// - Parameters:
+  ///   - role: The role of the message sender.
+  ///   - content: The text content of the message.
+  public init(role: Role, content: String) {
+    self.role = role
+    self.content = [.text(content)]
+  }
+
+  /// Builds an ordered array of assistant content items from optional text components and tool calls.
+  static func assistantContent(
     reasoningText: String? = nil,
     responseText: String? = nil,
     notesText: String? = nil,
     toolCalls: [ToolCall] = [],
-  ) -> [Block] {
-    var blocks: [Block] = []
+  ) -> [Content] {
+    var content: [Content] = []
     if let reasoningText, !reasoningText.isEmpty {
-      blocks.append(.thinking(text: reasoningText, signature: nil))
+      content.append(.thinking(text: reasoningText, signature: nil))
     }
     if let responseText, !responseText.isEmpty {
-      blocks.append(.text(responseText))
+      content.append(.text(responseText))
     }
     if let notesText, !notesText.isEmpty {
-      blocks.append(.endnotes(notesText))
+      content.append(.endnotes(notesText))
     }
-    blocks.append(contentsOf: toolCalls.map(Block.toolCall))
-    return blocks
+    content.append(contentsOf: toolCalls.map(Content.toolCall))
+    return content
   }
 }
 
@@ -93,8 +103,8 @@ public extension Message {
     var toolResultIds = Set<String>()
 
     for message in messages {
-      for block in message.blocks {
-        switch block {
+      for item in message.content {
+        switch item {
           case let .toolCall(toolCall):
             toolCallIds.insert(toolCall.id)
           case let .toolResult(toolResult):
@@ -110,8 +120,8 @@ public extension Message {
 
     var orphanedResults: [ToolResult] = []
     for message in messages {
-      for block in message.blocks {
-        guard case let .toolCall(toolCall) = block, orphanedIds.contains(toolCall.id) else { continue }
+      for item in message.content {
+        guard case let .toolCall(toolCall) = item, orphanedIds.contains(toolCall.id) else { continue }
         orphanedResults.append(ToolResult(
           name: toolCall.name,
           id: toolCall.id,
@@ -121,26 +131,26 @@ public extension Message {
       }
     }
 
-    return messages + [Message(role: .tool, blocks: orphanedResults.map(Block.toolResult))]
+    return messages + [Message(role: .tool, content: orphanedResults.map(Content.toolResult))]
   }
 }
 
 // MARK: - Tool Collapsing Utilities
 
 public extension Message {
-  /// Returns a new message with tool_use blocks collapsed to descriptive text.
+  /// Returns a new message with tool_use content collapsed to descriptive text.
   /// Used when a provider can't satisfy metadata requirements for historical tool turns.
   func collapsingToolCalls() -> Message {
-    let attachments = blocks.compactMap { block -> Attachment? in
-      guard case let .attachment(attachment) = block else { return nil }
+    let attachments = content.compactMap { item -> Attachment? in
+      guard case let .attachment(attachment) = item else { return nil }
       return attachment
     }
-    var text = blocks.compactMap { block -> String? in
-      guard case let .text(text) = block else { return nil }
+    var text = content.compactMap { item -> String? in
+      guard case let .text(text) = item else { return nil }
       return text
     }.joined()
-    for block in blocks {
-      guard case let .toolCall(toolCall) = block else { continue }
+    for item in content {
+      guard case let .toolCall(toolCall) = item else { continue }
       let paramsJSON: String = if let data = toolCall.parametersToData(),
                                   let jsonString = String(data: data, encoding: .utf8)
       {
@@ -151,28 +161,28 @@ public extension Message {
       text += "\n\n[Called tool \"\(toolCall.name)\" with: \(paramsJSON)]"
     }
 
-    var collapsedBlocks: [Block] = []
+    var collapsed: [Content] = []
     if !text.isEmpty {
-      collapsedBlocks.append(.text(text))
+      collapsed.append(.text(text))
     }
-    collapsedBlocks.append(contentsOf: attachments.map(Block.attachment))
-    return Message(role: role, blocks: collapsedBlocks)
+    collapsed.append(contentsOf: attachments.map(Content.attachment))
+    return Message(role: role, content: collapsed)
   }
 
-  /// Returns a new message with tool_result blocks collapsed to descriptive text.
+  /// Returns a new message with tool_result content collapsed to descriptive text.
   /// Used when a provider can't satisfy metadata requirements for historical tool turns.
   func collapsingToolResults() -> Message {
-    let attachments = blocks.compactMap { block -> Attachment? in
-      guard case let .attachment(attachment) = block else { return nil }
+    let attachments = content.compactMap { item -> Attachment? in
+      guard case let .attachment(attachment) = item else { return nil }
       return attachment
     }
-    var text = blocks.compactMap { block -> String? in
-      guard case let .text(text) = block else { return nil }
+    var text = content.compactMap { item -> String? in
+      guard case let .text(text) = item else { return nil }
       return text
     }.joined()
 
-    for block in blocks {
-      guard case let .toolResult(toolResult) = block else { continue }
+    for item in content {
+      guard case let .toolResult(toolResult) = item else { continue }
       if toolResult.isError == true {
         let errorText = toolResult.content.compactMap { content -> String? in
           if case let .text(str) = content { return str }
@@ -188,11 +198,11 @@ public extension Message {
       }
     }
 
-    var collapsedBlocks: [Block] = []
+    var collapsed: [Content] = []
     if !text.isEmpty {
-      collapsedBlocks.append(.text(text))
+      collapsed.append(.text(text))
     }
-    collapsedBlocks.append(contentsOf: attachments.map(Block.attachment))
-    return Message(role: .user, blocks: collapsedBlocks)
+    collapsed.append(contentsOf: attachments.map(Content.attachment))
+    return Message(role: .user, content: collapsed)
   }
 }

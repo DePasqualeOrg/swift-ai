@@ -43,7 +43,7 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
@@ -66,7 +66,7 @@ struct GeminiClientTests {
       modelId: "gemini-2.0-flash",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris?")])],
+      messages: [Message(role: .user, content: "What's the weather in Paris?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -97,7 +97,7 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -117,7 +117,7 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -135,7 +135,7 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Write a long story")])],
+      messages: [Message(role: .user, content: "Write a long story")],
       maxTokens: 15,
       apiKey: "test-api-key",
     ))
@@ -161,7 +161,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -187,7 +187,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "invalid-key",
       ))
@@ -213,7 +213,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -239,7 +239,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -261,7 +261,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: nil,
       ))
@@ -296,7 +296,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -319,7 +319,7 @@ struct GeminiClientTests {
       let response = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Harmful content")])],
+        messages: [Message(role: .user, content: "Harmful content")],
         maxTokens: 1024,
         apiKey: "test-api-key",
       ))
@@ -355,7 +355,7 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.5-flash-thinking",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What is the meaning of life?")])],
+      messages: [Message(role: .user, content: "What is the meaning of life?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
       configuration: .init(thinkingBudget: 1000),
@@ -389,7 +389,7 @@ struct GeminiClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
@@ -428,7 +428,7 @@ struct GeminiClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: "You are a helpful assistant",
-      messages: [Message(role: .user, blocks: [.text("Hello")])],
+      messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       temperature: 0.7,
       apiKey: "test-key",
@@ -493,7 +493,7 @@ struct GeminiClientTests {
       modelId: "gemini-2.0-flash",
       tools: [makeTestTool(name: "get_weather", description: "Get current weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather?")])],
+      messages: [Message(role: .user, content: "What's the weather?")],
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -547,7 +547,7 @@ struct GeminiClientTests {
       modelId: "gemini-2.0-flash",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris and London?")])],
+      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -611,7 +611,7 @@ struct GeminiClientTests {
       try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))

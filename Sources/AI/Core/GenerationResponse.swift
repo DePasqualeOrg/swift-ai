@@ -67,7 +67,7 @@ public struct ToolCall: Sendable, Codable, Hashable {
 
 /// A response from an LLM generation request.
 ///
-/// The canonical content model is the ordered `blocks` array.
+/// The canonical content model is the ordered `content` array.
 public struct GenerationResponse: Sendable, Hashable {
   /// Metadata about the generation response.
   public struct Metadata: Sendable, Hashable {
@@ -145,60 +145,60 @@ public struct GenerationResponse: Sendable, Hashable {
     case other
   }
 
-  /// Ordered content blocks returned by the model.
-  public var blocks: [Message.Block]
+  /// Ordered content items returned by the model.
+  public var content: [Message.Content]
 
   /// Metadata about the response (token usage, finish reason, etc.).
   public var metadata: Metadata?
 
   /// The assistant message representing this response, suitable for adding to conversation history.
   public var message: Message {
-    Message(role: .assistant, blocks: blocks)
+    Message(role: .assistant, content: content)
   }
 
   /// Creates a new generation response.
   ///
   /// - Parameters:
-  ///   - blocks: Ordered content blocks emitted by the model.
+  ///   - content: Ordered content items emitted by the model.
   ///   - metadata: Metadata about the response.
-  public init(blocks: [Message.Block] = [], metadata: Metadata? = nil) {
-    self.blocks = blocks
+  public init(content: [Message.Content] = [], metadata: Metadata? = nil) {
+    self.content = content
     self.metadata = metadata
   }
 
   // MARK: - Convenience Accessors
 
-  /// The joined response text from all `.text` blocks, or `nil` if there are none.
+  /// The joined response text from all `.text` content items, or `nil` if there are none.
   public var responseText: String? {
-    let text = blocks.compactMap { block -> String? in
-      guard case let .text(text) = block else { return nil }
+    let text = content.compactMap { item -> String? in
+      guard case let .text(text) = item else { return nil }
       return text
     }.joined()
     return text.isEmpty ? nil : text
   }
 
-  /// The joined reasoning text from all `.thinking` blocks, or `nil` if there are none.
+  /// The joined reasoning text from all `.thinking` content items, or `nil` if there are none.
   public var reasoningText: String? {
-    let text = blocks.compactMap { block -> String? in
-      guard case let .thinking(text, _) = block else { return nil }
+    let text = content.compactMap { item -> String? in
+      guard case let .thinking(text, _) = item else { return nil }
       return text
     }.joined()
     return text.isEmpty ? nil : text
   }
 
-  /// The joined endnotes text from all `.endnotes` blocks, or `nil` if there are none.
+  /// The joined endnotes text from all `.endnotes` content items, or `nil` if there are none.
   public var endnotesText: String? {
-    let text = blocks.compactMap { block -> String? in
-      guard case let .endnotes(text) = block else { return nil }
+    let text = content.compactMap { item -> String? in
+      guard case let .endnotes(text) = item else { return nil }
       return text
     }.joined()
     return text.isEmpty ? nil : text
   }
 
-  /// All tool calls from `.toolCall` blocks.
+  /// All tool calls from `.toolCall` content items.
   public var toolCalls: [ToolCall] {
-    blocks.compactMap { block in
-      guard case let .toolCall(toolCall) = block else { return nil }
+    content.compactMap { item in
+      guard case let .toolCall(toolCall) = item else { return nil }
       return toolCall
     }
   }

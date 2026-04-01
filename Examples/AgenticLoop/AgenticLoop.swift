@@ -112,11 +112,7 @@ struct Translate {
       prompt: text,
       apiKey: apiKey,
     )
-    let translation = response.blocks.compactMap { block -> String? in
-      guard case let .text(text) = block else { return nil }
-      return text
-    }.joined()
-    guard !translation.isEmpty else {
+    guard let translation = response.responseText else {
       throw TranslateError.emptyResponse
     }
     return translation
@@ -143,7 +139,7 @@ enum AgenticLoopExample {
     print()
 
     // Conversation history for multi-turn use
-    var messages = [Message(role: .user, blocks: [.text(prompt)])]
+    var messages = [Message(role: .user, content: prompt)]
     var iteration = 0
     let maxIterations = 50
 

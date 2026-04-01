@@ -287,7 +287,7 @@ struct AIToolsE2ETests {
     print("[\(provider.name)] Available AI tools: \(tools.map { $0.name })")
 
     var messages: [AI.Message] = [
-      AI.Message(role: .user, blocks: [.text(prompt)]),
+      AI.Message(role: .user, content: prompt),
     ]
 
     var iterations = 0

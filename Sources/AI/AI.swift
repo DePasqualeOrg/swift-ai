@@ -35,10 +35,10 @@ public enum Model: Sendable {
 /// ```swift
 /// let response = try await generateText(
 ///     model: .anthropic("claude-sonnet-4-20250514"),
-///     messages: [Message(role: .user, blocks: [.text("Hello!")])],
+///     messages: [Message(role: .user, content: "Hello!")],
 ///     apiKey: "sk-..."
 /// )
-/// print(response.blocks)
+/// print(response.content)
 /// ```
 ///
 /// - Parameters:
@@ -243,7 +243,7 @@ public func streamText(
 ///     prompt: "What is the capital of France?",
 ///     apiKey: "sk-..."
 /// )
-/// print(response.blocks)
+/// print(response.content)
 /// ```
 ///
 /// - Parameters:
@@ -272,7 +272,7 @@ public func generateText(
     model: model,
     tools: tools,
     systemPrompt: systemPrompt,
-    messages: [Message(role: .user, blocks: [.text(prompt)])],
+    messages: [Message(role: .user, content: prompt)],
     maxTokens: maxTokens,
     temperature: temperature,
     apiKey: apiKey,
@@ -312,7 +312,7 @@ public func streamText(
     model: model,
     tools: tools,
     systemPrompt: systemPrompt,
-    messages: [Message(role: .user, blocks: [.text(prompt)])],
+    messages: [Message(role: .user, content: prompt)],
     maxTokens: maxTokens,
     temperature: temperature,
     apiKey: apiKey,

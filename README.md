@@ -41,9 +41,9 @@ For multi-turn conversations, use `messages:` instead of `prompt:`:
 let response = try await generateText(
     model: .anthropic("claude-opus-4-5"),
     messages: [
-        Message(role: .user, blocks: [.text("I'm planning to hike the Tour du Mont Blanc.")]),
-        Message(role: .assistant, blocks: [.text("Great choice! The TMB is a 170km trek through France, Italy, and Switzerland. When are you planning to go?")]),
-        Message(role: .user, blocks: [.text("Late August. What should I pack?")])
+        Message(role: .user, content: "I'm planning to hike the Tour du Mont Blanc."),
+        Message(role: .assistant, content: "Great choice! The TMB is a 170km trek through France, Italy, and Switzerland. When are you planning to go?"),
+        Message(role: .user, content: "Late August. What should I pack?")
     ],
     apiKey: "sk-ant-..."
 )
@@ -78,7 +78,7 @@ let client = AnthropicClient()
 let response = try await client.generateText(
     modelId: "claude-opus-4-5",
     systemPrompt: "You are a helpful mountain guide assistant.",
-    messages: [Message(role: .user, blocks: [.text("What's the best season to climb Mont Blanc?")])],
+    messages: [Message(role: .user, content: "What's the best season to climb Mont Blanc?")],
     maxTokens: 1024,
     apiKey: "sk-ant-..."
 )
@@ -87,7 +87,7 @@ let response = try await client.generateText(
 for try await partial in client.streamText(
     modelId: "claude-opus-4-5",
     systemPrompt: "You are a helpful mountain guide assistant.",
-    messages: [Message(role: .user, blocks: [.text("Describe the Matterhorn.")])],
+    messages: [Message(role: .user, content: "Describe the Matterhorn.")],
     maxTokens: 1024,
     apiKey: "sk-ant-..."
 ) {
@@ -328,7 +328,7 @@ let attachment = Attachment(
 
 let message = Message(
     role: .user,
-    blocks: [.text("What's in this image?"), .attachment(attachment)]
+    content: [.text("What's in this image?"), .attachment(attachment)]
 )
 
 let response = try await generateText(
@@ -546,7 +546,7 @@ let tools: Tools = [GetWeather.tool, SearchDocuments.tool]
 // Set up client and conversation
 let client = AnthropicClient()
 var messages: [Message] = [
-    Message(role: .user, blocks: [.text("What's the weather like at Chamonix this week? And find documents about alpine climbing safety.")])
+    Message(role: .user, content: "What's the weather like at Chamonix this week? And find documents about alpine climbing safety.")
 ]
 
 // Agentic loop
@@ -785,7 +785,7 @@ let assistantMessage = response.message
 
 let toolMessage = Message(
     role: .tool,
-    blocks: [.toolResult(toolResult)]
+    content: [.toolResult(toolResult)]
 )
 
 // Continue the conversation with tool results

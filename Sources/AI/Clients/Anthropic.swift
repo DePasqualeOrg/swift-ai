@@ -900,7 +900,7 @@ extension AnthropicClient {
 ///   prompt: "Hello, Claude!",
 ///   apiKey: "your-api-key"
 /// )
-/// print(response.blocks)
+/// print(response.content)
 /// ```
 @Observable
 public final class AnthropicClient: APIClient, Sendable {
@@ -1034,7 +1034,7 @@ public final class AnthropicClient: APIClient, Sendable {
     return .init(name: toolUseBlock.name, id: toolUseBlock.id, parameters: parameters)
   }
 
-  private static func textBlock(from serverToolUse: ServerToolUseBlock) -> Message.Block? {
+  private static func textBlock(from serverToolUse: ServerToolUseBlock) -> Message.Content? {
     guard serverToolUse.name == "code_execution",
           case let .object(inputDict) = serverToolUse.input,
           case let .string(code) = inputDict["code"]
@@ -1044,8 +1044,8 @@ public final class AnthropicClient: APIClient, Sendable {
     return .text("\n\n```python\n\(code)\n```\n\n")
   }
 
-  private static func textBlocks(from codeExecutionResultBlock: CodeExecutionToolResultBlock) -> [Message.Block] {
-    var blocks: [Message.Block] = []
+  private static func textBlocks(from codeExecutionResultBlock: CodeExecutionToolResultBlock) -> [Message.Content] {
+    var blocks: [Message.Content] = []
 
     for item in codeExecutionResultBlock.content {
       let text: String?
@@ -1079,8 +1079,8 @@ public final class AnthropicClient: APIClient, Sendable {
     return blocks
   }
 
-  private static func blocks(from message: APIMessage) -> [Message.Block] {
-    var blocks: [Message.Block] = []
+  private static func blocks(from message: APIMessage) -> [Message.Content] {
+    var blocks: [Message.Content] = []
     var citationURLs: [String] = []
     var seenCitationURLs = Set<String>()
 
@@ -1164,25 +1164,25 @@ public final class AnthropicClient: APIClient, Sendable {
   }
 
   private static func generationResponse(from message: APIMessage) -> GenerationResponse {
-    GenerationResponse(blocks: blocks(from: message), metadata: metadata(from: message))
+    GenerationResponse(content: blocks(from: message), metadata: metadata(from: message))
   }
 
   private static func hasToolCallBlocks(_ message: Message) -> Bool {
-    message.blocks.contains { block in
+    message.content.contains { block in
       if case .toolCall = block { return true }
       return false
     }
   }
 
   private static func hasToolResultBlocks(_ message: Message) -> Bool {
-    message.blocks.contains { block in
+    message.content.contains { block in
       if case .toolResult = block { return true }
       return false
     }
   }
 
   private static func hasAnthropicThinkingBlocks(_ message: Message) -> Bool {
-    message.blocks.contains { block in
+    message.content.contains { block in
       switch block {
         case let .thinking(_, signature):
           signature != nil
@@ -1199,7 +1199,7 @@ public final class AnthropicClient: APIClient, Sendable {
   private func anthropicContentBlocks(for message: Message) async throws -> [AnthropicClient.ContentBlockParam] {
     var contentBlocks: [AnthropicClient.ContentBlockParam] = []
 
-    for block in message.blocks {
+    for block in message.content {
       switch block {
         case let .thinking(text, signature) where signature != nil:
           contentBlocks.append(.init(
@@ -2036,7 +2036,7 @@ public extension AnthropicClient {
       modelId: modelId,
       tools: Array(tools),
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, blocks: [.text(prompt)])],
+      messages: [Message(role: .user, content: prompt)],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -2059,7 +2059,7 @@ public extension AnthropicClient {
       modelId: modelId,
       tools: Array(tools),
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, blocks: [.text(prompt)])],
+      messages: [Message(role: .user, content: prompt)],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -2222,7 +2222,7 @@ public extension AnthropicClient {
               throw error
             case .end:
               let finalSnapshot = finalMessage ?? latestSnapshot
-              return (finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(blocks: []), wasCancelled)
+              return (finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(content: []), wasCancelled)
             default:
               continue
           }
@@ -2243,7 +2243,7 @@ public extension AnthropicClient {
         }
       }
       let finalSnapshot = finalMessage ?? latestSnapshot
-      let result = finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(blocks: [])
+      let result = finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(content: [])
       return (result, wasCancelled)
     }
     // Store the task so we can cancel it
@@ -2263,7 +2263,7 @@ public extension AnthropicClient {
         throw aiError
       } else if error is CancellationError {
         // This should be rare since we handle cancellation in the task
-        return .init(blocks: [])
+        return .init(content: [])
       } else {
         throw AIError.network(underlying: error)
       }

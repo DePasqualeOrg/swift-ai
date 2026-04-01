@@ -43,7 +43,7 @@ struct AnthropicClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "claude-sonnet-4-20250514",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
@@ -70,7 +70,7 @@ struct AnthropicClientTests {
       modelId: "claude-sonnet-4-20250514",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris?")])],
+      messages: [Message(role: .user, content: "What's the weather in Paris?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -103,7 +103,7 @@ struct AnthropicClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "claude-sonnet-4-20250514",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -123,7 +123,7 @@ struct AnthropicClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "claude-sonnet-4-20250514",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -141,7 +141,7 @@ struct AnthropicClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "claude-sonnet-4-20250514",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather?")])],
+      messages: [Message(role: .user, content: "What's the weather?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -164,7 +164,7 @@ struct AnthropicClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "claude-sonnet-4-20250514",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "invalid-key",
       ))
@@ -183,7 +183,7 @@ struct AnthropicClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "claude-sonnet-4-20250514",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -209,7 +209,7 @@ struct AnthropicClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "claude-sonnet-4-20250514",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -231,7 +231,7 @@ struct AnthropicClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "claude-sonnet-4-20250514",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: nil,
       ))
@@ -256,7 +256,7 @@ struct AnthropicClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "claude-opus-4-20250514",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Hello")])],
+      messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -287,7 +287,7 @@ struct AnthropicClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "claude-sonnet-4-20250514",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -319,7 +319,7 @@ struct AnthropicClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "claude-sonnet-4-20250514",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -348,7 +348,7 @@ struct AnthropicClientTests {
       modelId: "claude-sonnet-4-20250514",
       tools: [makeTestTool(name: "make_file", description: "Make a file", paramName: "filename")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Create a file")])],
+      messages: [Message(role: .user, content: "Create a file")],
       maxTokens: 100,
       apiKey: "test-key",
     ))
@@ -414,7 +414,7 @@ struct AnthropicClientTests {
       try await consumeStream(client.streamText(
         modelId: "claude-sonnet-4-20250514",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))

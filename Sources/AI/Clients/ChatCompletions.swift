@@ -35,7 +35,7 @@ public extension ChatCompletionsClient {
 ///   prompt: "Hello!",
 ///   apiKey: "your-api-key"
 /// )
-/// print(response.blocks)
+/// print(response.content)
 /// ```
 @Observable
 public final class ChatCompletionsClient: APIClient, Sendable {
@@ -87,13 +87,13 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     self.session = session
   }
 
-  private static func assistantBlocks(
+  private static func assistantContent(
     reasoningText: String? = nil,
     responseText: String? = nil,
     notesText: String? = nil,
     toolCalls: [AI.ToolCall] = [],
-  ) -> [Message.Block] {
-    Message.assistantBlocks(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
+  ) -> [Message.Content] {
+    Message.assistantContent(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
   }
 
   private static func assistantSnapshot(from response: GenerationResponse) -> (reasoning: String?, response: String?, notes: String?, toolCalls: [AI.ToolCall]) {
@@ -102,7 +102,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     var notesParts: [String] = []
     var toolCalls: [AI.ToolCall] = []
 
-    for block in response.blocks {
+    for block in response.content {
       switch block {
         case let .thinking(text, _):
           reasoningParts.append(text)
@@ -142,7 +142,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
 
   private static func requestMessages(for message: Message) async throws -> [[String: any Sendable]] {
     if message.role == .tool {
-      return message.blocks.compactMap { block -> [String: any Sendable]? in
+      return message.content.compactMap { block -> [String: any Sendable]? in
         guard case let .toolResult(toolResult) = block else { return nil }
 
         let resultContent = toolResult.content.map { content -> String in
@@ -168,7 +168,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     var multimodalContent: [[String: any Sendable]] = []
     var hasNonTextContent = false
 
-    for block in message.blocks {
+    for block in message.content {
       switch block {
         case let .text(text) where !text.isEmpty:
           textParts.append(text)
@@ -399,7 +399,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                   var currentMetadata = metadata
                   currentMetadata.finishReason = parseFinishReason(lastFinishReason)
                   continuation.yield(GenerationResponse(
-                    blocks: Self.assistantBlocks(
+                    content: Self.assistantContent(
                       reasoningText: reasoningText,
                       responseText: responseText,
                       notesText: notesText,
@@ -416,7 +416,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                   var currentMetadata = metadata
                   currentMetadata.finishReason = parseFinishReason(lastFinishReason)
                   continuation.yield(GenerationResponse(
-                    blocks: Self.assistantBlocks(toolCalls: toolCalls),
+                    content: Self.assistantContent(toolCalls: toolCalls),
                     metadata: currentMetadata,
                   ))
                 }
@@ -491,7 +491,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             // Perplexity citations
             let notesText = formatCitations(completionResponse.citations)
             continuation.yield(.init(
-              blocks: Self.assistantBlocks(
+              content: Self.assistantContent(
                 reasoningText: reasoningText,
                 responseText: responseText,
                 notesText: notesText,
@@ -630,7 +630,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       modelId: modelId,
       tools: Array(tools),
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, blocks: [.text(prompt)])],
+      messages: [Message(role: .user, content: prompt)],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -653,7 +653,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       modelId: modelId,
       tools: Array(tools),
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, blocks: [.text(prompt)])],
+      messages: [Message(role: .user, content: prompt)],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -723,7 +723,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           let metadataCopy = finalMetadata
           await MainActor.run {
             update(.init(
-              blocks: Self.assistantBlocks(
+              content: Self.assistantContent(
                 reasoningText: fullReasoningTextCopy.isEmpty ? nil : fullReasoningTextCopy,
                 responseText: fullResponseTextCopy.isEmpty ? nil : fullResponseTextCopy,
                 notesText: notesTextCopy,
@@ -734,7 +734,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           }
         }
         return .init(
-          blocks: Self.assistantBlocks(
+          content: Self.assistantContent(
             reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
             responseText: fullResponseText.isEmpty ? nil : fullResponseText,
             notesText: notesText,
@@ -745,7 +745,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       } catch {
         if error is CancellationError {
           return .init(
-            blocks: Self.assistantBlocks(
+            content: Self.assistantContent(
               reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
               notesText: notesText,

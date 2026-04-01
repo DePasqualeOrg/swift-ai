@@ -39,7 +39,7 @@ struct ResponsesClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
@@ -67,7 +67,7 @@ struct ResponsesClientTests {
       modelId: "gpt-4o",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris?")])],
+      messages: [Message(role: .user, content: "What's the weather in Paris?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -101,7 +101,7 @@ struct ResponsesClientTests {
       modelId: "gpt-4o",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris and London?")])],
+      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -140,7 +140,7 @@ struct ResponsesClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Hello")])],
+      messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -162,7 +162,7 @@ struct ResponsesClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Hello")])],
+      messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -186,7 +186,7 @@ struct ResponsesClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -204,7 +204,7 @@ struct ResponsesClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Write a long story")])],
+      messages: [Message(role: .user, content: "Write a long story")],
       maxTokens: 15,
       apiKey: "test-api-key",
     ))
@@ -227,7 +227,7 @@ struct ResponsesClientTests {
       modelId: "gpt-4o",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather?")])],
+      messages: [Message(role: .user, content: "What's the weather?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -250,7 +250,7 @@ struct ResponsesClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Some inappropriate request")])],
+      messages: [Message(role: .user, content: "Some inappropriate request")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -286,7 +286,7 @@ struct ResponsesClientTests {
     let response = try await client.generateText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Hello")])],
+      messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     )
@@ -318,7 +318,7 @@ struct ResponsesClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Hello")])],
+      messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -347,7 +347,7 @@ struct ResponsesClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "o3-mini",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What is the meaning of life?")])],
+      messages: [Message(role: .user, content: "What is the meaning of life?")],
       maxTokens: 1024,
       apiKey: "test-api-key",
       configuration: .init(reasoningEffortLevel: .medium),
@@ -382,7 +382,7 @@ struct ResponsesClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4o",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "invalid-key",
       ))
@@ -410,7 +410,7 @@ struct ResponsesClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4o",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -438,7 +438,7 @@ struct ResponsesClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4o",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -470,7 +470,7 @@ struct ResponsesClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4o",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -504,7 +504,7 @@ struct ResponsesClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4o",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-api-key",
       ))
@@ -531,7 +531,7 @@ struct ResponsesClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Say hello")])],
+      messages: [Message(role: .user, content: "Say hello")],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
@@ -576,7 +576,7 @@ struct ResponsesClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: "You are a helpful assistant",
-      messages: [Message(role: .user, blocks: [.text("Hello")])],
+      messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       temperature: 0.7,
       apiKey: "test-key",
@@ -636,7 +636,7 @@ struct ResponsesClientTests {
       modelId: "gpt-4o",
       tools: [makeTestTool(name: "get_weather", description: "Get current weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("What's the weather?")])],
+      messages: [Message(role: .user, content: "What's the weather?")],
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -689,7 +689,7 @@ struct ResponsesClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gpt-4o",
       systemPrompt: nil,
-      messages: [Message(role: .user, blocks: [.text("Hello")])],
+      messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       apiKey: "sk-test-api-key",
     ))
@@ -733,7 +733,7 @@ struct ResponsesClientTests {
       try await consumeStream(client.streamText(
         modelId: "gpt-4o",
         systemPrompt: nil,
-        messages: [Message(role: .user, blocks: [.text("Hello")])],
+        messages: [Message(role: .user, content: "Hello")],
         maxTokens: 1024,
         apiKey: "test-key",
       ))

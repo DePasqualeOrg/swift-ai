@@ -406,10 +406,7 @@ extension Tool.ParameterType {
 /// let tools = Tools([weatherTool, searchTool])
 ///
 /// // Execute tool calls from a model response
-/// let results = await tools.call(response.blocks.compactMap { block in
-///   guard case let .toolCall(toolCall) = block else { return nil }
-///   return toolCall
-/// })
+/// let results = await tools.call(response.toolCalls)
 /// messages.append(results.message)
 /// ```
 public struct Tools: Collection, Sendable {
@@ -842,7 +839,7 @@ public struct ToolExecutionResult: Hashable, Sendable {
 public extension [ToolResult] {
   /// A tool message containing these results, suitable for adding to conversation history.
   var message: Message {
-    Message(role: .tool, blocks: map(Message.Block.toolResult))
+    Message(role: .tool, content: map(Message.Content.toolResult))
   }
 }
 

@@ -325,7 +325,7 @@ struct MCPAgenticLoopTests {
 
     // Initialize messages
     var messages: [AI.Message] = [
-      AI.Message(role: .user, blocks: [.text(prompt)]),
+      AI.Message(role: .user, content: prompt),
     ]
 
     var iterations = 0
@@ -421,7 +421,7 @@ struct MCPAgenticLoopTests {
     let localToolsCollection = Tools(localTools)
 
     var messages: [AI.Message] = [
-      AI.Message(role: .user, blocks: [.text(prompt)]),
+      AI.Message(role: .user, content: prompt),
     ]
 
     var iterations = 0

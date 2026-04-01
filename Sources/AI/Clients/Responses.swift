@@ -20,7 +20,7 @@ import SSE
 ///   prompt: "Hello!",
 ///   apiKey: "your-api-key"
 /// )
-/// print(response.blocks)
+/// print(response.content)
 /// ```
 @Observable
 public final class ResponsesClient: APIClient, Sendable {
@@ -85,20 +85,20 @@ public final class ResponsesClient: APIClient, Sendable {
     static let functionCallOutput = "function_call_output"
   }
 
-  private static func filteringParseErrorToolCalls(in blocks: [Message.Block]) -> [Message.Block] {
-    blocks.filter { block in
+  private static func filteringParseErrorToolCalls(in content: [Message.Content]) -> [Message.Content] {
+    content.filter { block in
       guard case let .toolCall(toolCall) = block else { return true }
       return !toolCall.parameters.keys.contains("_parseError")
     }
   }
 
   private struct StreamingResponseState {
-    var indexedBlocks: [Int: Message.Block] = [:]
-    var fallbackBlocks: [Message.Block] = []
+    var indexedContent: [Int: Message.Content] = [:]
+    var fallbackContent: [Message.Content] = []
     var toolCallArgumentBuffers: [Int: String] = [:]
 
-    var blocks: [Message.Block] {
-      indexedBlocks.keys.sorted().compactMap { indexedBlocks[$0] } + fallbackBlocks
+    var content: [Message.Content] {
+      indexedContent.keys.sorted().compactMap { indexedContent[$0] } + fallbackContent
     }
 
     mutating func appendTextDelta(_ delta: String, outputIndex: Int?) {
@@ -119,7 +119,7 @@ public final class ResponsesClient: APIClient, Sendable {
         appendFallback(.toolCall(toolCall))
         return
       }
-      indexedBlocks[outputIndex] = .toolCall(toolCall)
+      indexedContent[outputIndex] = .toolCall(toolCall)
       toolCallArgumentBuffers[outputIndex] = ""
     }
 
@@ -128,7 +128,7 @@ public final class ResponsesClient: APIClient, Sendable {
       let newArgsString = existingArgsString + delta
       toolCallArgumentBuffers[outputIndex] = newArgsString
 
-      guard case let .toolCall(currentToolCall)? = indexedBlocks[outputIndex] else { return }
+      guard case let .toolCall(currentToolCall)? = indexedContent[outputIndex] else { return }
       guard let argsData = newArgsString.data(using: .utf8),
             let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
       else {
@@ -137,12 +137,12 @@ public final class ResponsesClient: APIClient, Sendable {
 
       var updatedToolCall = currentToolCall
       updatedToolCall.parameters = partialArgs
-      indexedBlocks[outputIndex] = .toolCall(updatedToolCall)
+      indexedContent[outputIndex] = .toolCall(updatedToolCall)
     }
 
     mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int) {
       toolCallArgumentBuffers.removeValue(forKey: outputIndex)
-      guard case let .toolCall(currentToolCall)? = indexedBlocks[outputIndex] else { return }
+      guard case let .toolCall(currentToolCall)? = indexedContent[outputIndex] else { return }
 
       var updatedToolCall = currentToolCall
       if let argumentsData = argumentsString.data(using: .utf8),
@@ -154,13 +154,13 @@ public final class ResponsesClient: APIClient, Sendable {
         updatedToolCall.parameters = ["_parseError": .string("Failed to parse arguments JSON")]
       }
 
-      indexedBlocks[outputIndex] = .toolCall(updatedToolCall)
+      indexedContent[outputIndex] = .toolCall(updatedToolCall)
     }
 
     private mutating func append(
       delta: String,
       outputIndex: Int?,
-      as createBlock: (String) -> Message.Block,
+      as createBlock: (String) -> Message.Content,
     ) {
       append(delta: delta, outputIndex: outputIndex) { existing in
         createBlock(existing + delta)
@@ -172,37 +172,37 @@ public final class ResponsesClient: APIClient, Sendable {
     private mutating func append(
       delta _: String,
       outputIndex: Int?,
-      update: (String) -> Message.Block,
-      create: () -> Message.Block,
+      update: (String) -> Message.Content,
+      create: () -> Message.Content,
     ) {
       guard let outputIndex else {
         appendFallback(create())
         return
       }
 
-      switch indexedBlocks[outputIndex] {
+      switch indexedContent[outputIndex] {
         case let .text(existingText)?:
-          indexedBlocks[outputIndex] = update(existingText)
+          indexedContent[outputIndex] = update(existingText)
         case let .thinking(text: existingText, signature: nil)?:
-          indexedBlocks[outputIndex] = update(existingText)
+          indexedContent[outputIndex] = update(existingText)
         default:
-          indexedBlocks[outputIndex] = create()
+          indexedContent[outputIndex] = create()
       }
     }
 
-    private mutating func appendFallback(_ block: Message.Block) {
-      guard let lastBlock = fallbackBlocks.last else {
-        fallbackBlocks.append(block)
+    private mutating func appendFallback(_ block: Message.Content) {
+      guard let lastBlock = fallbackContent.last else {
+        fallbackContent.append(block)
         return
       }
 
       switch (lastBlock, block) {
         case let (.text(existing), .text(delta)):
-          fallbackBlocks[fallbackBlocks.count - 1] = .text(existing + delta)
+          fallbackContent[fallbackContent.count - 1] = .text(existing + delta)
         case let (.thinking(text: existing, signature: existingSignature), .thinking(text: delta, signature: nil)):
-          fallbackBlocks[fallbackBlocks.count - 1] = .thinking(text: existing + (existing.hasSuffix("\n") ? "" : "\n") + delta, signature: existingSignature)
+          fallbackContent[fallbackContent.count - 1] = .thinking(text: existing + (existing.hasSuffix("\n") ? "" : "\n") + delta, signature: existingSignature)
         default:
-          fallbackBlocks.append(block)
+          fallbackContent.append(block)
       }
     }
   }
@@ -211,7 +211,7 @@ public final class ResponsesClient: APIClient, Sendable {
     switch message.role {
       case .user:
         var contentItems: [[String: any Sendable]] = []
-        for block in message.blocks {
+        for block in message.content {
           switch block {
             case let .text(text) where !text.isEmpty:
               contentItems.append([
@@ -264,7 +264,7 @@ public final class ResponsesClient: APIClient, Sendable {
           contentItems.removeAll(keepingCapacity: true)
         }
 
-        for block in message.blocks {
+        for block in message.content {
           switch block {
             case let .text(text) where !text.isEmpty:
               contentItems.append([
@@ -293,7 +293,7 @@ public final class ResponsesClient: APIClient, Sendable {
         return items
 
       case .tool:
-        return message.blocks.compactMap { block -> [String: any Sendable]? in
+        return message.content.compactMap { block -> [String: any Sendable]? in
           guard case let .toolResult(toolResult) = block else { return nil }
 
           let resultOutput: any Sendable
@@ -695,7 +695,7 @@ public final class ResponsesClient: APIClient, Sendable {
       modelId: modelId,
       tools: Array(tools),
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, blocks: [.text(prompt)])],
+      messages: [Message(role: .user, content: prompt)],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -718,7 +718,7 @@ public final class ResponsesClient: APIClient, Sendable {
       modelId: modelId,
       tools: Array(tools),
       systemPrompt: systemPrompt,
-      messages: [Message(role: .user, blocks: [.text(prompt)])],
+      messages: [Message(role: .user, content: prompt)],
       maxTokens: maxTokens,
       temperature: temperature,
       apiKey: apiKey,
@@ -751,7 +751,7 @@ public final class ResponsesClient: APIClient, Sendable {
         }
       }
 
-      var finalBlocks: [Message.Block] = []
+      var finalContent: [Message.Content] = []
       var finalMetadata: GenerationResponse.Metadata?
 
       do {
@@ -773,7 +773,7 @@ public final class ResponsesClient: APIClient, Sendable {
         for try await chunk in stream {
           try Task.checkCancellation()
 
-          finalBlocks = chunk.blocks
+          finalContent = chunk.content
           finalMetadata = chunk.metadata
 
           await MainActor.run {
@@ -784,17 +784,17 @@ public final class ResponsesClient: APIClient, Sendable {
         // If cancelled, return the state as it was when cancellation was detected
         if Task.isCancelled {
           openAIResponsesLogger.log("Generation task returning cancelled state")
-          return .init(blocks: finalBlocks, metadata: finalMetadata)
+          return .init(content: finalContent, metadata: finalMetadata)
         }
 
         // Stream finished normally, return the final state
-        return .init(blocks: Self.filteringParseErrorToolCalls(in: finalBlocks), metadata: finalMetadata)
+        return .init(content: Self.filteringParseErrorToolCalls(in: finalContent), metadata: finalMetadata)
 
       } catch {
         // Handle cancellation error specifically if it bubbles up
         if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
           openAIResponsesLogger.log("Generation task caught cancellation error.")
-          return .init(blocks: finalBlocks, metadata: finalMetadata)
+          return .init(content: finalContent, metadata: finalMetadata)
         } else {
           // Rethrow other errors
           openAIResponsesLogger.error("Generation failed: \(error)")
@@ -838,7 +838,7 @@ public final class ResponsesClient: APIClient, Sendable {
     guard let eventType = event.type else { return }
 
     func yieldCurrentState() {
-      continuation.yield(GenerationResponse(blocks: streamingState.blocks))
+      continuation.yield(GenerationResponse(content: streamingState.content))
     }
 
     switch eventType {
@@ -909,25 +909,25 @@ public final class ResponsesClient: APIClient, Sendable {
         // Build and yield final response with metadata
         if let response = event.response {
           let generationResponse = response.toGenerationResponse()
-          var finalBlocks = generationResponse.blocks
+          var finalContent = generationResponse.content
 
           // Some Responses API streams omit output_index on intermediate
           // function-call events. In that case, recover tool calls from the
           // final completed response payload instead of dropping them.
-          var seenToolCallIDs = Set(finalBlocks.compactMap { block -> String? in
+          var seenToolCallIDs = Set(finalContent.compactMap { block -> String? in
             guard case let .toolCall(toolCall) = block else { return nil }
             return toolCall.id
           })
-          for toolCall in streamingState.blocks.compactMap({ block -> ToolCall? in
+          for toolCall in streamingState.content.compactMap({ block -> ToolCall? in
             guard case let .toolCall(toolCall) = block else { return nil }
             return toolCall
           }) where !seenToolCallIDs.contains(toolCall.id) {
-            finalBlocks.append(.toolCall(toolCall))
+            finalContent.append(.toolCall(toolCall))
             seenToolCallIDs.insert(toolCall.id)
           }
 
           continuation.yield(GenerationResponse(
-            blocks: finalBlocks,
+            content: finalContent,
             metadata: generationResponse.metadata,
           ))
         }
@@ -1431,7 +1431,7 @@ public final class ResponsesClient: APIClient, Sendable {
         }
       }
 
-      var finalBlocks: [Message.Block] = []
+      var finalContent: [Message.Content] = []
       var finalMetadata: GenerationResponse.Metadata?
 
       let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
@@ -1455,7 +1455,7 @@ public final class ResponsesClient: APIClient, Sendable {
       for try await chunk in stream {
         try Task.checkCancellation()
 
-        finalBlocks = chunk.blocks
+        finalContent = chunk.content
         finalMetadata = chunk.metadata
 
         await MainActor.run {
@@ -1463,7 +1463,7 @@ public final class ResponsesClient: APIClient, Sendable {
         }
       }
 
-      return .init(blocks: Self.filteringParseErrorToolCalls(in: finalBlocks), metadata: finalMetadata)
+      return .init(content: Self.filteringParseErrorToolCalls(in: finalContent), metadata: finalMetadata)
     }
 
     await MainActor.run {
@@ -1748,7 +1748,7 @@ extension ResponsesClient {
 
     /// Converts the response object to a GenerationResponse
     func toGenerationResponse() -> GenerationResponse {
-      var blocks: [Message.Block] = []
+      var content: [Message.Content] = []
 
       if let outputArray = output, !outputArray.isEmpty {
         for item in outputArray {
@@ -1759,7 +1759,7 @@ extension ResponsesClient {
               if let contentArray = item.content {
                 for contentItem in contentArray where contentItem.type == OutputItemType.outputText {
                   if let text = contentItem.text, !text.isEmpty {
-                    blocks.append(.text(text))
+                    content.append(.text(text))
                   }
                 }
               }
@@ -1769,7 +1769,7 @@ extension ResponsesClient {
                 .joined(separator: "\n")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
               if let reasoningText, !reasoningText.isEmpty {
-                blocks.append(.thinking(text: reasoningText, signature: nil))
+                content.append(.thinking(text: reasoningText, signature: nil))
               }
             case OutputItemType.functionCall:
               if let name = item.name,
@@ -1782,7 +1782,7 @@ extension ResponsesClient {
                 {
                   parameters = parsedArgs
                 }
-                blocks.append(.toolCall(ToolCall(
+                content.append(.toolCall(ToolCall(
                   name: name,
                   id: callId,
                   parameters: parameters,
@@ -1793,12 +1793,12 @@ extension ResponsesClient {
           }
         }
       } else if let outputText, !outputText.isEmpty {
-        blocks.append(.text(outputText))
+        content.append(.text(outputText))
       }
 
       // Build metadata from response
-      let toolCallCount = blocks.reduce(into: 0) { count, block in
-        if case .toolCall = block {
+      let toolCallCount = content.reduce(into: 0) { count, item in
+        if case .toolCall = item {
           count += 1
         }
       }
@@ -1838,7 +1838,7 @@ extension ResponsesClient {
         reasoningTokens: usage?.outputTokensDetails?.reasoningTokens,
       )
 
-      return GenerationResponse(blocks: blocks, metadata: metadata)
+      return GenerationResponse(content: content, metadata: metadata)
     }
   }
 
