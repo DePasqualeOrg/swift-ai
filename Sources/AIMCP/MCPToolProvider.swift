@@ -5,13 +5,13 @@ import Foundation
 import MCP
 
 /// Errors that can occur when using MCPToolProvider.
-public enum MCPToolProviderError: Error, CustomStringConvertible {
+public enum MCPToolProviderError: Error, LocalizedError {
   /// Tool name conflict between multiple servers.
   case toolNameConflict(toolName: String, servers: [String])
   /// Tool not found in any connected server.
   case toolNotFound(String)
 
-  public var description: String {
+  public var errorDescription: String? {
     switch self {
       case let .toolNameConflict(name, servers):
         "Tool '\(name)' is provided by multiple servers: \(servers.joined(separator: ", ")). Use tools(namespaced: true) to disambiguate."

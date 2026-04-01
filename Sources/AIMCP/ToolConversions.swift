@@ -85,9 +85,16 @@ extension MCP.Tool {
 
 extension AI.Tool {
   /// Error thrown when converting an MCP Tool to an AI Tool.
-  public enum MCPConversionError: Error {
+  public enum MCPConversionError: Error, LocalizedError {
     case invalidInputSchema(String)
     case unsupportedParameterType(String)
+
+    public var errorDescription: String? {
+      switch self {
+        case let .invalidInputSchema(message): "Invalid MCP input schema: \(message)"
+        case let .unsupportedParameterType(type): "Unsupported MCP parameter type: \(type)"
+      }
+    }
   }
 
   /// Creates an AI Tool from an MCP Tool.
