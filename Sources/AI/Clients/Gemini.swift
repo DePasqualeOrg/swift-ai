@@ -488,7 +488,7 @@ public final class GeminiClient: APIClient, Sendable {
   /// Process the raw bytes into a stream of responses
   private func processStreamBytes(result: URLSession.AsyncBytes, response: URLResponse) -> AsyncThrowingStream<StreamResponse, Error> {
     AsyncThrowingStream { continuation in
-      Task {
+      let task = Task {
         do {
           guard let httpResponse = response as? HTTPURLResponse else {
             throw AIError.network(underlying: URLError(.badServerResponse))
@@ -738,6 +738,9 @@ public final class GeminiClient: APIClient, Sendable {
           geminiLogger.error("Stream processing error: \(error.localizedDescription)")
           continuation.finish(throwing: error)
         }
+      }
+      continuation.onTermination = { @Sendable _ in
+        task.cancel()
       }
     }
   }
