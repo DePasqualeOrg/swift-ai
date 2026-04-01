@@ -432,6 +432,7 @@ extension AnthropicClient {
     private var ended = false
     private var errored = false
     private var aborted = false
+    private nonisolated(unsafe) var processingTask: Task<Void, Never>?
 
     init() {}
 
@@ -458,6 +459,7 @@ extension AnthropicClient {
 
     func abort() {
       aborted = true
+      processingTask?.cancel()
       emit(.abort(error: AIError.cancelled))
       emit(.end)
     }
@@ -472,8 +474,8 @@ extension AnthropicClient {
     ) -> MessageStream {
       let stream = MessageStream()
 
-      // Start the stream processing in a detached task
-      Task.detached {
+      // Start the stream processing in a detached task to avoid running on @MainActor
+      stream.processingTask = Task.detached {
         do {
           for message in params.messages {
             await stream.addMessageParam(message)
