@@ -1991,33 +1991,33 @@ public extension AnthropicClient {
     apiKey: String? = nil,
     configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
-    AsyncThrowingStream { continuation in
-      let task = Task {
-        do {
-          let finalResponse = try await _generate(
-            modelId: modelId,
-            tools: tools,
-            systemPrompt: systemPrompt,
-            messages: messages,
-            maxTokens: maxTokens,
-            temperature: temperature,
-            apiKey: apiKey,
-            configuration: configuration,
-            update: { response in
-              continuation.yield(response)
-            },
-          )
-          // Yield the final response with metadata
-          continuation.yield(finalResponse)
-          continuation.finish()
-        } catch {
-          continuation.finish(throwing: error)
-        }
-      }
-      continuation.onTermination = { @Sendable _ in
-        task.cancel()
+    let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
+    let task = Task {
+      do {
+        let finalResponse = try await _generate(
+          modelId: modelId,
+          tools: tools,
+          systemPrompt: systemPrompt,
+          messages: messages,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          apiKey: apiKey,
+          configuration: configuration,
+          update: { response in
+            continuation.yield(response)
+          },
+        )
+        // Yield the final response with metadata
+        continuation.yield(finalResponse)
+        continuation.finish()
+      } catch {
+        continuation.finish(throwing: error)
       }
     }
+    continuation.onTermination = { @Sendable _ in
+      task.cancel()
+    }
+    return stream
   }
 
   /// Generate a text response using a simple prompt string.

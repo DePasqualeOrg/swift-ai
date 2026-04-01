@@ -298,218 +298,221 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     }
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
     let finalRequest = request
-    return AsyncThrowingStream { continuation in
-      Task { @Sendable in
-        let request = finalRequest
-        do {
-          if stream {
-            // Handle streaming response
-            let (result, response) = try await session.bytes(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-              throw AIError.network(underlying: URLError(.badServerResponse))
-            }
-            if !(200 ... 299).contains(httpResponse.statusCode) {
-              var errorData = Data()
-              for try await byte in result {
-                try Task.checkCancellation()
-                errorData.append(byte)
-              }
-              try handleErrorResponse(httpResponse, data: errorData)
-            }
-            var toolCalls: [AI.ToolCall] = []
-            var functionCallArguments: [Int: String] = [:] // Accumulate arguments by index
-            var metadata = GenerationResponse.Metadata()
-            var lastFinishReason: String?
-            for try await event in result.events {
+    let (resultStream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
+    let task = Task { @Sendable in
+      let request = finalRequest
+      do {
+        if stream {
+          // Handle streaming response
+          let (result, response) = try await session.bytes(for: request)
+          guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIError.network(underlying: URLError(.badServerResponse))
+          }
+          if !(200 ... 299).contains(httpResponse.statusCode) {
+            var errorData = Data()
+            for try await byte in result {
               try Task.checkCancellation()
-              let jsonString = event.data
-
-              if jsonString == "[DONE]" {
-                break
-              }
-
-              guard let jsonData = jsonString.data(using: .utf8) else {
-                throw AIError.parsing(message: "Failed to convert streamed response to data")
-              }
-              do {
-                let chunk = try JSONDecoder().decode(StreamChunk.self, from: jsonData)
-                // Check if this is an error response
-                if let errorMessage = chunk.error?.message {
-                  throw AIError.serverError(statusCode: 0, message: errorMessage, context: nil)
-                }
-                // Update metadata from chunk
-                if let id = chunk.id { metadata.responseId = id }
-                if let model = chunk.model { metadata.model = model }
-                if let created = chunk.created { metadata.createdAt = Date(timeIntervalSince1970: TimeInterval(created)) }
-                if let usage = chunk.usage {
-                  metadata.inputTokens = usage.promptTokens
-                  metadata.outputTokens = usage.completionTokens
-                  metadata.totalTokens = usage.totalTokens
-                  metadata.cacheReadInputTokens = usage.promptTokensDetails?.cachedTokens
-                  metadata.reasoningTokens = usage.completionTokensDetails?.reasoningTokens
-                }
-                if let finishReason = chunk.choices?.first?.finishReason {
-                  lastFinishReason = finishReason
-                }
-                // Check if choices array exists and is not empty
-                if let choices = chunk.choices, !choices.isEmpty, let delta = choices.first?.delta {
-                  let reasoningText = delta.reasoningContent
-                  let responseText = delta.content
-
-                  // Handle tool calls
-                  if let deltaToolCalls = delta.toolCalls {
-                    for deltaToolCall in deltaToolCalls {
-                      guard let index = deltaToolCall.index else { continue }
-
-                      // Create new tool call if this is the first chunk for this index
-                      if let id = deltaToolCall.id,
-                         let function = deltaToolCall.function,
-                         let name = function.name,
-                         index >= toolCalls.count
-                      {
-                        toolCalls.append(AI.ToolCall(
-                          name: name,
-                          id: id,
-                          parameters: [:],
-                        ))
-                        functionCallArguments[index] = function.arguments ?? ""
-                      } else if let function = deltaToolCall.function, let arguments = function.arguments {
-                        // Accumulate arguments for existing tool call
-                        functionCallArguments[index, default: ""] += arguments
-                      }
-
-                      // Try to parse accumulated arguments
-                      if index < toolCalls.count, let accumulatedArgs = functionCallArguments[index], !accumulatedArgs.isEmpty {
-                        if let argsData = accumulatedArgs.data(using: .utf8),
-                           let parsedArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
-                        {
-                          toolCalls[index] = AI.ToolCall(
-                            name: toolCalls[index].name,
-                            id: toolCalls[index].id,
-                            parameters: parsedArgs,
-                          )
-                        }
-                      }
-                    }
-                  }
-                  // Perplexity citations
-                  let notesText = formatCitations(chunk.citations)
-                  // Yield if we have content, function calls, or a finish reason (final chunk with metadata)
-                  if reasoningText != nil || responseText != nil || notesText != nil || !toolCalls.isEmpty || lastFinishReason != nil {
-                    var currentMetadata = metadata
-                    currentMetadata.finishReason = parseFinishReason(lastFinishReason)
-                    continuation.yield(GenerationResponse(
-                      blocks: Self.assistantBlocks(
-                        reasoningText: reasoningText,
-                        responseText: responseText,
-                        notesText: notesText,
-                        toolCalls: toolCalls,
-                      ),
-                      metadata: currentMetadata,
-                    ))
-                  } else {
-                    continue
-                  }
-                } else {
-                  // Handle empty choices/delta (final chunk with just usage data)
-                  if lastFinishReason != nil {
-                    var currentMetadata = metadata
-                    currentMetadata.finishReason = parseFinishReason(lastFinishReason)
-                    continuation.yield(GenerationResponse(
-                      blocks: Self.assistantBlocks(toolCalls: toolCalls),
-                      metadata: currentMetadata,
-                    ))
-                  }
-                  continue
-                }
-              } catch let error as AIError {
-                // Re-throw LLM errors
-                throw error
-              } catch {
-                openAILogger.error("Failed to parse streamed JSON: \(jsonString)")
-                throw AIError.parsing(message: "Failed to parse streamed JSON. The server returned an incomplete or invalid response.")
-              }
+              errorData.append(byte)
             }
-          } else {
-            // Handle non-streaming response
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-              throw AIError.network(underlying: URLError(.badServerResponse))
+            try handleErrorResponse(httpResponse, data: errorData)
+          }
+          var toolCalls: [AI.ToolCall] = []
+          var functionCallArguments: [Int: String] = [:] // Accumulate arguments by index
+          var metadata = GenerationResponse.Metadata()
+          var lastFinishReason: String?
+          for try await event in result.events {
+            try Task.checkCancellation()
+            let jsonString = event.data
+
+            if jsonString == "[DONE]" {
+              break
             }
-            if !(200 ... 299).contains(httpResponse.statusCode) {
-              try handleErrorResponse(httpResponse, data: data)
+
+            guard let jsonData = jsonString.data(using: .utf8) else {
+              throw AIError.parsing(message: "Failed to convert streamed response to data")
             }
             do {
-              let completionResponse = try JSONDecoder().decode(CompletionResponse.self, from: data)
-              guard let choices = completionResponse.choices,
-                    let firstChoice = choices.first,
-                    let message = firstChoice.message
-              else {
-                throw AIError.parsing(message: "Failed to parse JSON from non-streamed response")
+              let chunk = try JSONDecoder().decode(StreamChunk.self, from: jsonData)
+              // Check if this is an error response
+              if let errorMessage = chunk.error?.message {
+                throw AIError.serverError(statusCode: 0, message: errorMessage, context: nil)
               }
-              let reasoningText = message.reasoningContent
-              let responseText = message.content
-              var toolCalls: [AI.ToolCall] = []
+              // Update metadata from chunk
+              if let id = chunk.id { metadata.responseId = id }
+              if let model = chunk.model { metadata.model = model }
+              if let created = chunk.created { metadata.createdAt = Date(timeIntervalSince1970: TimeInterval(created)) }
+              if let usage = chunk.usage {
+                metadata.inputTokens = usage.promptTokens
+                metadata.outputTokens = usage.completionTokens
+                metadata.totalTokens = usage.totalTokens
+                metadata.cacheReadInputTokens = usage.promptTokensDetails?.cachedTokens
+                metadata.reasoningTokens = usage.completionTokensDetails?.reasoningTokens
+              }
+              if let finishReason = chunk.choices?.first?.finishReason {
+                lastFinishReason = finishReason
+              }
+              // Check if choices array exists and is not empty
+              if let choices = chunk.choices, !choices.isEmpty, let delta = choices.first?.delta {
+                let reasoningText = delta.reasoningContent
+                let responseText = delta.content
 
-              // Get tool calls if available
-              if let messageToolCalls = message.toolCalls {
-                for messageToolCall in messageToolCalls {
-                  if let function = messageToolCall.function,
-                     let name = function.name,
-                     let arguments = function.arguments,
-                     let id = messageToolCall.id
-                  {
-                    var parameters: [String: Value] = [:]
-                    if let argumentsData = arguments.data(using: .utf8),
-                       let parsedArgs = try? JSONDecoder().decode([String: Value].self, from: argumentsData)
+                // Handle tool calls
+                if let deltaToolCalls = delta.toolCalls {
+                  for deltaToolCall in deltaToolCalls {
+                    guard let index = deltaToolCall.index else { continue }
+
+                    // Create new tool call if this is the first chunk for this index
+                    if let id = deltaToolCall.id,
+                       let function = deltaToolCall.function,
+                       let name = function.name,
+                       index >= toolCalls.count
                     {
-                      parameters = parsedArgs
-                    } else if !arguments.isEmpty {
-                      openAILogger.error("Failed to parse function call arguments for call ID \(id): \(arguments)")
-                      parameters = ["_parseError": .string("Failed to parse arguments JSON"), "_rawArguments": .string(arguments)]
+                      toolCalls.append(AI.ToolCall(
+                        name: name,
+                        id: id,
+                        parameters: [:],
+                      ))
+                      functionCallArguments[index] = function.arguments ?? ""
+                    } else if let function = deltaToolCall.function, let arguments = function.arguments {
+                      // Accumulate arguments for existing tool call
+                      functionCallArguments[index, default: ""] += arguments
                     }
-                    toolCalls.append(AI.ToolCall(
-                      name: name,
-                      id: id,
-                      parameters: parameters,
-                    ))
+
+                    // Try to parse accumulated arguments
+                    if index < toolCalls.count, let accumulatedArgs = functionCallArguments[index], !accumulatedArgs.isEmpty {
+                      if let argsData = accumulatedArgs.data(using: .utf8),
+                         let parsedArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
+                      {
+                        toolCalls[index] = AI.ToolCall(
+                          name: toolCalls[index].name,
+                          id: toolCalls[index].id,
+                          parameters: parsedArgs,
+                        )
+                      }
+                    }
                   }
                 }
+                // Perplexity citations
+                let notesText = formatCitations(chunk.citations)
+                // Yield if we have content, function calls, or a finish reason (final chunk with metadata)
+                if reasoningText != nil || responseText != nil || notesText != nil || !toolCalls.isEmpty || lastFinishReason != nil {
+                  var currentMetadata = metadata
+                  currentMetadata.finishReason = parseFinishReason(lastFinishReason)
+                  continuation.yield(GenerationResponse(
+                    blocks: Self.assistantBlocks(
+                      reasoningText: reasoningText,
+                      responseText: responseText,
+                      notesText: notesText,
+                      toolCalls: toolCalls,
+                    ),
+                    metadata: currentMetadata,
+                  ))
+                } else {
+                  continue
+                }
+              } else {
+                // Handle empty choices/delta (final chunk with just usage data)
+                if lastFinishReason != nil {
+                  var currentMetadata = metadata
+                  currentMetadata.finishReason = parseFinishReason(lastFinishReason)
+                  continuation.yield(GenerationResponse(
+                    blocks: Self.assistantBlocks(toolCalls: toolCalls),
+                    metadata: currentMetadata,
+                  ))
+                }
+                continue
               }
-              // Build metadata
-              let metadata = GenerationResponse.Metadata(
-                responseId: completionResponse.id,
-                model: completionResponse.model,
-                createdAt: completionResponse.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-                finishReason: parseFinishReason(firstChoice.finishReason),
-                inputTokens: completionResponse.usage?.promptTokens,
-                outputTokens: completionResponse.usage?.completionTokens,
-                totalTokens: completionResponse.usage?.totalTokens,
-                cacheReadInputTokens: completionResponse.usage?.promptTokensDetails?.cachedTokens,
-                reasoningTokens: completionResponse.usage?.completionTokensDetails?.reasoningTokens,
-              )
-              // Perplexity citations
-              let notesText = formatCitations(completionResponse.citations)
-              continuation.yield(.init(
-                blocks: Self.assistantBlocks(
-                  reasoningText: reasoningText,
-                  responseText: responseText,
-                  notesText: notesText,
-                  toolCalls: toolCalls,
-                ),
-                metadata: metadata,
-              ))
-            } catch {
-              openAILogger.error("Failed to parse non-streamed content: \(error.localizedDescription)")
+            } catch let error as AIError {
+              // Re-throw LLM errors
               throw error
+            } catch {
+              openAILogger.error("Failed to parse streamed JSON: \(jsonString)")
+              throw AIError.parsing(message: "Failed to parse streamed JSON. The server returned an incomplete or invalid response.")
             }
           }
-          continuation.finish()
-        } catch {
-          continuation.finish(throwing: error)
+        } else {
+          // Handle non-streaming response
+          let (data, response) = try await session.data(for: request)
+          guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIError.network(underlying: URLError(.badServerResponse))
+          }
+          if !(200 ... 299).contains(httpResponse.statusCode) {
+            try handleErrorResponse(httpResponse, data: data)
+          }
+          do {
+            let completionResponse = try JSONDecoder().decode(CompletionResponse.self, from: data)
+            guard let choices = completionResponse.choices,
+                  let firstChoice = choices.first,
+                  let message = firstChoice.message
+            else {
+              throw AIError.parsing(message: "Failed to parse JSON from non-streamed response")
+            }
+            let reasoningText = message.reasoningContent
+            let responseText = message.content
+            var toolCalls: [AI.ToolCall] = []
+
+            // Get tool calls if available
+            if let messageToolCalls = message.toolCalls {
+              for messageToolCall in messageToolCalls {
+                if let function = messageToolCall.function,
+                   let name = function.name,
+                   let arguments = function.arguments,
+                   let id = messageToolCall.id
+                {
+                  var parameters: [String: Value] = [:]
+                  if let argumentsData = arguments.data(using: .utf8),
+                     let parsedArgs = try? JSONDecoder().decode([String: Value].self, from: argumentsData)
+                  {
+                    parameters = parsedArgs
+                  } else if !arguments.isEmpty {
+                    openAILogger.error("Failed to parse function call arguments for call ID \(id): \(arguments)")
+                    parameters = ["_parseError": .string("Failed to parse arguments JSON"), "_rawArguments": .string(arguments)]
+                  }
+                  toolCalls.append(AI.ToolCall(
+                    name: name,
+                    id: id,
+                    parameters: parameters,
+                  ))
+                }
+              }
+            }
+            // Build metadata
+            let metadata = GenerationResponse.Metadata(
+              responseId: completionResponse.id,
+              model: completionResponse.model,
+              createdAt: completionResponse.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
+              finishReason: parseFinishReason(firstChoice.finishReason),
+              inputTokens: completionResponse.usage?.promptTokens,
+              outputTokens: completionResponse.usage?.completionTokens,
+              totalTokens: completionResponse.usage?.totalTokens,
+              cacheReadInputTokens: completionResponse.usage?.promptTokensDetails?.cachedTokens,
+              reasoningTokens: completionResponse.usage?.completionTokensDetails?.reasoningTokens,
+            )
+            // Perplexity citations
+            let notesText = formatCitations(completionResponse.citations)
+            continuation.yield(.init(
+              blocks: Self.assistantBlocks(
+                reasoningText: reasoningText,
+                responseText: responseText,
+                notesText: notesText,
+                toolCalls: toolCalls,
+              ),
+              metadata: metadata,
+            ))
+          } catch {
+            openAILogger.error("Failed to parse non-streamed content: \(error.localizedDescription)")
+            throw error
+          }
         }
+        continuation.finish()
+      } catch {
+        continuation.finish(throwing: error)
       }
     }
+    continuation.onTermination = { @Sendable _ in
+      task.cancel()
+    }
+    return resultStream
   }
 
   private func formatCitations(_ citations: [String]?) -> String? {
@@ -581,34 +584,34 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     apiKey: String? = nil,
     configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
-    AsyncThrowingStream { continuation in
-      let task = Task {
-        do {
-          let finalResponse = try await _generate(
-            modelId: modelId,
-            tools: tools,
-            systemPrompt: systemPrompt,
-            messages: messages,
-            maxTokens: maxTokens,
-            temperature: temperature,
-            apiKey: apiKey,
-            stream: true,
-            configuration: configuration,
-            update: { response in
-              continuation.yield(response)
-            },
-          )
-          // Yield the final response with metadata
-          continuation.yield(finalResponse)
-          continuation.finish()
-        } catch {
-          continuation.finish(throwing: error)
-        }
-      }
-      continuation.onTermination = { @Sendable _ in
-        task.cancel()
+    let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
+    let task = Task {
+      do {
+        let finalResponse = try await _generate(
+          modelId: modelId,
+          tools: tools,
+          systemPrompt: systemPrompt,
+          messages: messages,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          apiKey: apiKey,
+          stream: true,
+          configuration: configuration,
+          update: { response in
+            continuation.yield(response)
+          },
+        )
+        // Yield the final response with metadata
+        continuation.yield(finalResponse)
+        continuation.finish()
+      } catch {
+        continuation.finish(throwing: error)
       }
     }
+    continuation.onTermination = { @Sendable _ in
+      task.cancel()
+    }
+    return stream
   }
 
   /// Generate a text response using a simple prompt string.

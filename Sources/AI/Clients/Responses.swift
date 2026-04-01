@@ -515,76 +515,76 @@ public final class ResponsesClient: APIClient, Sendable {
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
     let finalRequest = request
 
-    return AsyncThrowingStream { continuation in
-      let streamTask = Task { @Sendable in
-        let request = finalRequest
-        do {
-          if backgroundMode, stream {
-            openAIResponsesLogger.log("Initiating background mode response with streaming in OpenAI Responses client")
-            // For background mode with streaming, stream directly but with proper retry logic
-            try await streamBackgroundResponseDirect(
-              request: request,
-              apiKey: apiKey,
-              continuation: continuation,
-            )
-          } else if backgroundMode {
-            openAIResponsesLogger.log("Initiating background mode response without streaming in OpenAI Responses client")
-            // For background mode without streaming, get response ID and poll
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-              throw AIError.network(underlying: URLError(.badServerResponse))
-            }
-            if !(200 ... 299).contains(httpResponse.statusCode) {
-              try handleErrorResponse(httpResponse, data: data)
-            }
-
-            let decodedResponse = try JSONDecoder().decode(ResponseObject.self, from: data)
-            guard let responseId = decodedResponse.id else {
-              throw AIError.parsing(message: "Failed to parse background response ID")
-            }
-            await MainActor.run {
-              activeBackgroundResponseId = responseId
-            }
-            // Poll for completion
-            try await pollBackgroundResponse(responseId: responseId, apiKey: apiKey, continuation: continuation)
-          } else if stream {
-            openAIResponsesLogger.log("Initiating standard streamed response in OpenAI Responses client")
-            try await performSSEStream(
-              request: request,
-              continuation: continuation,
-              logPrefix: "Standard Stream",
-            )
-          } else {
-            let (data, response) = try await session.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-              throw AIError.network(underlying: URLError(.badServerResponse))
-            }
-            if !(200 ... 299).contains(httpResponse.statusCode) {
-              try handleErrorResponse(httpResponse, data: data)
-            }
-
-            do {
-              let response = try JSONDecoder().decode(ResponseObject.self, from: data)
-              continuation.yield(response.toGenerationResponse())
-            } catch {
-              openAIResponsesLogger.error("Non-streaming response parsing error: \(error)")
-              throw AIError.parsing(message: "Failed to parse non-streamed response: \(error.localizedDescription)")
-            }
+    let (resultStream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
+    let streamTask = Task { @Sendable in
+      let request = finalRequest
+      do {
+        if backgroundMode, stream {
+          openAIResponsesLogger.log("Initiating background mode response with streaming in OpenAI Responses client")
+          // For background mode with streaming, stream directly but with proper retry logic
+          try await streamBackgroundResponseDirect(
+            request: request,
+            apiKey: apiKey,
+            continuation: continuation,
+          )
+        } else if backgroundMode {
+          openAIResponsesLogger.log("Initiating background mode response without streaming in OpenAI Responses client")
+          // For background mode without streaming, get response ID and poll
+          let (data, response) = try await session.data(for: request)
+          guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIError.network(underlying: URLError(.badServerResponse))
           }
-          continuation.finish()
-        } catch {
-          continuation.finish(throwing: error)
-        }
-      }
+          if !(200 ... 299).contains(httpResponse.statusCode) {
+            try handleErrorResponse(httpResponse, data: data)
+          }
 
-      // Set up cancellation handler to cancel the stream task when the consumer cancels
-      continuation.onTermination = { @Sendable termination in
-        if case .cancelled = termination {
-          openAIResponsesLogger.log("AsyncThrowingStream cancelled by consumer - cancelling stream task")
-          streamTask.cancel()
+          let decodedResponse = try JSONDecoder().decode(ResponseObject.self, from: data)
+          guard let responseId = decodedResponse.id else {
+            throw AIError.parsing(message: "Failed to parse background response ID")
+          }
+          await MainActor.run {
+            activeBackgroundResponseId = responseId
+          }
+          // Poll for completion
+          try await pollBackgroundResponse(responseId: responseId, apiKey: apiKey, continuation: continuation)
+        } else if stream {
+          openAIResponsesLogger.log("Initiating standard streamed response in OpenAI Responses client")
+          try await performSSEStream(
+            request: request,
+            continuation: continuation,
+            logPrefix: "Standard Stream",
+          )
+        } else {
+          let (data, response) = try await session.data(for: request)
+          guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIError.network(underlying: URLError(.badServerResponse))
+          }
+          if !(200 ... 299).contains(httpResponse.statusCode) {
+            try handleErrorResponse(httpResponse, data: data)
+          }
+
+          do {
+            let response = try JSONDecoder().decode(ResponseObject.self, from: data)
+            continuation.yield(response.toGenerationResponse())
+          } catch {
+            openAIResponsesLogger.error("Non-streaming response parsing error: \(error)")
+            throw AIError.parsing(message: "Failed to parse non-streamed response: \(error.localizedDescription)")
+          }
         }
+        continuation.finish()
+      } catch {
+        continuation.finish(throwing: error)
       }
     }
+
+    // Set up cancellation handler to cancel the stream task when the consumer cancels
+    continuation.onTermination = { @Sendable termination in
+      if case .cancelled = termination {
+        openAIResponsesLogger.log("AsyncThrowingStream cancelled by consumer - cancelling stream task")
+        streamTask.cancel()
+      }
+    }
+    return resultStream
   }
 
   private func handleErrorResponse(_ httpResponse: HTTPURLResponse, data: Data) throws {
@@ -649,34 +649,34 @@ public final class ResponsesClient: APIClient, Sendable {
     apiKey: String? = nil,
     configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
-    AsyncThrowingStream { continuation in
-      let task = Task {
-        do {
-          let finalResponse = try await _generate(
-            modelId: modelId,
-            tools: tools,
-            systemPrompt: systemPrompt,
-            messages: messages,
-            maxTokens: maxTokens,
-            temperature: temperature,
-            apiKey: apiKey,
-            stream: true,
-            configuration: configuration,
-            update: { response in
-              continuation.yield(response)
-            },
-          )
-          // Yield the final response with metadata
-          continuation.yield(finalResponse)
-          continuation.finish()
-        } catch {
-          continuation.finish(throwing: error)
-        }
-      }
-      continuation.onTermination = { @Sendable _ in
-        task.cancel()
+    let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
+    let task = Task {
+      do {
+        let finalResponse = try await _generate(
+          modelId: modelId,
+          tools: tools,
+          systemPrompt: systemPrompt,
+          messages: messages,
+          maxTokens: maxTokens,
+          temperature: temperature,
+          apiKey: apiKey,
+          stream: true,
+          configuration: configuration,
+          update: { response in
+            continuation.yield(response)
+          },
+        )
+        // Yield the final response with metadata
+        continuation.yield(finalResponse)
+        continuation.finish()
+      } catch {
+        continuation.finish(throwing: error)
       }
     }
+    continuation.onTermination = { @Sendable _ in
+      task.cancel()
+    }
+    return stream
   }
 
   /// Generate a text response using a simple prompt string.
@@ -1428,20 +1428,22 @@ public final class ResponsesClient: APIClient, Sendable {
       var finalBlocks: [Message.Block] = []
       var finalMetadata: GenerationResponse.Metadata?
 
-      let stream = AsyncThrowingStream<GenerationResponse, Error> { continuation in
-        Task {
-          do {
-            try await streamBackgroundResponse(
-              responseId: responseId,
-              apiKey: apiKey,
-              continuation: continuation,
-              startingAfter: startingAfter,
-            )
-            continuation.finish()
-          } catch {
-            continuation.finish(throwing: error)
-          }
+      let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
+      let backgroundTask = Task {
+        do {
+          try await streamBackgroundResponse(
+            responseId: responseId,
+            apiKey: apiKey,
+            continuation: continuation,
+            startingAfter: startingAfter,
+          )
+          continuation.finish()
+        } catch {
+          continuation.finish(throwing: error)
         }
+      }
+      continuation.onTermination = { @Sendable _ in
+        backgroundTask.cancel()
       }
 
       for try await chunk in stream {
