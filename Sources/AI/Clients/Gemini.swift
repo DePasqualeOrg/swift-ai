@@ -935,6 +935,18 @@ public final class GeminiClient: APIClient, Sendable {
           tools: tools,
         )
 
+        let sendUpdate = {
+          let blocks = Self.assistantBlocks(
+            reasoningText: fullReasoningText,
+            responseText: fullResponseText,
+            notesText: notesText,
+            toolCalls: toolCalls,
+          )
+          await MainActor.run {
+            update(.init(blocks: blocks))
+          }
+        }
+
         for try await chunk in stream {
           try Task.checkCancellation()
 
@@ -945,53 +957,20 @@ public final class GeminiClient: APIClient, Sendable {
             } else {
               fullResponseText += text
             }
-            let fullReasoningTextCopy = fullReasoningText
-            let fullResponseTextCopy = fullResponseText
-            let notesTextCopy = notesText
-            let toolCallsCopy = toolCalls
-            await MainActor.run {
-              update(.init(blocks: Self.assistantBlocks(
-                reasoningText: fullReasoningTextCopy,
-                responseText: fullResponseTextCopy,
-                notesText: notesTextCopy,
-                toolCalls: toolCallsCopy,
-              )))
-            }
+            await sendUpdate()
           }
 
           // Handle function calls
           if let toolCall = chunk.toolCall {
             toolCalls.append(toolCall)
-            let fullReasoningTextCopy = fullReasoningText
-            let fullResponseTextCopy = fullResponseText
-            let notesTextCopy = notesText
-            let toolCallsCopy = toolCalls
-            await MainActor.run {
-              update(.init(blocks: Self.assistantBlocks(
-                reasoningText: fullReasoningTextCopy,
-                responseText: fullResponseTextCopy,
-                notesText: notesTextCopy,
-                toolCalls: toolCallsCopy,
-              )))
-            }
+            await sendUpdate()
           }
 
           // Handle grounding metadata
           if let metadata = chunk.groundingMetadata {
             notesText = await formatGroundingInfo(from: metadata)
             if notesText != nil {
-              let fullReasoningTextCopy = fullReasoningText
-              let fullResponseTextCopy = fullResponseText
-              let notesTextCopy = notesText
-              let toolCallsCopy = toolCalls
-              await MainActor.run {
-                update(.init(blocks: Self.assistantBlocks(
-                  reasoningText: fullReasoningTextCopy,
-                  responseText: fullResponseTextCopy,
-                  notesText: notesTextCopy,
-                  toolCalls: toolCallsCopy,
-                )))
-              }
+              await sendUpdate()
             }
           }
 
