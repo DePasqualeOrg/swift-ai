@@ -156,8 +156,8 @@ public final class ChatCompletionsClient: APIClient, Sendable {
         }.joined(separator: "\n")
 
         return [
-          "role": "function",
-          "name": toolResult.name,
+          "role": "tool",
+          "tool_call_id": toolResult.id,
           "content": resultContent,
         ]
       }
