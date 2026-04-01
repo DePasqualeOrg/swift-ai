@@ -312,11 +312,10 @@ struct GeminiClientTests {
       ))
       Issue.record("Expected error for missing API key")
     } catch let error as AIError {
-      // GeminiClient throws invalidRequest when API key is missing
-      if case .invalidRequest = error {
+      if case .authentication = error {
         // Expected
       } else {
-        Issue.record("Expected invalidRequest error, got: \(error)")
+        Issue.record("Expected authentication error, got: \(error)")
       }
     }
   }

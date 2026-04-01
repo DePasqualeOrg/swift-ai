@@ -929,7 +929,7 @@ public final class GeminiClient: APIClient, Sendable {
     update: @Sendable @escaping (GenerationResponse) -> Void,
   ) async throws -> GenerationResponse {
     guard let apiKey else {
-      throw AIError.invalidRequest(message: "API key is not set")
+      throw AIError.authentication(message: "Missing API key")
     }
     await MainActor.run {
       isGenerating = true
