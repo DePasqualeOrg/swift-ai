@@ -1158,7 +1158,10 @@ public final class GeminiClient: APIClient, Sendable {
       throw AIError.parsing(message: "Failed to get upload URL from response headers")
     }
     // Upload the actual file
-    var uploadRequest = URLRequest(url: URL(string: uploadUrl)!)
+    guard let uploadURL = URL(string: uploadUrl) else {
+      throw AIError.parsing(message: "Invalid upload URL from server: \(uploadUrl)")
+    }
+    var uploadRequest = URLRequest(url: uploadURL)
     uploadRequest.httpMethod = "POST"
     uploadRequest.setValue("\(data.count)", forHTTPHeaderField: "Content-Length")
     uploadRequest.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
@@ -1248,10 +1251,16 @@ public final class GeminiClient: APIClient, Sendable {
         try Task.checkCancellation()
         try await Task.sleep(for: .seconds(2))
         // Use the full URI from the response
-        let checkURL = URL(string: fileUri)!
-        components = URLComponents(url: checkURL, resolvingAgainstBaseURL: true)!
-        components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-        let (checkData, _) = try await session.data(from: components.url!)
+        guard let checkURL = URL(string: fileUri),
+              var checkComponents = URLComponents(url: checkURL, resolvingAgainstBaseURL: true)
+        else {
+          throw AIError.parsing(message: "Invalid file URI from server: \(fileUri)")
+        }
+        checkComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        guard let checkRequestURL = checkComponents.url else {
+          throw AIError.parsing(message: "Failed to construct status check URL for file: \(fileUri)")
+        }
+        let (checkData, _) = try await session.data(from: checkRequestURL)
         // Decode the status check response
         let statusResponse = try JSONDecoder().decode(StatusResponse.self, from: checkData)
         // Check for processing failure
