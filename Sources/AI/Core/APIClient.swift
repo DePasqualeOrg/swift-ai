@@ -22,7 +22,7 @@ public protocol APIClient: Sendable {
   /// Generate a text response without streaming.
   func generateText(
     modelId: String,
-    tools: [Tool],
+    tools: some Collection<Tool>,
     systemPrompt: String?,
     messages: [Message],
     maxTokens: Int?,
@@ -34,7 +34,7 @@ public protocol APIClient: Sendable {
   /// Generate a text response with streaming.
   func streamText(
     modelId: String,
-    tools: [Tool],
+    tools: some Collection<Tool>,
     systemPrompt: String?,
     messages: [Message],
     maxTokens: Int?,

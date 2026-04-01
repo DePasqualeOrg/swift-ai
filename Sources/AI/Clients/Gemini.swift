@@ -774,7 +774,7 @@ public final class GeminiClient: APIClient, Sendable {
   /// - Returns: The generation response with text and metadata.
   public func generateText(
     modelId: String,
-    tools: [Tool] = [],
+    tools: some Collection<Tool> = [],
     systemPrompt: String? = nil,
     messages: [Message],
     maxTokens: Int? = nil,
@@ -784,7 +784,7 @@ public final class GeminiClient: APIClient, Sendable {
   ) async throws -> GenerationResponse {
     try await _generate(
       modelId: modelId,
-      tools: tools,
+      tools: Array(tools),
       systemPrompt: systemPrompt,
       messages: messages,
       maxTokens: maxTokens,
@@ -809,7 +809,7 @@ public final class GeminiClient: APIClient, Sendable {
   /// - Returns: An async stream of generation responses as they arrive.
   public func streamText(
     modelId: String,
-    tools: [Tool] = [],
+    tools: some Collection<Tool> = [],
     systemPrompt: String? = nil,
     messages: [Message],
     maxTokens: Int? = nil,
@@ -817,6 +817,7 @@ public final class GeminiClient: APIClient, Sendable {
     apiKey: String? = nil,
     configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
+    let tools = Array(tools)
     let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
     let task = Task {
       do {
@@ -849,7 +850,7 @@ public final class GeminiClient: APIClient, Sendable {
   /// Generate a text response using a simple prompt string.
   public func generateText(
     modelId: String,
-    tools: [Tool] = [],
+    tools: some Collection<Tool> = [],
     systemPrompt: String? = nil,
     prompt: String,
     maxTokens: Int? = nil,
@@ -859,7 +860,7 @@ public final class GeminiClient: APIClient, Sendable {
   ) async throws -> GenerationResponse {
     try await generateText(
       modelId: modelId,
-      tools: tools,
+      tools: Array(tools),
       systemPrompt: systemPrompt,
       messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
@@ -872,7 +873,7 @@ public final class GeminiClient: APIClient, Sendable {
   /// Generate a text response with streaming using a simple prompt string.
   public func streamText(
     modelId: String,
-    tools: [Tool] = [],
+    tools: some Collection<Tool> = [],
     systemPrompt: String? = nil,
     prompt: String,
     maxTokens: Int? = nil,
@@ -882,7 +883,7 @@ public final class GeminiClient: APIClient, Sendable {
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     streamText(
       modelId: modelId,
-      tools: tools,
+      tools: Array(tools),
       systemPrompt: systemPrompt,
       messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,

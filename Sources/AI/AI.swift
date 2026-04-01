@@ -54,7 +54,7 @@ public enum Model: Sendable {
 /// - Returns: The generation response.
 public func generateText(
   model: Model,
-  tools: [AI.Tool] = [],
+  tools: some Collection<AI.Tool> = [],
   systemPrompt: String? = nil,
   messages: [Message],
   maxTokens: Int? = nil,
@@ -149,7 +149,7 @@ public func generateText(
 /// - Returns: An async stream of generation responses.
 public func streamText(
   model: Model,
-  tools: [AI.Tool] = [],
+  tools: some Collection<AI.Tool> = [],
   systemPrompt: String? = nil,
   messages: [Message],
   maxTokens: Int? = nil,
@@ -259,7 +259,7 @@ public func streamText(
 /// - Returns: The generation response.
 public func generateText(
   model: Model,
-  tools: [AI.Tool] = [],
+  tools: some Collection<AI.Tool> = [],
   systemPrompt: String? = nil,
   prompt: String,
   maxTokens: Int? = nil,
@@ -299,7 +299,7 @@ public func generateText(
 /// - Returns: An async stream of generation responses.
 public func streamText(
   model: Model,
-  tools: [AI.Tool] = [],
+  tools: some Collection<AI.Tool> = [],
   systemPrompt: String? = nil,
   prompt: String,
   maxTokens: Int? = nil,

@@ -1948,7 +1948,7 @@ public extension AnthropicClient {
   /// - Returns: The generation response with text and metadata.
   func generateText(
     modelId: String,
-    tools: [Tool] = [],
+    tools: some Collection<Tool> = [],
     systemPrompt: String? = nil,
     messages: [Message],
     maxTokens: Int? = nil,
@@ -1958,7 +1958,7 @@ public extension AnthropicClient {
   ) async throws -> GenerationResponse {
     try await _generate(
       modelId: modelId,
-      tools: tools,
+      tools: Array(tools),
       systemPrompt: systemPrompt,
       messages: messages,
       maxTokens: maxTokens,
@@ -1983,7 +1983,7 @@ public extension AnthropicClient {
   /// - Returns: An async stream of generation responses as they arrive.
   func streamText(
     modelId: String,
-    tools: [Tool] = [],
+    tools: some Collection<Tool> = [],
     systemPrompt: String? = nil,
     messages: [Message],
     maxTokens: Int? = nil,
@@ -1991,6 +1991,7 @@ public extension AnthropicClient {
     apiKey: String? = nil,
     configuration: Configuration = .init(),
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
+    let tools = Array(tools)
     let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
     let task = Task {
       do {
@@ -2023,7 +2024,7 @@ public extension AnthropicClient {
   /// Generate a text response using a simple prompt string.
   func generateText(
     modelId: String,
-    tools: [Tool] = [],
+    tools: some Collection<Tool> = [],
     systemPrompt: String? = nil,
     prompt: String,
     maxTokens: Int? = nil,
@@ -2033,7 +2034,7 @@ public extension AnthropicClient {
   ) async throws -> GenerationResponse {
     try await generateText(
       modelId: modelId,
-      tools: tools,
+      tools: Array(tools),
       systemPrompt: systemPrompt,
       messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,
@@ -2046,7 +2047,7 @@ public extension AnthropicClient {
   /// Generate a text response with streaming using a simple prompt string.
   func streamText(
     modelId: String,
-    tools: [Tool] = [],
+    tools: some Collection<Tool> = [],
     systemPrompt: String? = nil,
     prompt: String,
     maxTokens: Int? = nil,
@@ -2056,7 +2057,7 @@ public extension AnthropicClient {
   ) -> AsyncThrowingStream<GenerationResponse, Error> {
     streamText(
       modelId: modelId,
-      tools: tools,
+      tools: Array(tools),
       systemPrompt: systemPrompt,
       messages: [Message(role: .user, blocks: [.text(prompt)])],
       maxTokens: maxTokens,

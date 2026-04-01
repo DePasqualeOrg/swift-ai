@@ -552,7 +552,7 @@ while iterations < maxIterations {
     iterations += 1
     let response = try await client.generateText(
         modelId: "claude-opus-4-5",
-        tools: tools.definitions,
+        tools: tools,
         systemPrompt: "You are an expert alpine guide assistant.",
         messages: messages,
         apiKey: apiKey
@@ -829,7 +829,7 @@ let tools = try await toolProvider.tools()
 // Use MCP tools with any provider
 let response = try await client.generateText(
     modelId: "claude-opus-4-5",
-    tools: tools.definitions,
+    tools: tools,
     systemPrompt: "You are an expert alpine guide assistant.",
     messages: messages,
     apiKey: apiKey
