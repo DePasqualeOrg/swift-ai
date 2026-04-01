@@ -521,7 +521,7 @@ extension AnthropicClient {
             try Task.checkCancellation()
             errorData.append(byte)
           }
-          throw AnthropicError.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: errorData)
+          throw AnthropicClient.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: errorData)
         }
         for try await event in stream.events {
           try Task.checkCancellation()
@@ -1638,7 +1638,7 @@ public final class AnthropicClient: APIClient, Sendable {
         throw AIError.network(underlying: URLError(.badServerResponse))
       }
       if !(200 ... 299).contains(httpResponse.statusCode) {
-        throw AnthropicError.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: data)
+        throw Self.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: data)
       }
       return try JSONDecoder().decode(T.self, from: data)
     } catch {
@@ -2704,94 +2704,40 @@ extension AnthropicClient {
 }
 
 extension AnthropicClient {
-  enum AnthropicError: LocalizedError {
-    case api(status: Int, error: APIErrorDetails?, message: String?)
-    case connection(message: String, cause: Error?)
-    case connectionTimeout
-    case userAbort
-    case rateLimit(message: String, headers: [String: String]?)
-    case authentication(message: String)
-    case permissionDenied(message: String)
-    case notFound(message: String)
-    case invalidRequest(message: String)
-    case server(message: String)
-    case parsing(message: String)
-    case unexpectedEventOrder(event: String, expectedPriorEvent: String)
-    case missingApiKey
+  static func aiErrorFromHTTPResponse(status: Int, data: Data) -> AIError {
+    let decoder = JSONDecoder()
+    decoder.keyDecodingStrategy = .convertFromSnakeCase
+    if let errorResponse = try? decoder.decode(ErrorResponse.self, from: data) {
+      let message = errorResponse.error.message ?? "Unknown error"
+      switch status {
+        case 400:
+          return .invalidRequest(message: message)
+        case 401:
+          return .authentication(message: "There's an issue with your API key")
+        case 403:
+          return .authentication(message: "Your API key does not have permission to use the specified resource")
+        case 404:
+          return .invalidRequest(message: "Not found: \(message)")
+        case 429:
+          return .rateLimit(retryAfter: nil)
+        case 500 ... 599:
+          return .serverError(statusCode: status, message: message, context: nil)
+        default:
+          return .serverError(statusCode: status, message: message, context: nil)
+      }
+    }
 
-    struct APIErrorDetails: Codable {
+    return .serverError(statusCode: status, message: "Unknown error", context: nil)
+  }
+
+  private struct ErrorResponse: Codable {
+    let error: ErrorDetails
+
+    struct ErrorDetails: Codable {
       let type: String?
       let message: String?
       let param: String?
       let code: String?
-    }
-
-    var errorDescription: String? {
-      switch self {
-        case let .api(_, _, message):
-          message ?? "API error occurred"
-        case let .connection(message, _):
-          "Connection error: \(message)"
-        case .connectionTimeout:
-          "Request timed out"
-        case .userAbort:
-          "Request was aborted"
-        case let .rateLimit(message, _):
-          "Rate limit exceeded: \(message)"
-        case let .authentication(message):
-          "Authentication error: \(message)"
-        case let .permissionDenied(message):
-          "Permission denied: \(message)"
-        case let .notFound(message):
-          "Not found: \(message)"
-        case let .invalidRequest(message):
-          "Invalid request: \(message)"
-        case let .server(message):
-          "Server error: \(message)"
-        case let .parsing(message):
-          "Parsing error: \(message)"
-        case let .unexpectedEventOrder(event, expectedPriorEvent):
-          "Unexpected event order: received \(event) before \(expectedPriorEvent)"
-        case .missingApiKey:
-          "Missing API key"
-      }
-    }
-
-    static func aiErrorFromHTTPResponse(status: Int, data: Data) -> AIError {
-      let decoder = JSONDecoder()
-      decoder.keyDecodingStrategy = .convertFromSnakeCase
-      if let errorResponse = try? decoder.decode(ErrorResponse.self, from: data) {
-        let message = errorResponse.error.message ?? "Unknown error"
-        switch status {
-          case 400:
-            return .invalidRequest(message: message)
-          case 401:
-            return .authentication(message: "There's an issue with your API key")
-          case 403:
-            return .authentication(message: "Your API key does not have permission to use the specified resource")
-          case 404:
-            return .invalidRequest(message: "Not found: \(message)")
-          case 429:
-            return .rateLimit(retryAfter: nil)
-          case 500 ... 599:
-            return .serverError(statusCode: status, message: message, context: nil)
-          default:
-            return .serverError(statusCode: status, message: message, context: nil)
-        }
-      }
-
-      return .serverError(statusCode: status, message: "Unknown error", context: nil)
-    }
-
-    struct ErrorResponse: Codable {
-      let error: ErrorDetails
-
-      struct ErrorDetails: Codable {
-        let type: String?
-        let message: String?
-        let param: String?
-        let code: String?
-      }
     }
   }
 }
