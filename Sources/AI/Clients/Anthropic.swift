@@ -2096,8 +2096,8 @@ public extension AnthropicClient {
         }
       }
       var wasCancelled = false
-      var latestSnapshot: APIMessage? = nil
-      var finalMessage: APIMessage? = nil
+      var latestSnapshot: APIMessage?
+      var finalMessage: APIMessage?
       // Patch orphaned tool calls (e.g., from canceled or timed-out generation)
       let patchedMessages = Message.patchingOrphanedToolCalls(messages)
       // When thinking is enabled, preprocess messages to handle missing opaque blocks.

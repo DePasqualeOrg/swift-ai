@@ -943,7 +943,7 @@ public final class GeminiClient: APIClient, Sendable {
       }
       var fullReasoningText = ""
       var fullResponseText = ""
-      var notesText: String? = nil
+      var notesText: String?
       var toolCalls: [ToolCall] = []
       var usageMetadata: UsageMetadata?
       var finishReason: FinishReason?

@@ -786,7 +786,7 @@ public final class ResponsesClient: APIClient, Sendable {
       }
 
       var finalBlocks: [Message.Block] = []
-      var finalMetadata: GenerationResponse.Metadata? = nil
+      var finalMetadata: GenerationResponse.Metadata?
 
       do {
         let stream = try await streamResponse(
@@ -1465,7 +1465,7 @@ public final class ResponsesClient: APIClient, Sendable {
       }
 
       var finalBlocks: [Message.Block] = []
-      var finalMetadata: GenerationResponse.Metadata? = nil
+      var finalMetadata: GenerationResponse.Metadata?
 
       let stream = AsyncThrowingStream<GenerationResponse, Error> { continuation in
         Task {
@@ -1938,7 +1938,7 @@ extension ResponsesClient {
         nil
       }
 
-      var createdAtDate: Date? = nil
+      var createdAtDate: Date?
       if let createdAt {
         createdAtDate = Date(timeIntervalSince1970: TimeInterval(createdAt))
       }
