@@ -1123,69 +1123,17 @@ public final class GeminiClient: APIClient, Sendable {
       // Response structure for the upload
       struct FileResponse: Codable {
         struct File: Codable {
-          let name: String
-          let displayName: String
-          let mimeType: String
-          let sizeBytes: String
-          let createTime: String
-          let updateTime: String
-          let expirationTime: String
-          let sha256Hash: String
           let uri: String
           let state: String
-          let source: String
-          /// Create new instance
-          init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            name = try container.decode(String.self, forKey: .name)
-            displayName = try container.decode(String.self, forKey: .displayName)
-            mimeType = try container.decode(String.self, forKey: .mimeType)
-            sizeBytes = try container.decode(String.self, forKey: .sizeBytes)
-            createTime = try container.decode(String.self, forKey: .createTime)
-            updateTime = try container.decode(String.self, forKey: .updateTime)
-            expirationTime = try container.decode(String.self, forKey: .expirationTime)
-            sha256Hash = try container.decode(String.self, forKey: .sha256Hash)
-            uri = try container.decode(String.self, forKey: .uri)
-            state = try container.decode(String.self, forKey: .state)
-            source = try container.decode(String.self, forKey: .source)
-          }
-
-          /// Create new instance with updated state
-          init(copyFrom other: File, withState newState: String) {
-            name = other.name
-            displayName = other.displayName
-            mimeType = other.mimeType
-            sizeBytes = other.sizeBytes
-            createTime = other.createTime
-            updateTime = other.updateTime
-            expirationTime = other.expirationTime
-            sha256Hash = other.sha256Hash
-            uri = other.uri
-            state = newState
-            source = other.source
-          }
         }
 
         let file: File
-        /// Create new instance with updated file
-        init(copyFrom _: FileResponse, withFile newFile: File) {
-          file = newFile
-        }
       }
 
       // Status check response structure
       struct StatusResponse: Codable {
-        let name: String
-        let displayName: String
-        let mimeType: String
-        let sizeBytes: String
-        let createTime: String
-        let updateTime: String
-        let expirationTime: String
-        let sha256Hash: String
         let uri: String
         let state: String
-        let source: String
 
         struct ErrorInfo: Codable {
           let code: Int
@@ -1222,9 +1170,8 @@ public final class GeminiClient: APIClient, Sendable {
             throw AIError.serverError(statusCode: 0, message: "File processing failed with unknown error", context: nil)
           }
         }
-        // Create new instances with updated state
-        let newFile = FileResponse.File(copyFrom: fileResponse.file, withState: statusResponse.state)
-        fileResponse = FileResponse(copyFrom: fileResponse, withFile: newFile)
+        // Update state from status check
+        fileResponse = FileResponse(file: .init(uri: fileResponse.file.uri, state: statusResponse.state))
       }
       // Return the complete URI for use with the Gemini API
       return fileUri
