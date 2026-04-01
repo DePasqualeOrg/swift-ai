@@ -458,10 +458,8 @@ extension AnthropicClient {
 
     func abort() {
       aborted = true
-      Task {
-        emit(.abort(error: AIError.cancelled))
-        emit(.end)
-      }
+      emit(.abort(error: AIError.cancelled))
+      emit(.end)
     }
 
     // MARK: - Stream Processing
@@ -825,7 +823,7 @@ extension AnthropicClient {
 
     func connected() {
       if ended { return }
-      Task { emit(.connect) }
+      emit(.connect)
     }
 
     func beginRequest() {
@@ -864,7 +862,7 @@ extension AnthropicClient {
 
     func emitFinal() {
       if let finalMessage = receivedMessages.last {
-        Task { emit(.finalMessage(message: finalMessage)) }
+        emit(.finalMessage(message: finalMessage))
       }
     }
 
@@ -872,22 +870,16 @@ extension AnthropicClient {
       errored = true
       if let error = error as? URLError, error.code == .cancelled {
         aborted = true
-        let abortError = AIError.cancelled
-        Task { emit(.abort(error: abortError)) }
+        emit(.abort(error: AIError.cancelled))
         return
       }
       if let aiError = error as? AIError {
-        Task {
-          emit(.error(error: aiError))
-          emit(.end)
-        }
+        emit(.error(error: aiError))
+        emit(.end)
         return
       }
-      let wrappedError = AIError.network(underlying: error)
-      Task {
-        emit(.error(error: wrappedError))
-        emit(.end)
-      }
+      emit(.error(error: AIError.network(underlying: error)))
+      emit(.end)
     }
   }
 }
