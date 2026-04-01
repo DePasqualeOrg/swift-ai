@@ -648,7 +648,7 @@ public final class GeminiClient: APIClient, Sendable {
                             let args = functionCall["args"] as? [String: any Sendable]
                   {
                     // Handle function call
-                    let parameters = try convertToValue(args)
+                    let parameters = try args.mapValues { try Value.fromAny($0) }
                     // Extract thoughtSignature if present (required for Gemini tool use)
                     var providerMetadata: [String: String]?
                     if let thoughtSignature = part["thoughtSignature"] as? String {
@@ -1330,14 +1330,6 @@ public final class GeminiClient: APIClient, Sendable {
 }
 
 extension GeminiClient {
-  private func convertToValue(_ dict: [String: any Sendable]) throws -> [String: Value] {
-    var result: [String: Value] = [:]
-    for (key, value) in dict {
-      result[key] = try Value.fromAny(value)
-    }
-    return result
-  }
-
   /// Converts a raw JSON schema (from rawInputSchema) to Gemini format.
   /// Gemini requires uppercase type values ("STRING" not "string") and
   /// doesn't support "additionalProperties".
