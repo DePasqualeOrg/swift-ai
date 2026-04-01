@@ -273,7 +273,7 @@ public final class ResponsesClient: APIClient, Sendable {
               ])
             case let .toolCall(toolCall):
               flushContentItems()
-              let foundationParams = Self.convertValueToSendable(toolCall.parameters)
+              let foundationParams = Value.toSendable(toolCall.parameters)
               let argumentsData = try JSONSerialization.data(withJSONObject: foundationParams, options: [])
               guard let argumentsString = String(data: argumentsData, encoding: .utf8) else {
                 throw AIError.invalidRequest(message: "Failed to serialize function call arguments to JSON string")
@@ -449,7 +449,7 @@ public final class ResponsesClient: APIClient, Sendable {
         {
           Self.convertSchemaForStrictMode(tool.rawInputSchema)
         } else {
-          Self.convertValueToSendable(tool.rawInputSchema)
+          Value.toSendable(tool.rawInputSchema)
         }
         toolsArray.append([
           "type": "function",
@@ -1504,27 +1504,6 @@ public final class ResponsesClient: APIClient, Sendable {
     return try await task.value
   }
 
-  /// Converts a Value dictionary to a Sendable dictionary for JSON serialization.
-  static func convertValueToSendable(_ dict: [String: Value]) -> [String: any Sendable] {
-    var result: [String: any Sendable] = [:]
-    for (key, value) in dict {
-      result[key] = convertValueToSendableValue(value)
-    }
-    return result
-  }
-
-  private static func convertValueToSendableValue(_ value: Value) -> any Sendable {
-    switch value {
-      case let .string(s): s
-      case let .int(i): i
-      case let .double(d): d
-      case let .bool(b): b
-      case .null: NSNull()
-      case let .array(arr): arr.map { convertValueToSendableValue($0) }
-      case let .object(obj): convertValueToSendable(obj)
-    }
-  }
-
   /// Converts a raw JSON schema for OpenAI strict mode compliance.
   /// Ensures "additionalProperties": false is set on all object types.
   /// In strict mode, ALL properties must be in the "required" array.
@@ -1551,19 +1530,19 @@ public final class ResponsesClient: APIClient, Sendable {
             if case let .object(propSchemaDict) = propSchema {
               convertedProps[propName] = convertSchemaForStrictMode(propSchemaDict)
             } else {
-              convertedProps[propName] = convertValueToSendableValue(propSchema)
+              convertedProps[propName] = propSchema.toAny()
             }
           }
           result[key] = convertedProps
         } else {
-          result[key] = convertValueToSendableValue(value)
+          result[key] = value.toAny()
         }
       } else if key == "items" {
         // Recursively convert array item schema
         if case let .object(itemSchema) = value {
           result[key] = convertSchemaForStrictMode(itemSchema)
         } else {
-          result[key] = convertValueToSendableValue(value)
+          result[key] = value.toAny()
         }
       } else if key == "additionalProperties" {
         // Always set to false for strict mode
@@ -1572,7 +1551,7 @@ public final class ResponsesClient: APIClient, Sendable {
         // Don't copy required here - we'll set it later to include all properties
         continue
       } else {
-        result[key] = convertValueToSendableValue(value)
+        result[key] = value.toAny()
       }
     }
 

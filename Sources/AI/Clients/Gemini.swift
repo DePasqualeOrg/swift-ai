@@ -1390,7 +1390,7 @@ extension GeminiClient {
             result[key] = "STRING"
           }
         } else {
-          result[key] = convertValueToSendable(value)
+          result[key] = value.toAny()
         }
       } else if key == "properties" {
         // Recursively convert property schemas
@@ -1400,12 +1400,12 @@ extension GeminiClient {
             if case let .object(propSchemaDict) = propSchema {
               convertedProps[propName] = convertSchemaForGemini(propSchemaDict)
             } else {
-              convertedProps[propName] = convertValueToSendable(propSchema)
+              convertedProps[propName] = propSchema.toAny()
             }
           }
           result[key] = convertedProps
         } else {
-          result[key] = convertValueToSendable(value)
+          result[key] = value.toAny()
         }
       } else if key == "items" {
         // Recursively convert array item schema
@@ -1417,7 +1417,7 @@ extension GeminiClient {
           }
           result[key] = convertedItems
         } else {
-          result[key] = convertValueToSendable(value)
+          result[key] = value.toAny()
         }
       } else if key == "anyOf" {
         // Recursively convert anyOf schemas, extracting null types
@@ -1437,7 +1437,7 @@ extension GeminiClient {
           }
         }
       } else {
-        result[key] = convertValueToSendable(value)
+        result[key] = value.toAny()
       }
     }
 
@@ -1447,19 +1447,6 @@ extension GeminiClient {
     }
 
     return result
-  }
-
-  /// Converts a Value to a Sendable type for JSON serialization.
-  private static func convertValueToSendable(_ value: Value) -> any Sendable {
-    switch value {
-      case let .string(s): s
-      case let .int(i): i
-      case let .double(d): d
-      case let .bool(b): b
-      case .null: NSNull()
-      case let .array(arr): arr.map { convertValueToSendable($0) }
-      case let .object(obj): obj.mapValues { convertValueToSendable($0) }
-    }
   }
 }
 

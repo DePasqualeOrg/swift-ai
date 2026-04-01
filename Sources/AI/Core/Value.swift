@@ -185,6 +185,11 @@ public enum Value: Hashable, Sendable {
     }
   }
 
+  /// Converts a dictionary of Values to a Sendable dictionary, using `toAny()` for each value.
+  public static func toSendable(_ dict: [String: Value]) -> [String: any Sendable] {
+    dict.mapValues { $0.toAny() }
+  }
+
   // MARK: - Errors
 
   public enum ValueError: LocalizedError {
