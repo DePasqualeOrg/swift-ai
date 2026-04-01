@@ -60,11 +60,11 @@ public enum EnvLoader {
     return try load(from: envPath)
   }
 
-  public enum EnvError: Error, CustomStringConvertible {
+  public enum EnvError: Error, LocalizedError {
     case packageRootNotFound
     case missingKey(String)
 
-    public var description: String {
+    public var errorDescription: String? {
       switch self {
         case .packageRootNotFound:
           "Could not find package root (no Package.swift found)"
