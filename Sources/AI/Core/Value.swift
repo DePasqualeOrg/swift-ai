@@ -414,7 +414,9 @@ private extension NSNumber {
   /// Determines if this NSNumber represents an integer value.
   var isInteger: Bool {
     let doubleValue = doubleValue
-    return doubleValue.truncatingRemainder(dividingBy: 1) == 0
+    return doubleValue == doubleValue.rounded(.towardZero)
+      && !doubleValue.isNaN
+      && !doubleValue.isInfinite
       && doubleValue >= Double(Int.min)
       && doubleValue <= Double(Int.max)
   }
