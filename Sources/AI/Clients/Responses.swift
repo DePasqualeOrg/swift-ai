@@ -1504,69 +1504,8 @@ public final class ResponsesClient: APIClient, Sendable {
     return try await task.value
   }
 
-  /// Converts a raw JSON schema for OpenAI strict mode compliance.
-  /// Ensures "additionalProperties": false is set on all object types.
-  /// In strict mode, ALL properties must be in the "required" array.
   static func convertSchemaForStrictMode(_ schema: [String: Value]) -> [String: any Sendable] {
-    var result: [String: any Sendable] = [:]
-
-    // Check if this schema is an object type
-    let isObjectType = if case let .string(typeStr) = schema["type"] {
-      typeStr == "object"
-    } else {
-      false
-    }
-
-    // Collect property names to ensure all are in required array
-    var propertyNames: [String] = []
-
-    for (key, value) in schema {
-      if key == "properties" {
-        // Recursively convert property schemas
-        if case let .object(props) = value {
-          var convertedProps: [String: any Sendable] = [:]
-          for (propName, propSchema) in props {
-            propertyNames.append(propName)
-            if case let .object(propSchemaDict) = propSchema {
-              convertedProps[propName] = convertSchemaForStrictMode(propSchemaDict)
-            } else {
-              convertedProps[propName] = propSchema.toAny()
-            }
-          }
-          result[key] = convertedProps
-        } else {
-          result[key] = value.toAny()
-        }
-      } else if key == "items" {
-        // Recursively convert array item schema
-        if case let .object(itemSchema) = value {
-          result[key] = convertSchemaForStrictMode(itemSchema)
-        } else {
-          result[key] = value.toAny()
-        }
-      } else if key == "additionalProperties" {
-        // Always set to false for strict mode
-        result[key] = false
-      } else if key == "required" {
-        // Don't copy required here - we'll set it later to include all properties
-        continue
-      } else {
-        result[key] = value.toAny()
-      }
-    }
-
-    // Add additionalProperties: false if this is an object type and it's not already set
-    if isObjectType {
-      if result["additionalProperties"] == nil {
-        result["additionalProperties"] = false
-      }
-      // In strict mode, ALL properties must be in required
-      if !propertyNames.isEmpty {
-        result["required"] = propertyNames.sorted() // Sort for consistency
-      }
-    }
-
-    return result
+    Value.schemaForStrictMode(schema)
   }
 }
 

@@ -190,6 +190,63 @@ public enum Value: Hashable, Sendable {
     dict.mapValues { $0.toAny() }
   }
 
+  /// Converts a JSON schema dictionary for OpenAI strict mode compliance.
+  /// Ensures "additionalProperties": false is set on all object types
+  /// and all properties are included in the "required" array.
+  static func schemaForStrictMode(_ schema: [String: Value]) -> [String: any Sendable] {
+    var result: [String: any Sendable] = [:]
+
+    let isObjectType = if case let .string(typeStr) = schema["type"] {
+      typeStr == "object"
+    } else {
+      false
+    }
+
+    var propertyNames: [String] = []
+
+    for (key, value) in schema {
+      if key == "properties" {
+        if case let .object(props) = value {
+          var convertedProps: [String: any Sendable] = [:]
+          for (propName, propSchema) in props {
+            propertyNames.append(propName)
+            if case let .object(propSchemaDict) = propSchema {
+              convertedProps[propName] = schemaForStrictMode(propSchemaDict)
+            } else {
+              convertedProps[propName] = propSchema.toAny()
+            }
+          }
+          result[key] = convertedProps
+        } else {
+          result[key] = value.toAny()
+        }
+      } else if key == "items" {
+        if case let .object(itemSchema) = value {
+          result[key] = schemaForStrictMode(itemSchema)
+        } else {
+          result[key] = value.toAny()
+        }
+      } else if key == "additionalProperties" {
+        result[key] = false
+      } else if key == "required" {
+        continue
+      } else {
+        result[key] = value.toAny()
+      }
+    }
+
+    if isObjectType {
+      if result["additionalProperties"] == nil {
+        result["additionalProperties"] = false
+      }
+      if !propertyNames.isEmpty {
+        result["required"] = propertyNames.sorted()
+      }
+    }
+
+    return result
+  }
+
   // MARK: - Errors
 
   public enum ValueError: LocalizedError {
