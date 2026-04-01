@@ -1301,7 +1301,7 @@ public final class AnthropicClient: APIClient, Sendable {
                 ),
               ))
             case .video, .audio, .document:
-              break
+              anthropicLogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported by Anthropic and will be omitted.")
           }
         default:
           break

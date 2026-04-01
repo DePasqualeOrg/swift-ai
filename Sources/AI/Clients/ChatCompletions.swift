@@ -188,7 +188,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                 ],
               ])
             case .video, .audio:
-              break
+              openAILogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported by ChatCompletions and will be omitted.")
             case let .document(data, mimeType):
               var fileDict: [String: any Sendable] = [
                 "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
