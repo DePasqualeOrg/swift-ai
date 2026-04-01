@@ -553,8 +553,6 @@ public final class ResponsesClient: APIClient, Sendable {
               request: request,
               continuation: continuation,
               logPrefix: "Standard Stream",
-              isBackground: false,
-              apiKey: apiKey,
             )
           } else {
             let (data, response) = try await session.data(for: request)
@@ -1052,8 +1050,6 @@ public final class ResponsesClient: APIClient, Sendable {
         request: request,
         continuation: continuation,
         logPrefix: logPrefix,
-        isBackground: true,
-        apiKey: apiKey,
         responseIdHandler: isDirect ? { id in
           guard !Task.isCancelled else { return }
           currentResponseId = id
@@ -1173,8 +1169,6 @@ public final class ResponsesClient: APIClient, Sendable {
     request: URLRequest,
     continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
     logPrefix: String,
-    isBackground _: Bool,
-    apiKey _: String? = nil,
     responseIdHandler: ((String) async -> Void)? = nil,
     sequenceHandler: ((Int) -> Void)? = nil,
   ) async throws {
