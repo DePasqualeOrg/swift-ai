@@ -447,7 +447,7 @@ public final class ResponsesClient: APIClient, Sendable {
           // Transform schema for strict mode compliance if enabled
           = if enableStrictModeForTools
         {
-          Self.convertSchemaForStrictMode(tool.rawInputSchema)
+          Value.schemaForStrictMode(tool.rawInputSchema)
         } else {
           Value.toSendable(tool.rawInputSchema)
         }
@@ -1463,10 +1463,6 @@ public final class ResponsesClient: APIClient, Sendable {
     }
 
     return try await task.value
-  }
-
-  static func convertSchemaForStrictMode(_ schema: [String: Value]) -> [String: any Sendable] {
-    Value.schemaForStrictMode(schema)
   }
 }
 
