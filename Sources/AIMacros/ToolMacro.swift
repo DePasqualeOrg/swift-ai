@@ -33,8 +33,6 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       throw ToolMacroError.notAStruct
     }
 
-    let structName = structDecl.name.text
-
     // Extract tool metadata
     let toolInfo = try extractToolInfo(from: structDecl, context: context)
 
@@ -55,7 +53,6 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
 
     // Generate tool property
     let toolDecl = generateToolProperty(
-      structName: structName,
       toolInfo: toolInfo,
     )
     members.append(toolDecl)
@@ -402,7 +399,6 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
   // MARK: - Code Generation
 
   private static func generateToolProperty(
-    structName _: String,
     toolInfo: ToolInfo,
   ) -> DeclSyntax {
     // Generate properties for each parameter
