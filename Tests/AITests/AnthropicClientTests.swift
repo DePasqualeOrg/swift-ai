@@ -4,38 +4,9 @@
 import Foundation
 import Testing
 
-/// Thread-safe collector for streaming updates in tests.
-/// Uses a lock instead of an actor since update closures are synchronous.
-final class UpdateCollector: @unchecked Sendable {
-  private let lock = NSLock()
-  private var _updates: [GenerationResponse] = []
-
-  func append(_ response: GenerationResponse) {
-    lock.lock()
-    defer { lock.unlock() }
-    _updates.append(response)
-  }
-
-  var updates: [GenerationResponse] {
-    lock.lock()
-    defer { lock.unlock() }
-    return _updates
-  }
-}
-
 @Suite(.serialized)
 struct AnthropicClientTests {
   // MARK: - Test Helpers
-
-  /// Loads a fixture file from the Fixtures directory.
-  private func loadFixture(_ name: String) throws -> String {
-    let fixturesURL = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()
-      .appendingPathComponent("Fixtures")
-      .appendingPathComponent(name)
-
-    return try String(contentsOf: fixturesURL, encoding: .utf8)
-  }
 
   /// Creates a mock client configured for testing with isolated handlers.
   private func makeTestClient(sseData: String, statusCode: Int = 200) -> (client: AnthropicClient, cleanup: () -> Void) {
@@ -58,41 +29,6 @@ struct AnthropicClientTests {
     )
 
     return (client, { MockURLProtocol.removeHandler(for: testId) })
-  }
-
-  /// Creates a test function for use in tests.
-  private func makeTestTool(name: String, description: String, paramName: String) -> Tool {
-    Tool(
-      name: name,
-      description: description,
-      title: name,
-      parameters: [
-        Tool.Parameter(
-          name: paramName,
-          title: paramName,
-          type: .string,
-          description: "Test parameter",
-          required: true,
-        ),
-      ],
-      execute: { _ in [.text("test result")] },
-    )
-  }
-
-  /// Consumes an async stream and returns the last element.
-  private func consumeStream(
-    _ stream: AsyncThrowingStream<GenerationResponse, Error>,
-    collecting: UpdateCollector? = nil,
-  ) async throws -> GenerationResponse {
-    var last: GenerationResponse?
-    for try await response in stream {
-      collecting?.append(response)
-      last = response
-    }
-    guard let result = last else {
-      fatalError("Stream ended without producing any values")
-    }
-    return result
   }
 
   // MARK: - Basic Response Tests

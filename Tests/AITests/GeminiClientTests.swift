@@ -8,16 +8,6 @@ import Testing
 struct GeminiClientTests {
   // MARK: - Test Helpers
 
-  /// Loads a fixture file from the Fixtures directory.
-  private func loadFixture(_ name: String) throws -> String {
-    let fixturesURL = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()
-      .appendingPathComponent("Fixtures")
-      .appendingPathComponent(name)
-
-    return try String(contentsOf: fixturesURL, encoding: .utf8)
-  }
-
   /// Creates a mock client configured for testing with isolated handlers.
   private func makeTestClient(sseData: String, statusCode: Int = 200) -> (client: GeminiClient, cleanup: () -> Void) {
     let testId = UUID().uuidString
@@ -39,41 +29,6 @@ struct GeminiClientTests {
     )
 
     return (client, { MockURLProtocol.removeHandler(for: testId) })
-  }
-
-  /// Creates a test function for use in tests.
-  private func makeTestTool(name: String, description: String, paramName: String) -> Tool {
-    Tool(
-      name: name,
-      description: description,
-      title: name,
-      parameters: [
-        Tool.Parameter(
-          name: paramName,
-          title: paramName,
-          type: .string,
-          description: "Test parameter",
-          required: true,
-        ),
-      ],
-      execute: { _ in [.text("test result")] },
-    )
-  }
-
-  /// Consumes an async stream and returns the last element.
-  private func consumeStream(
-    _ stream: AsyncThrowingStream<GenerationResponse, Error>,
-    collecting: UpdateCollector? = nil,
-  ) async throws -> GenerationResponse {
-    var last: GenerationResponse?
-    for try await response in stream {
-      collecting?.append(response)
-      last = response
-    }
-    guard let result = last else {
-      fatalError("Stream ended without producing any values")
-    }
-    return result
   }
 
   // MARK: - Basic Response Tests
@@ -446,38 +401,13 @@ struct GeminiClientTests {
 
   // MARK: - Request Body Validation Tests
 
-  /// Reads request body from either httpBody or httpBodyStream.
-  private func readRequestBody(from request: URLRequest) -> Data? {
-    if let body = request.httpBody {
-      return body
-    }
-    // When using certain URLSession methods, the body might be in a stream
-    if let stream = request.httpBodyStream {
-      stream.open()
-      defer { stream.close() }
-      var data = Data()
-      let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: 4096)
-      defer { buffer.deallocate() }
-      while stream.hasBytesAvailable {
-        let count = stream.read(buffer, maxLength: 4096)
-        if count > 0 {
-          data.append(buffer, count: count)
-        } else {
-          break
-        }
-      }
-      return data.isEmpty ? nil : data
-    }
-    return nil
-  }
-
   @Test
   func `Request body includes system instruction correctly`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
-    MockURLProtocol.setHandler(for: testId) { [self] request in
+    MockURLProtocol.setHandler(for: testId) { request in
       // Capture body data immediately before it's consumed
       capturedBodyData = readRequestBody(from: request)
       let response = HTTPURLResponse(
@@ -541,7 +471,7 @@ struct GeminiClientTests {
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
 
-    MockURLProtocol.setHandler(for: testId) { [self] request in
+    MockURLProtocol.setHandler(for: testId) { request in
       // Capture body data immediately before it's consumed
       capturedBodyData = readRequestBody(from: request)
       let response = HTTPURLResponse(
