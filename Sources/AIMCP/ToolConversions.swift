@@ -6,78 +6,24 @@ import MCP
 
 // MARK: - AI.Tool → MCP.Tool Conversion
 
-extension MCP.Tool {
+public extension MCP.Tool {
   /// Creates an MCP Tool from an AI Tool.
   ///
-  /// This extracts the metadata from a Tool to create an MCP Tool definition.
+  /// Uses the tool's `rawInputSchema` directly to preserve complex schema features
+  /// like nested objects, anyOf, oneOf, etc.
   /// The Tool's `execute` closure is not carried over since MCP Tools
   /// are metadata-only; execution happens via ToolSpec or registered handlers.
   ///
   /// - Parameter tool: The AI Tool to convert
-  public init(from tool: AI.Tool) {
-    // Build JSON Schema from Tool parameters
-    var properties: [String: MCP.Value] = [:]
-    var required: [MCP.Value] = []
-
-    for param in tool.parameters {
-      properties[param.name] = Self.mcpPropertySchema(for: param.type, description: param.description)
-      if param.required {
-        required.append(.string(param.name))
-      }
-    }
-
-    var inputSchema: [String: MCP.Value] = [
-      "type": .string("object"),
-      "properties": .object(properties),
-    ]
-    if !required.isEmpty {
-      inputSchema["required"] = .array(required)
-    }
-
+  init(from tool: AI.Tool) {
+    let inputSchema = AI.Tool.convertAIValueToMCPValue(.object(tool.rawInputSchema))
     self.init(
       name: tool.name,
       title: tool.title,
       description: tool.description,
-      inputSchema: .object(inputSchema),
+      inputSchema: inputSchema,
       annotations: .init(),
     )
-  }
-
-  /// Converts a Tool.ParameterType to an MCP property schema.
-  private static func mcpPropertySchema(for type: AI.Tool.ParameterType, description: String) -> MCP.Value {
-    switch type {
-      case .string:
-        .object([
-          "type": .string("string"),
-          "description": .string(description),
-        ])
-      case .float:
-        .object([
-          "type": .string("number"),
-          "description": .string(description),
-        ])
-      case .integer:
-        .object([
-          "type": .string("integer"),
-          "description": .string(description),
-        ])
-      case .boolean:
-        .object([
-          "type": .string("boolean"),
-          "description": .string(description),
-        ])
-      case let .array(itemType):
-        .object([
-          "type": .string("array"),
-          "description": .string(description),
-          "items": mcpPropertySchema(for: itemType, description: ""),
-        ])
-      case .object:
-        .object([
-          "type": .string("object"),
-          "description": .string(description),
-        ])
-    }
   }
 }
 
@@ -225,6 +171,26 @@ public extension AI.Tool {
         return .array(items: .string) // Default to string items
       case "object": return .object
       default: return .string // Treat unknown types as string
+    }
+  }
+
+  /// Converts an AI.Value to an MCP.Value for schema passthrough.
+  static func convertAIValueToMCPValue(_ value: AI.Value) -> MCP.Value {
+    switch value {
+      case let .string(s):
+        .string(s)
+      case let .int(i):
+        .int(i)
+      case let .double(d):
+        .double(d)
+      case let .bool(b):
+        .bool(b)
+      case .null:
+        .null
+      case let .array(arr):
+        .array(arr.map { convertAIValueToMCPValue($0) })
+      case let .object(obj):
+        .object(obj.mapValues { convertAIValueToMCPValue($0) })
     }
   }
 
