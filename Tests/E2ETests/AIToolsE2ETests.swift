@@ -287,7 +287,7 @@ struct AIToolsE2ETests {
     print("[\(provider.name)] Available AI tools: \(tools.map { $0.name })")
 
     var messages: [AI.Message] = [
-      AI.Message(role: .user, content: prompt),
+      AI.Message(role: .user, blocks: [.text(prompt)]),
     ]
 
     var iterations = 0
@@ -325,7 +325,7 @@ struct AIToolsE2ETests {
         continue
       }
 
-      let finalResponse = response.texts.response
+      let finalResponse = response.responseText
       print("[\(provider.name)] Final response: \(finalResponse ?? "nil")")
 
       return AgenticLoopResult(

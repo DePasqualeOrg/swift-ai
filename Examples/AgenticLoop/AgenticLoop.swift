@@ -162,14 +162,8 @@ enum AgenticLoopExample {
         apiKey: apiKey,
       )
 
-      let toolCalls = response.blocks.compactMap { block -> ToolCall? in
-        guard case let .toolCall(toolCall) = block else { return nil }
-        return toolCall
-      }
-      let responseText = response.blocks.compactMap { block -> String? in
-        guard case let .text(text) = block else { return nil }
-        return text
-      }.joined()
+      let toolCalls = response.toolCalls
+      let responseText = response.responseText ?? ""
 
       // No tool calls means model is done
       if toolCalls.isEmpty {

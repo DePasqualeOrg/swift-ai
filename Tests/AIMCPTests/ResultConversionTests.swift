@@ -202,8 +202,8 @@ struct ResultConversionTests {
   }
 
   @Test
-  func `GenerationResponse.ToolCall to CallTool.Parameters`() {
-    let toolCall = AI.GenerationResponse.ToolCall(
+  func `ToolCall to CallTool.Parameters`() {
+    let toolCall = AI.ToolCall(
       name: "search",
       id: "call-001",
       parameters: [
@@ -220,7 +220,7 @@ struct ResultConversionTests {
   }
 
   @Test
-  func `CallTool.Parameters to GenerationResponse.ToolCall`() {
+  func `CallTool.Parameters to ToolCall`() {
     let params = MCP.CallTool.Parameters(
       name: "get_weather",
       arguments: [
@@ -229,7 +229,7 @@ struct ResultConversionTests {
       ],
     )
 
-    let toolCall = AI.GenerationResponse.ToolCall(params, id: "call-002")
+    let toolCall = AI.ToolCall(params, id: "call-002")
 
     #expect(toolCall.name == "get_weather")
     #expect(toolCall.id == "call-002")

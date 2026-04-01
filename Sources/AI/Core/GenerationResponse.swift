@@ -67,29 +67,8 @@ public struct ToolCall: Sendable, Codable, Hashable {
 
 /// A response from an LLM generation request.
 ///
-/// The canonical content model is the ordered `blocks` array. Flattened text/tool-call
-/// projections are derived convenience helpers only.
+/// The canonical content model is the ordered `blocks` array.
 public struct GenerationResponse: Sendable, Hashable {
-  /// Text content returned by the model.
-  @available(*, deprecated, message: "Use blocks as the canonical response content model.")
-  public struct Texts: Sendable, Hashable {
-    /// Reasoning or chain-of-thought content (when using reasoning models).
-    public var reasoning: String?
-
-    /// The main response text from the model.
-    public var response: String?
-
-    /// Additional notes or annotations from the model.
-    public var notes: String?
-
-    /// Creates a new texts container.
-    public init(reasoning: String? = nil, response: String? = nil, notes: String? = nil) {
-      self.reasoning = reasoning
-      self.response = response
-      self.notes = notes
-    }
-  }
-
   /// Metadata about the generation response.
   public struct Metadata: Sendable, Hashable {
     /// The unique identifier for this response from the provider.
@@ -166,9 +145,6 @@ public struct GenerationResponse: Sendable, Hashable {
     case other
   }
 
-  @available(*, deprecated, renamed: "ToolCall")
-  public typealias ToolCall = AI.ToolCall
-
   /// Ordered content blocks returned by the model.
   public var blocks: [Message.Block]
 
@@ -190,77 +166,40 @@ public struct GenerationResponse: Sendable, Hashable {
     self.metadata = metadata
   }
 
-  /// Creates a new generation response from the deprecated flattened surface.
-  @available(*, deprecated, message: "Use init(blocks:metadata:) instead.")
-  public init(texts: Texts = Texts(), toolCalls: [ToolCall] = [], metadata: Metadata? = nil, opaqueBlocks: [OpaqueBlock]? = nil) {
-    var blocks = (opaqueBlocks ?? []).map(Self.block(from:))
-    let hasThinkingBlocks = blocks.contains { block in
-      switch block {
-        case .thinking, .redactedThinking:
-          true
-        default:
-          false
-      }
-    }
-    if let reasoning = texts.reasoning, !reasoning.isEmpty, !hasThinkingBlocks {
-      blocks.append(.thinking(text: reasoning, signature: nil))
-    }
-    if let response = texts.response, !response.isEmpty {
-      blocks.append(.text(response))
-    }
-    if let notes = texts.notes, !notes.isEmpty {
-      blocks.append(.endnotes(notes))
-    }
-    blocks.append(contentsOf: toolCalls.map(Message.Block.toolCall))
-    self.init(blocks: blocks, metadata: metadata)
-  }
+  // MARK: - Convenience Accessors
 
-  /// Deprecated flattened text projection derived from `blocks`.
-  @available(*, deprecated, message: "Use blocks as the canonical response content model.")
-  public var texts: Texts {
-    let reasoning = blocks.compactMap { block -> String? in
-      guard case let .thinking(text, _) = block else { return nil }
-      return text
-    }.joined()
-    let response = blocks.compactMap { block -> String? in
+  /// The joined response text from all `.text` blocks, or `nil` if there are none.
+  public var responseText: String? {
+    let text = blocks.compactMap { block -> String? in
       guard case let .text(text) = block else { return nil }
       return text
     }.joined()
-    let notes = blocks.compactMap { block -> String? in
+    return text.isEmpty ? nil : text
+  }
+
+  /// The joined reasoning text from all `.thinking` blocks, or `nil` if there are none.
+  public var reasoningText: String? {
+    let text = blocks.compactMap { block -> String? in
+      guard case let .thinking(text, _) = block else { return nil }
+      return text
+    }.joined()
+    return text.isEmpty ? nil : text
+  }
+
+  /// The joined endnotes text from all `.endnotes` blocks, or `nil` if there are none.
+  public var endnotesText: String? {
+    let text = blocks.compactMap { block -> String? in
       guard case let .endnotes(text) = block else { return nil }
       return text
     }.joined()
-    return Texts(
-      reasoning: reasoning.isEmpty ? nil : reasoning,
-      response: response.isEmpty ? nil : response,
-      notes: notes.isEmpty ? nil : notes,
-    )
+    return text.isEmpty ? nil : text
   }
 
-  /// Deprecated tool-call projection derived from `blocks`.
-  @available(*, deprecated, message: "Use blocks as the canonical response content model.")
+  /// All tool calls from `.toolCall` blocks.
   public var toolCalls: [ToolCall] {
     blocks.compactMap { block in
       guard case let .toolCall(toolCall) = block else { return nil }
       return toolCall
-    }
-  }
-
-  /// Deprecated opaque-block projection derived from `blocks`.
-  @available(*, deprecated, message: "Use blocks as the canonical response content model.")
-  public var opaqueBlocks: [OpaqueBlock]? {
-    let opaqueBlocks = blocks.compactMap(\.opaqueBlock)
-    return opaqueBlocks.isEmpty ? nil : opaqueBlocks
-  }
-
-  private static func block(from opaqueBlock: OpaqueBlock) -> Message.Block {
-    switch (opaqueBlock.provider, opaqueBlock.type) {
-      case ("anthropic", "thinking"):
-        .thinking(text: opaqueBlock.content ?? "", signature: opaqueBlock.signature)
-      case ("anthropic", "redacted_thinking"):
-        .redactedThinking(data: opaqueBlock.data ?? "")
-      default:
-        .providerOpaque(opaqueBlock)
     }
   }
 }

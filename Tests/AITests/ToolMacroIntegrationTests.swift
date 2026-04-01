@@ -444,7 +444,7 @@ struct ToolMacroIntegrationTests {
       GetServerTime.tool,
     ])
 
-    let toolCall = GenerationResponse.ToolCall(
+    let toolCall = ToolCall(
       name: "get_weather",
       id: "call_1",
       parameters: ["city": "London"],
@@ -468,7 +468,7 @@ struct ToolMacroIntegrationTests {
   func `Tools collection handles unknown tool`() async {
     let tools = Tools([GetWeather.tool])
 
-    let toolCall = GenerationResponse.ToolCall(
+    let toolCall = ToolCall(
       name: "unknown_tool",
       id: "call_1",
       parameters: [:],
@@ -608,7 +608,7 @@ struct ToolMacroIntegrationTests {
   func `Tools.call rejects input that violates minLength constraint`() async {
     let tools = Tools([SearchDocuments.tool])
 
-    let toolCall = GenerationResponse.ToolCall(
+    let toolCall = ToolCall(
       name: "search_documents",
       id: "call_1",
       parameters: ["query": ""], // Empty string violates minLength: 1
@@ -626,7 +626,7 @@ struct ToolMacroIntegrationTests {
   func `Tools.call rejects input that violates maximum constraint`() async {
     let tools = Tools([SearchDocuments.tool])
 
-    let toolCall = GenerationResponse.ToolCall(
+    let toolCall = ToolCall(
       name: "search_documents",
       id: "call_1",
       parameters: [
@@ -647,7 +647,7 @@ struct ToolMacroIntegrationTests {
   func `Tools.call accepts valid input within constraints`() async {
     let tools = Tools([SearchDocuments.tool])
 
-    let toolCall = GenerationResponse.ToolCall(
+    let toolCall = ToolCall(
       name: "search_documents",
       id: "call_1",
       parameters: [

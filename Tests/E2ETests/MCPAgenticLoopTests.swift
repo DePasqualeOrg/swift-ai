@@ -325,7 +325,7 @@ struct MCPAgenticLoopTests {
 
     // Initialize messages
     var messages: [AI.Message] = [
-      AI.Message(role: .user, content: prompt),
+      AI.Message(role: .user, blocks: [.text(prompt)]),
     ]
 
     var iterations = 0
@@ -369,7 +369,7 @@ struct MCPAgenticLoopTests {
       }
 
       // No tool calls - we have the final response
-      let finalResponse = response.texts.response
+      let finalResponse = response.responseText
       print("[\(provider.name)] Final response: \(finalResponse ?? "nil")")
 
       return AgenticLoopResult(
@@ -421,7 +421,7 @@ struct MCPAgenticLoopTests {
     let localToolsCollection = Tools(localTools)
 
     var messages: [AI.Message] = [
-      AI.Message(role: .user, content: prompt),
+      AI.Message(role: .user, blocks: [.text(prompt)]),
     ]
 
     var iterations = 0
@@ -488,7 +488,7 @@ struct MCPAgenticLoopTests {
         continue
       }
 
-      let finalResponse = response.texts.response
+      let finalResponse = response.responseText
       print("[\(provider.name)] Final response: \(finalResponse ?? "nil")")
 
       return AgenticLoopResult(

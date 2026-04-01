@@ -88,13 +88,13 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Say hello")],
+      messages: [Message(role: .user, blocks: [.text("Say hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
 
     // Verify the final response contains the accumulated text
-    #expect(response.texts.response == "Hello there!")
+    #expect(response.responseText == "Hello there!")
 
     // Verify we received streaming updates
     let updates = collector.updates
@@ -111,7 +111,7 @@ struct GeminiClientTests {
       modelId: "gemini-2.0-flash",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What's the weather in Paris?")],
+      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris?")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -130,7 +130,7 @@ struct GeminiClientTests {
     }
 
     // Verify text response is also present
-    #expect(response.texts.response?.contains("check the weather") == true)
+    #expect(response.responseText?.contains("check the weather") == true)
   }
 
   @Test
@@ -142,7 +142,7 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Say hello")],
+      messages: [Message(role: .user, blocks: [.text("Say hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -162,7 +162,7 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Say hello")],
+      messages: [Message(role: .user, blocks: [.text("Say hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -180,13 +180,13 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Write a long story")],
+      messages: [Message(role: .user, blocks: [.text("Write a long story")])],
       maxTokens: 15,
       apiKey: "test-api-key",
     ))
 
     // Verify the response was truncated
-    #expect(response.texts.response?.isEmpty == false)
+    #expect(response.responseText?.isEmpty == false)
 
     // Verify finish reason is maxTokens (critical for applications to know output was truncated)
     #expect(response.metadata?.finishReason == .maxTokens)
@@ -206,7 +206,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -232,7 +232,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "invalid-key",
       ))
@@ -258,7 +258,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -284,7 +284,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -306,7 +306,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: nil,
       ))
@@ -342,7 +342,7 @@ struct GeminiClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -365,7 +365,7 @@ struct GeminiClientTests {
       let response = try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Harmful content")],
+        messages: [Message(role: .user, blocks: [.text("Harmful content")])],
         maxTokens: 1024,
         apiKey: "test-api-key",
       ))
@@ -401,26 +401,26 @@ struct GeminiClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gemini-2.5-flash-thinking",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What is the meaning of life?")],
+      messages: [Message(role: .user, blocks: [.text("What is the meaning of life?")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
       configuration: .init(thinkingBudget: 1000),
     ), collecting: collector)
 
     // Verify we got the final answer (from non-thinking content)
-    #expect(response.texts.response?.contains("42") == true)
+    #expect(response.responseText?.contains("42") == true)
 
     // Verify thinking content was captured separately from regular response
     let updates = collector.updates
-    let reasoningUpdates = updates.filter { $0.texts.reasoning != nil }
+    let reasoningUpdates = updates.filter { $0.reasoningText != nil }
     #expect(!reasoningUpdates.isEmpty, "Expected at least one update with thinking content")
 
     // Verify the thinking content contains the expected text from fixture
-    let reasoningText = reasoningUpdates.compactMap { $0.texts.reasoning }.joined()
+    let reasoningText = reasoningUpdates.compactMap { $0.reasoningText }.joined()
     #expect(reasoningText.contains("Let me think"), "Thinking content should contain 'Let me think'")
 
     // Verify thinking content is separate from response content
-    #expect(response.texts.reasoning != nil, "Final response should have accumulated thinking content")
+    #expect(response.reasoningText != nil, "Final response should have accumulated thinking content")
   }
 
   // MARK: - Stream Processing Tests
@@ -435,7 +435,7 @@ struct GeminiClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Say hello")],
+      messages: [Message(role: .user, blocks: [.text("Say hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
@@ -499,7 +499,7 @@ struct GeminiClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gemini-2.0-flash",
       systemPrompt: "You are a helpful assistant",
-      messages: [Message(role: .user, content: "Hello")],
+      messages: [Message(role: .user, blocks: [.text("Hello")])],
       maxTokens: 1024,
       temperature: 0.7,
       apiKey: "test-key",
@@ -522,7 +522,7 @@ struct GeminiClientTests {
     // Verify contents are included
     let contents = body?["contents"] as? [[String: Any]]
     #expect(contents != nil)
-    #expect(try !#require(contents?.isEmpty))
+    #expect(try #require(contents).isEmpty == false)
 
     // Verify generation config includes temperature
     let generationConfig = body?["generationConfig"] as? [String: Any]
@@ -564,7 +564,7 @@ struct GeminiClientTests {
       modelId: "gemini-2.0-flash",
       tools: [makeTestTool(name: "get_weather", description: "Get current weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What's the weather?")],
+      messages: [Message(role: .user, blocks: [.text("What's the weather?")])],
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -578,7 +578,7 @@ struct GeminiClientTests {
     // Verify tools are included in request
     let tools = body?["tools"] as? [[String: Any]]
     #expect(tools != nil, "Request should include tools")
-    #expect(try !#require(tools?.isEmpty))
+    #expect(try #require(tools).isEmpty == false)
 
     // Verify function declaration structure
     let functionDeclarations = tools?.first?["function_declarations"] as? [[String: Any]]
@@ -618,7 +618,7 @@ struct GeminiClientTests {
       modelId: "gemini-2.0-flash",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
+      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris and London?")])],
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -645,7 +645,7 @@ struct GeminiClientTests {
     }
 
     // Verify text response is also present
-    #expect(response.texts.response?.contains("weather") == true)
+    #expect(response.responseText?.contains("weather") == true)
   }
 
   // MARK: - Stream Cancellation Tests
@@ -682,7 +682,7 @@ struct GeminiClientTests {
       try await consumeStream(client.streamText(
         modelId: "gemini-2.0-flash",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))

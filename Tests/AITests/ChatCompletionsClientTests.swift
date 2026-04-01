@@ -108,13 +108,13 @@ struct ChatCompletionsClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Say hello")],
+      messages: [Message(role: .user, blocks: [.text("Say hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
 
     // Verify the final response contains the accumulated text
-    #expect(response.texts.response == "Hello there!")
+    #expect(response.responseText == "Hello there!")
 
     // Verify we received streaming updates
     let updates = collector.updates
@@ -137,7 +137,7 @@ struct ChatCompletionsClientTests {
       modelId: "gpt-4",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What's the weather in Paris?")],
+      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris?")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -157,7 +157,7 @@ struct ChatCompletionsClientTests {
     }
 
     // Verify text response is also present
-    #expect(response.texts.response?.contains("check the weather") == true)
+    #expect(response.responseText?.contains("check the weather") == true)
 
     // Verify finish reason
     #expect(response.metadata?.finishReason == .toolUse)
@@ -175,7 +175,7 @@ struct ChatCompletionsClientTests {
       modelId: "gpt-4",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
+      messages: [Message(role: .user, blocks: [.text("What's the weather in Paris and London?")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -215,7 +215,7 @@ struct ChatCompletionsClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Hello")],
+      messages: [Message(role: .user, blocks: [.text("Hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -238,7 +238,7 @@ struct ChatCompletionsClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Hello")],
+      messages: [Message(role: .user, blocks: [.text("Hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -263,7 +263,7 @@ struct ChatCompletionsClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Say hello")],
+      messages: [Message(role: .user, blocks: [.text("Say hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -282,13 +282,13 @@ struct ChatCompletionsClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Write a long story")],
+      messages: [Message(role: .user, blocks: [.text("Write a long story")])],
       maxTokens: 15,
       apiKey: "test-api-key",
     ))
 
     // Verify the response was truncated
-    #expect(response.texts.response?.isEmpty == false)
+    #expect(response.responseText?.isEmpty == false)
 
     // Verify finish reason is maxTokens
     #expect(response.metadata?.finishReason == .maxTokens)
@@ -306,7 +306,7 @@ struct ChatCompletionsClientTests {
       modelId: "gpt-4",
       tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What's the weather?")],
+      messages: [Message(role: .user, blocks: [.text("What's the weather?")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -325,7 +325,7 @@ struct ChatCompletionsClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Some inappropriate request")],
+      messages: [Message(role: .user, blocks: [.text("Some inappropriate request")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
@@ -334,7 +334,7 @@ struct ChatCompletionsClientTests {
     #expect(response.metadata?.finishReason == .contentFilter)
 
     // Verify partial response was captured
-    #expect(response.texts.response?.contains("can't") == true)
+    #expect(response.responseText?.contains("can't") == true)
   }
 
   // MARK: - Non-Streaming Mode Tests
@@ -361,13 +361,13 @@ struct ChatCompletionsClientTests {
     let response = try await client.generateText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Hello")],
+      messages: [Message(role: .user, blocks: [.text("Hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     )
 
     // Verify the complete response is returned
-    #expect(response.texts.response == "Hello! How can I help you today?")
+    #expect(response.responseText == "Hello! How can I help you today?")
 
     // Verify metadata is present
     #expect(response.metadata?.responseId == "chatcmpl-nonstream123")
@@ -393,13 +393,13 @@ struct ChatCompletionsClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Hello")],
+      messages: [Message(role: .user, blocks: [.text("Hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ))
 
     // Response may be nil or empty string - both are valid for empty content
-    let responseIsEmpty = response.texts.response == nil || response.texts.response?.isEmpty == true
+    let responseIsEmpty = response.responseText == nil
     #expect(responseIsEmpty, "Expected empty or nil response text")
 
     // Verify finish reason is still captured
@@ -423,21 +423,21 @@ struct ChatCompletionsClientTests {
     let response = try await consumeStream(client.streamText(
       modelId: "o1-preview",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What is the meaning of life?")],
+      messages: [Message(role: .user, blocks: [.text("What is the meaning of life?")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
 
     // Verify we got the final answer
-    #expect(response.texts.response?.contains("42") == true)
+    #expect(response.responseText?.contains("42") == true)
 
     // Verify thinking content was captured
     let updates = collector.updates
-    let reasoningUpdates = updates.filter { $0.texts.reasoning != nil }
+    let reasoningUpdates = updates.filter { $0.reasoningText != nil }
     #expect(!reasoningUpdates.isEmpty, "Expected at least one update with thinking content")
 
     // Verify the thinking content contains the expected text
-    let reasoningText = reasoningUpdates.compactMap { $0.texts.reasoning }.joined()
+    let reasoningText = reasoningUpdates.compactMap { $0.reasoningText }.joined()
     #expect(reasoningText.contains("think"), "Thinking content should contain 'think'")
 
     // Verify thinking tokens were captured
@@ -460,7 +460,7 @@ struct ChatCompletionsClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "invalid-key",
       ))
@@ -488,7 +488,7 @@ struct ChatCompletionsClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -516,7 +516,7 @@ struct ChatCompletionsClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -544,7 +544,7 @@ struct ChatCompletionsClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -576,7 +576,7 @@ struct ChatCompletionsClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
@@ -608,7 +608,7 @@ struct ChatCompletionsClientTests {
       _ = try await consumeStream(client.streamText(
         modelId: "gpt-4",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-api-key",
       ))
@@ -636,7 +636,7 @@ struct ChatCompletionsClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Say hello")],
+      messages: [Message(role: .user, blocks: [.text("Say hello")])],
       maxTokens: 1024,
       apiKey: "test-api-key",
     ), collecting: collector)
@@ -676,7 +676,7 @@ struct ChatCompletionsClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: "You are a helpful assistant",
-      messages: [Message(role: .user, content: "Hello")],
+      messages: [Message(role: .user, blocks: [.text("Hello")])],
       maxTokens: 1024,
       temperature: 0.7,
       apiKey: "test-key",
@@ -740,7 +740,7 @@ struct ChatCompletionsClientTests {
       modelId: "gpt-4",
       tools: [makeTestTool(name: "get_weather", description: "Get current weather", paramName: "location")],
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "What's the weather?")],
+      messages: [Message(role: .user, blocks: [.text("What's the weather?")])],
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -754,7 +754,7 @@ struct ChatCompletionsClientTests {
     // Verify tools are included in request
     let tools = body?["tools"] as? [[String: Any]]
     #expect(tools != nil, "Request should include tools")
-    #expect(try !#require(tools?.isEmpty))
+    #expect(try #require(tools).isEmpty == false)
 
     // Verify tool structure
     let firstTool = tools?.first
@@ -793,7 +793,7 @@ struct ChatCompletionsClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gpt-4",
       systemPrompt: nil,
-      messages: [Message(role: .user, content: "Hello")],
+      messages: [Message(role: .user, blocks: [.text("Hello")])],
       maxTokens: 1024,
       apiKey: "sk-test-api-key",
     ))
@@ -835,7 +835,7 @@ struct ChatCompletionsClientTests {
       try await consumeStream(client.streamText(
         modelId: "gpt-4",
         systemPrompt: nil,
-        messages: [Message(role: .user, content: "Hello")],
+        messages: [Message(role: .user, blocks: [.text("Hello")])],
         maxTokens: 1024,
         apiKey: "test-key",
       ))
