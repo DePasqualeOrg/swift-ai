@@ -2196,7 +2196,6 @@ public extension AnthropicClient {
       let events = await stream.events()
       do {
         for await event in events {
-//          print(event)
           try Task.checkCancellation()
           switch event {
             case let .streamEvent(streamEvent, snapshot):

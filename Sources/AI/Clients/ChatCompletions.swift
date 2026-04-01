@@ -548,11 +548,6 @@ public final class ChatCompletionsClient: APIClient, Sendable {
   }
 
   private func handleErrorResponse(_ httpResponse: HTTPURLResponse, data: Data) throws {
-    // Log raw error response for debugging
-    //    if let rawResponse = String(data: data, encoding: .utf8) {
-    //      openAILogger.error("Raw API error response: \(rawResponse)")
-    //    }
-    // Try to parse the error response
     if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: any Sendable] {
       openAILogger.warning("Error: \(errorJson)")
       // Try OpenAI nested format

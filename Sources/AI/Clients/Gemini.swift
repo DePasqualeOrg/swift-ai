@@ -506,21 +506,12 @@ public final class GeminiClient: APIClient, Sendable {
           }
 
           if !(200 ... 299).contains(httpResponse.statusCode) {
-            //            geminiLogger.error("Error from Google Gemini API: \(httpResponse)")
-            // Read and log the error response
             do {
               var errorData = Data()
               for try await byte in result {
                 try Task.checkCancellation()
                 errorData.append(byte)
               }
-              //              if let errorJson = try? JSONSerialization.jsonObject(with: errorData) {
-              //                if let prettyData = try? JSONSerialization.data(withJSONObject: errorJson, options: .prettyPrinted), let prettyString = String(data: prettyData, encoding: .utf8) {
-              //                  geminiLogger.warning("Gemini API error response: \(prettyString)")
-              //                }
-              //              } else {
-              //                geminiLogger.warning("Could not decode errorData from Gemini API error response")
-              //              }
 
               // Decode the error message
               struct GeminiErrorResponse: Codable {
@@ -1167,20 +1158,10 @@ public final class GeminiClient: APIClient, Sendable {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     let metadata = ["file": ["display_name": displayName]]
     request.httpBody = try JSONSerialization.data(withJSONObject: metadata)
-//    geminiLogger.log("Initial request URL: \(components.url?.absoluteString ?? "")")
-//    geminiLogger.log("Request headers: \(request.allHTTPHeaderFields ?? [:])")
-//    if let body = request.httpBody, let bodyString = String(data: body, encoding: .utf8) {
-//      geminiLogger.log("Request body: \(bodyString)")
-//    }
     let (_, response) = try await session.data(for: request)
-//    if let responseString = String(data: initialResponseData, encoding: .utf8) {
-//      geminiLogger.log("Initial response data: \(responseString)")
-//    }
     guard let httpResponse = response as? HTTPURLResponse else {
       throw AIError.network(underlying: URLError(.badServerResponse))
     }
-//    geminiLogger.log("Initial response status code: \(httpResponse.statusCode)")
-//    geminiLogger.log("Initial response headers: \(httpResponse.allHeaderFields)")
     guard let uploadUrl = httpResponse.value(forHTTPHeaderField: "X-Goog-Upload-URL") else {
       throw AIError.parsing(message: "Failed to get upload URL from response headers")
     }
@@ -1192,14 +1173,6 @@ public final class GeminiClient: APIClient, Sendable {
     uploadRequest.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
     uploadRequest.httpBody = data
     let (responseData, _) = try await session.data(for: uploadRequest)
-//    if let responseString = String(data: responseData, encoding: .utf8) {
-//      geminiLogger.log("Upload response data: \(responseString)")
-//    }
-//    guard let uploadHttpResponse = uploadResponse as? HTTPURLResponse else {
-//      throw GeminiError(message: "Invalid HTTP response for upload")
-//    }
-//    geminiLogger.log("Upload response status code: \(uploadHttpResponse.statusCode)")
-//    geminiLogger.log("Upload response headers: \(uploadHttpResponse.allHeaderFields)")
     do {
       // Response structure for the upload
       struct FileResponse: Codable {
@@ -1287,12 +1260,6 @@ public final class GeminiClient: APIClient, Sendable {
         components = URLComponents(url: checkURL, resolvingAgainstBaseURL: true)!
         components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
         let (checkData, _) = try await session.data(from: components.url!)
-//        if let checkResponseString = String(data: checkData, encoding: .utf8) {
-//          geminiLogger.log("Check response data: \(checkResponseString)")
-//        }
-//        if let checkHttpResponse = checkResponse as? HTTPURLResponse {
-//          geminiLogger.log("Check response status code: \(checkHttpResponse.statusCode)")
-//        }
         // Decode the status check response
         let statusResponse = try JSONDecoder().decode(StatusResponse.self, from: checkData)
         // Check for processing failure
