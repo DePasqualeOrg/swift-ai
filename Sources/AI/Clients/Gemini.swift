@@ -352,11 +352,16 @@ public final class GeminiClient: APIClient, Sendable {
     tools: [Tool] = [],
   ) async throws -> AsyncThrowingStream<StreamResponse, Error> {
     let url = modelsEndpoint.appending(path: "\(modelId):streamGenerateContent")
-    var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true)!
+    guard var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
+      throw AIError.invalidRequest(message: "Failed to construct URL components for model: \(modelId)")
+    }
     urlComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]
     urlComponents.queryItems?.append(URLQueryItem(name: "alt", value: "sse"))
+    guard let requestURL = urlComponents.url else {
+      throw AIError.invalidRequest(message: "Failed to construct request URL for model: \(modelId)")
+    }
 
-    var request = URLRequest(url: urlComponents.url!)
+    var request = URLRequest(url: requestURL)
     request.httpMethod = "POST"
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     // Note: X-Server-Timeout header is not set, matching TypeScript SDK behavior

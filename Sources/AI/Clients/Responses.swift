@@ -970,15 +970,20 @@ public final class ResponsesClient: APIClient, Sendable {
     openAIResponsesLogger.log("Background Stream: Starting for response \(responseId), attempt \(retryCount + 1)/\(maxRetries + 1), startingAfter: \(startingAfter ?? 0)")
 
     let streamUrl = endpoint.appendingPathComponent(responseId)
-    var urlComponents = URLComponents(url: streamUrl, resolvingAgainstBaseURL: false)!
+    guard var urlComponents = URLComponents(url: streamUrl, resolvingAgainstBaseURL: false) else {
+      throw AIError.invalidRequest(message: "Failed to construct URL components for response: \(responseId)")
+    }
     urlComponents.queryItems = [
       URLQueryItem(name: "stream", value: "true"),
     ]
     if let startingAfter {
       urlComponents.queryItems?.append(URLQueryItem(name: "starting_after", value: String(startingAfter)))
     }
+    guard let requestURL = urlComponents.url else {
+      throw AIError.invalidRequest(message: "Failed to construct request URL for response: \(responseId)")
+    }
 
-    var request = URLRequest(url: urlComponents.url!)
+    var request = URLRequest(url: requestURL)
     request.httpMethod = "GET"
     request.timeoutInterval = 600.0 // 10 minutes - suitable for o3's long response times
     if let apiKey {
