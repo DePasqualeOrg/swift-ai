@@ -196,7 +196,7 @@ extension AnthropicClient {
           if let toolUse {
             try container.encode(toolUse.id, forKey: .id)
             try container.encode(toolUse.name, forKey: .name)
-            try container.encode(toolUse.input.toData(), forKey: .input)
+            try container.encode(toolUse.input, forKey: .input)
           }
         case .toolResult:
           if let toolResult {
@@ -210,7 +210,7 @@ extension AnthropicClient {
           if let serverToolUse {
             try container.encode(serverToolUse.id, forKey: .id)
             try container.encode(serverToolUse.name, forKey: .name)
-            try container.encode(serverToolUse.input.toData(), forKey: .input)
+            try container.encode(serverToolUse.input, forKey: .input)
           }
         case .webSearchToolResult:
           if let webSearchToolResult {
