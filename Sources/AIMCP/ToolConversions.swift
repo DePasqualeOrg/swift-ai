@@ -83,9 +83,9 @@ extension MCP.Tool {
 
 // MARK: - MCP.Tool → AI.Tool Conversion
 
-extension AI.Tool {
+public extension AI.Tool {
   /// Error thrown when converting an MCP Tool to an AI Tool.
-  public enum MCPConversionError: Error, LocalizedError {
+  enum MCPConversionError: Error, LocalizedError {
     case invalidInputSchema(String)
     case unsupportedParameterType(String)
 
@@ -106,7 +106,7 @@ extension AI.Tool {
   ///   - tool: The MCP Tool to convert
   ///   - executor: Closure that executes the tool and returns a result
   /// - Throws: `MCPConversionError` if the tool's schema can't be converted
-  public init(
+  init(
     from tool: MCP.Tool,
     executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content],
   ) throws {
@@ -123,7 +123,7 @@ extension AI.Tool {
   ///   - name: Custom name to use for the tool
   ///   - executor: Closure that executes the tool and returns a result
   /// - Throws: `MCPConversionError` if the tool's schema can't be converted
-  public init(
+  init(
     from tool: MCP.Tool,
     name: String,
     title: String? = nil,
@@ -151,13 +151,13 @@ extension AI.Tool {
   ///   - tool: The MCP Tool to convert
   ///   - client: The MCP Client to use for tool execution
   /// - Throws: `MCPConversionError` if the tool's schema can't be converted
-  public init(from tool: MCP.Tool, client: MCP.Client) throws {
+  init(from tool: MCP.Tool, client: MCP.Client) throws {
     try self.init(from: tool) { parameters in
       let result = try await client.callTool(
         name: tool.name,
         arguments: parameters.mcpValues,
       )
-      return try Self.convertCallToolResult(result)
+      return try MCPToolProvider.convertResult(result)
     }
   }
 
@@ -247,63 +247,6 @@ extension AI.Tool {
         .object(obj.mapValues { convertMCPValueToJSONValue($0) })
       case let .data(data, _):
         .string(data ?? "")
-    }
-  }
-
-  /// Error thrown when an MCP tool returns an error result.
-  private struct MCPToolError: Error, LocalizedError {
-    let message: String
-    var errorDescription: String? {
-      message
-    }
-  }
-
-  /// Converts an MCP CallTool.Result to AI ToolResult.Content array.
-  private static func convertCallToolResult(_ result: MCP.CallTool.Result) throws -> [AI.ToolResult.Content] {
-    // Check for error
-    if result.isError == true {
-      let errorText = result.content.compactMap { content -> String? in
-        if case let .text(text, _, _) = content {
-          return text
-        }
-        return nil
-      }.joined(separator: "\n")
-      throw MCPToolError(message: errorText.isEmpty ? "Unknown error" : errorText)
-    }
-
-    // Convert all content items
-    return result.content.map { content in
-      switch content {
-        case let .text(text, _, _):
-          return .text(text)
-        case let .image(data, mimeType, _, _):
-          if let imageData = Data(base64Encoded: data) {
-            return .image(imageData, mimeType: mimeType)
-          }
-          return .text("[Invalid image data]")
-        case let .audio(data, mimeType, _, _):
-          if let audioData = Data(base64Encoded: data) {
-            return .audio(audioData, mimeType: mimeType)
-          }
-          return .text("[Invalid audio data]")
-        case let .resource(resource, _, _):
-          if let text = resource.text {
-            return .text(text)
-          } else if let blob = resource.blob, let data = Data(base64Encoded: blob) {
-            let mimeType = resource.mimeType ?? "application/octet-stream"
-            if mimeType.hasPrefix("image/") {
-              return .image(data, mimeType: mimeType)
-            } else if mimeType.hasPrefix("audio/") {
-              return .audio(data, mimeType: mimeType)
-            } else {
-              return .file(data, mimeType: mimeType, filename: nil)
-            }
-          } else {
-            return .text("[Resource: \(resource.uri)]")
-          }
-        case let .resourceLink(link):
-          return .text("[Resource link: \(link.uri)]")
-      }
     }
   }
 }
