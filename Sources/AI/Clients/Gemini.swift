@@ -1294,6 +1294,7 @@ public final class GeminiClient: APIClient, Sendable {
     // Create a HEAD request to follow redirects without downloading content
     var request = URLRequest(url: originalURL)
     request.httpMethod = "HEAD"
+    request.timeoutInterval = 5
     do {
       let (_, response) = try await session.data(for: request)
       if let httpResponse = response as? HTTPURLResponse, let finalURL = httpResponse.url {
