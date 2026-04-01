@@ -135,6 +135,11 @@ let config = AnthropicClient.Configuration(
     codeExecution: false       // Enable code execution
 )
 
+// Or use adaptive thinking (model decides how much to think)
+let adaptiveConfig = AnthropicClient.Configuration(
+    effort: .high              // .low, .medium, .high, .max
+)
+
 // Use the model-specific maximum thinking budget
 let modelId = "claude-opus-4-5"
 let config = AnthropicClient.Configuration(
