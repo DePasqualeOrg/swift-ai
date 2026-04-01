@@ -495,6 +495,8 @@ public final class GeminiClient: APIClient, Sendable {
           }
 
           if !(200 ... 299).contains(httpResponse.statusCode) {
+            // Parse the error message from the response body
+            var errorMessage: String?
             do {
               var errorData = Data()
               for try await byte in result {
@@ -502,7 +504,6 @@ public final class GeminiClient: APIClient, Sendable {
                 errorData.append(byte)
               }
 
-              // Decode the error message
               struct GeminiErrorResponse: Codable {
                 struct ErrorDetail: Codable {
                   let message: String
@@ -513,51 +514,18 @@ public final class GeminiClient: APIClient, Sendable {
                 let error: ErrorDetail
               }
 
-              // Try to decode as a direct object first
               if let errorResponse = try? JSONDecoder().decode(GeminiErrorResponse.self, from: errorData) {
-                let errorMessage = errorResponse.error.message
-                switch httpResponse.statusCode {
-                  case 400: throw AIError.invalidRequest(message: errorMessage)
-                  case 403: throw AIError.authentication(message: "Ensure your API key is set correctly and has the right access.")
-                  case 404: throw AIError.invalidRequest(message: "Not found: \(errorMessage)")
-                  case 429: throw AIError.rateLimit(retryAfter: nil)
-                  case 500, 503: throw AIError.serverError(statusCode: httpResponse.statusCode, message: errorMessage, context: nil)
-                  case 504: throw AIError.timeout
-                  default: throw AIError.serverError(statusCode: httpResponse.statusCode, message: errorMessage, context: nil)
-                }
-              }
-              // Fall back to array format if direct object fails
-              else if let errorArray = try? JSONDecoder().decode([GeminiErrorResponse].self, from: errorData),
-                      let firstError = errorArray.first
+                errorMessage = errorResponse.error.message
+              } else if let errorArray = try? JSONDecoder().decode([GeminiErrorResponse].self, from: errorData),
+                        let firstError = errorArray.first
               {
-                let errorMessage = firstError.error.message
-                switch httpResponse.statusCode {
-                  case 400: throw AIError.invalidRequest(message: errorMessage)
-                  case 403: throw AIError.authentication(message: "Ensure your API key is set correctly and has the right access.")
-                  case 404: throw AIError.invalidRequest(message: "Not found: \(errorMessage)")
-                  case 429: throw AIError.rateLimit(retryAfter: nil)
-                  case 500, 503: throw AIError.serverError(statusCode: httpResponse.statusCode, message: errorMessage, context: nil)
-                  case 504: throw AIError.timeout
-                  default: throw AIError.serverError(statusCode: httpResponse.statusCode, message: errorMessage, context: nil)
-                }
+                errorMessage = firstError.error.message
               }
-            } catch let error as AIError {
-              throw error
             } catch {
               geminiLogger.error("Failed to read error response: \(error)")
             }
 
-            // Fallback if we couldn't parse the error message
-            switch httpResponse.statusCode {
-              case 400: throw AIError.invalidRequest(message: "There was a problem with the request body.")
-              case 403: throw AIError.authentication(message: "Ensure your API key is set correctly and has the right access.")
-              case 404: throw AIError.invalidRequest(message: "The requested resource wasn't found.")
-              case 429: throw AIError.rateLimit(retryAfter: nil)
-              case 500: throw AIError.serverError(statusCode: 500, message: "An unexpected error occurred. Try reducing your input context, switching to another model temporarily, or retry after a short wait.", context: nil)
-              case 503: throw AIError.serverError(statusCode: 503, message: "The service may be temporarily overloaded. Try switching to another model temporarily or retry after a short wait.", context: nil)
-              case 504: throw AIError.timeout
-              default: throw AIError.serverError(statusCode: httpResponse.statusCode, message: "HTTP error \(httpResponse.statusCode)", context: nil)
-            }
+            throw Self.geminiHTTPError(statusCode: httpResponse.statusCode, message: errorMessage)
           }
 
           for try await event in result.events {
@@ -1452,6 +1420,20 @@ extension GeminiClient {
     }
 
     return result
+  }
+
+  /// Maps an HTTP status code and optional error message to an `AIError`.
+  private static func geminiHTTPError(statusCode: Int, message: String?) -> AIError {
+    switch statusCode {
+      case 400: .invalidRequest(message: message ?? "There was a problem with the request body.")
+      case 403: .authentication(message: "Ensure your API key is set correctly and has the right access.")
+      case 404: .invalidRequest(message: message.map { "Not found: \($0)" } ?? "The requested resource wasn't found.")
+      case 429: .rateLimit(retryAfter: nil)
+      case 500: .serverError(statusCode: 500, message: message ?? "An unexpected error occurred. Try reducing your input context, switching to another model temporarily, or retry after a short wait.", context: nil)
+      case 503: .serverError(statusCode: 503, message: message ?? "The service may be temporarily overloaded. Try switching to another model temporarily or retry after a short wait.", context: nil)
+      case 504: .timeout
+      default: .serverError(statusCode: statusCode, message: message ?? "HTTP error \(statusCode)", context: nil)
+    }
   }
 }
 
