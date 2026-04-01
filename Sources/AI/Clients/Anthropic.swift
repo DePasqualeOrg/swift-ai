@@ -2135,6 +2135,10 @@ public extension AnthropicClient {
       // Convert Message to AnthropicClient.MessageParam
       var messageParams: [AnthropicClient.MessageParam] = []
       for message in processedMessages {
+        if message.role == .system || message.role == .developer {
+          anthropicLogger.warning("System/developer message found in messages array; ignoring, use systemPrompt parameter instead")
+          continue
+        }
         let contentBlocks = try await anthropicContentBlocks(for: message)
         messageParams.append(AnthropicClient.MessageParam(
           role: mapRole(message.role),
