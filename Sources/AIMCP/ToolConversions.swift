@@ -245,8 +245,8 @@ public extension AI.Tool {
         .array(arr.map { convertMCPValueToJSONValue($0) })
       case let .object(obj):
         .object(obj.mapValues { convertMCPValueToJSONValue($0) })
-      case let .data(data, _):
-        .string(data ?? "")
+      case let .data(mimeType, _):
+        .string(mimeType ?? "")
     }
   }
 }
