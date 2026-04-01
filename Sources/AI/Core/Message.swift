@@ -60,6 +60,27 @@ public struct Message: Sendable, Hashable {
     self.role = role
     self.blocks = blocks
   }
+
+  /// Builds an ordered array of assistant content blocks from optional text components and tool calls.
+  static func assistantBlocks(
+    reasoningText: String? = nil,
+    responseText: String? = nil,
+    notesText: String? = nil,
+    toolCalls: [ToolCall] = [],
+  ) -> [Block] {
+    var blocks: [Block] = []
+    if let reasoningText, !reasoningText.isEmpty {
+      blocks.append(.thinking(text: reasoningText, signature: nil))
+    }
+    if let responseText, !responseText.isEmpty {
+      blocks.append(.text(responseText))
+    }
+    if let notesText, !notesText.isEmpty {
+      blocks.append(.endnotes(notesText))
+    }
+    blocks.append(contentsOf: toolCalls.map(Block.toolCall))
+    return blocks
+  }
 }
 
 // MARK: - Orphaned Tool Call Handling

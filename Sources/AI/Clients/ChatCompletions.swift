@@ -93,18 +93,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     notesText: String? = nil,
     toolCalls: [AI.ToolCall] = [],
   ) -> [Message.Block] {
-    var blocks: [Message.Block] = []
-    if let reasoningText, !reasoningText.isEmpty {
-      blocks.append(.thinking(text: reasoningText, signature: nil))
-    }
-    if let responseText, !responseText.isEmpty {
-      blocks.append(.text(responseText))
-    }
-    if let notesText, !notesText.isEmpty {
-      blocks.append(.endnotes(notesText))
-    }
-    blocks.append(contentsOf: toolCalls.map { .toolCall($0) })
-    return blocks
+    Message.assistantBlocks(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
   }
 
   private static func assistantSnapshot(from response: GenerationResponse) -> (reasoning: String?, response: String?, notes: String?, toolCalls: [AI.ToolCall]) {
