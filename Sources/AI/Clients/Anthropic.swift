@@ -1168,6 +1168,7 @@ public final class AnthropicClient: APIClient, Sendable {
               type: contentBlock.type.rawValue,
               content: displayText,
               data: jsonString,
+              isResponseContent: displayText != nil,
             )))
           }
         case .codeExecutionToolResult:
@@ -1187,6 +1188,7 @@ public final class AnthropicClient: APIClient, Sendable {
               type: contentBlock.type.rawValue,
               content: displayText,
               data: jsonString,
+              isResponseContent: displayText != nil,
             )))
           }
         case .webSearchToolResult:
@@ -1225,6 +1227,7 @@ public final class AnthropicClient: APIClient, Sendable {
               type: contentBlock.type.rawValue,
               content: displayText,
               data: jsonString,
+              isResponseContent: displayText != nil,
             )))
           }
         case .image, .document:

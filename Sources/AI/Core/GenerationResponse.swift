@@ -168,11 +168,18 @@ public struct GenerationResponse: Sendable, Hashable {
 
   // MARK: - Convenience Accessors
 
-  /// The joined response text from all `.text` content items, or `nil` if there are none.
+  /// The joined response text from all `.text` content items and any opaque blocks
+  /// flagged as response content (e.g., server-side tool output), or `nil` if there are none.
   public var responseText: String? {
     let text = content.compactMap { item -> String? in
-      guard case let .text(text) = item else { return nil }
-      return text
+      switch item {
+        case let .text(text):
+          return text
+        case let .providerOpaque(opaque) where opaque.isResponseContent:
+          return opaque.content
+        default:
+          return nil
+      }
     }.joined()
     return text.isEmpty ? nil : text
   }
