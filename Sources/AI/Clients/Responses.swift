@@ -250,14 +250,28 @@ public final class ResponsesClient: APIClient, Sendable {
       case .assistant:
         var items: [[String: any Sendable]] = []
         var contentItems: [[String: any Sendable]] = []
+        // Extract phase from opaque blocks if present
+        var phase: String?
+        for block in message.content {
+          if case let .providerOpaque(opaqueBlock) = block,
+             opaqueBlock.provider == "openai-responses",
+             opaqueBlock.type == "phase"
+          {
+            phase = opaqueBlock.content
+          }
+        }
 
         func flushContentItems() {
           guard !contentItems.isEmpty else { return }
-          items.append([
+          var messageItem: [String: any Sendable] = [
             "type": ContentType.message,
             "role": "assistant",
             "content": contentItems,
-          ])
+          ]
+          if let phase {
+            messageItem["phase"] = phase
+          }
+          items.append(messageItem)
           contentItems.removeAll(keepingCapacity: true)
         }
 
@@ -1803,6 +1817,13 @@ extension ResponsesClient {
                   }
                 }
               }
+              if let phase = item.phase {
+                content.append(.providerOpaque(OpaqueBlock(
+                  provider: "openai-responses",
+                  type: "phase",
+                  content: phase,
+                )))
+              }
             case OutputItemType.reasoning:
               // Prefer reasoning text from content array (reasoning_text items),
               // fall back to summary text
@@ -1909,9 +1930,10 @@ extension ResponsesClient {
     let arguments: String?
     let summary: [SummaryItem]?
     let encryptedContent: String?
+    let phase: String?
 
     enum CodingKeys: String, CodingKey {
-      case id, type, content, name, arguments, summary
+      case id, type, content, name, arguments, summary, phase
       case callId = "call_id"
       case encryptedContent = "encrypted_content"
     }
