@@ -235,7 +235,7 @@ struct ToolMacroIntegrationTests {
 
     let required = schema["required"]?.arrayValue?.compactMap { $0.stringValue }
     #expect(required?.contains("city") == true)
-    #expect(required?.contains("unit") == false) // Optional parameter
+    #expect(required?.contains("unit") == true) // All properties required in strict mode (default)
   }
 
   @Test
@@ -249,10 +249,10 @@ struct ToolMacroIntegrationTests {
     let limitProp = properties?["limit"]?.objectValue
     #expect(limitProp?["default"]?.intValue == 10)
 
-    // Required should not include limit (has default)
+    // All properties required in strict mode (default); optional params are nullable instead
     let required = schema["required"]?.arrayValue?.compactMap { $0.stringValue }
     #expect(required?.contains("query") == true)
-    #expect(required?.contains("limit") == false)
+    #expect(required?.contains("limit") == true)
   }
 
   @Test
@@ -283,10 +283,10 @@ struct ToolMacroIntegrationTests {
     // Strict tool should have additionalProperties: false
     #expect(schema["additionalProperties"]?.boolValue == false)
 
-    // Non-strict tool should not have additionalProperties
+    // Strict mode is now the default, so all tools have additionalProperties: false
     let nonStrictTool = GetWeather.tool
     let nonStrictSchema = nonStrictTool.rawInputSchema
-    #expect(nonStrictSchema["additionalProperties"] == nil)
+    #expect(nonStrictSchema["additionalProperties"]?.boolValue == false)
   }
 
   @Test
@@ -447,7 +447,7 @@ struct ToolMacroIntegrationTests {
     let toolCall = ToolCall(
       name: "get_weather",
       id: "call_1",
-      parameters: ["city": "London"],
+      parameters: ["city": "London", "unit": .null],
     )
 
     let result = await tools.call(toolCall)
@@ -551,10 +551,10 @@ struct ToolMacroIntegrationTests {
     #expect(properties?["startDate"] == nil)
     #expect(properties?["endDate"] == nil)
 
-    // Required should use custom key
+    // All properties required in strict mode (default)
     let required = tool.rawInputSchema["required"]?.arrayValue?.compactMap { $0.stringValue }
     #expect(required?.contains("start_date") == true)
-    #expect(required?.contains("end_date") == false)
+    #expect(required?.contains("end_date") == true)
   }
 
   @Test

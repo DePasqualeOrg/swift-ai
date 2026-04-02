@@ -181,7 +181,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     var parameters: [ParameterInfo] = []
     var outputType = "String"
     var hasTitle = false
-    var strictSchema = false
+    var strictSchema = true
     var hasPerformMethod = false
 
     for member in structDecl.memberBlock.members {
