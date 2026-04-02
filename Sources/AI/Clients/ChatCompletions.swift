@@ -318,7 +318,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             }
             try handleErrorResponse(httpResponse, data: errorData)
           }
-          var toolCalls: [AI.ToolCall] = []
+          var toolCallsById: [Int: AI.ToolCall] = [:] // Accumulate tool calls by index
           var functionCallArguments: [Int: String] = [:] // Accumulate arguments by index
           var metadata = GenerationResponse.Metadata()
           var lastFinishReason: String?
@@ -363,39 +363,36 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                   for deltaToolCall in deltaToolCalls {
                     guard let index = deltaToolCall.index else { continue }
 
-                    // Create new tool call if this is the first chunk for this index
-                    if let id = deltaToolCall.id,
-                       let function = deltaToolCall.function,
-                       let name = function.name,
-                       index >= toolCalls.count
-                    {
-                      toolCalls.append(AI.ToolCall(
-                        name: name,
-                        id: id,
-                        parameters: [:],
-                      ))
-                      functionCallArguments[index] = function.arguments ?? ""
-                    } else if let function = deltaToolCall.function, let arguments = function.arguments {
-                      // Accumulate arguments for existing tool call
-                      functionCallArguments[index, default: ""] += arguments
+                    // Ensure entry exists for this index
+                    var toolCall = toolCallsById[index] ?? AI.ToolCall(name: "", id: "", parameters: [:])
+
+                    // Merge fields independently as they arrive
+                    if let id = deltaToolCall.id {
+                      toolCall = AI.ToolCall(name: toolCall.name, id: id, parameters: toolCall.parameters)
+                    }
+                    if let function = deltaToolCall.function {
+                      if let name = function.name {
+                        toolCall = AI.ToolCall(name: name, id: toolCall.id, parameters: toolCall.parameters)
+                      }
+                      if let arguments = function.arguments {
+                        functionCallArguments[index, default: ""] += arguments
+                      }
                     }
 
                     // Try to parse accumulated arguments
-                    if index < toolCalls.count, let accumulatedArgs = functionCallArguments[index], !accumulatedArgs.isEmpty {
-                      if let argsData = accumulatedArgs.data(using: .utf8),
-                         let parsedArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
-                      {
-                        toolCalls[index] = AI.ToolCall(
-                          name: toolCalls[index].name,
-                          id: toolCalls[index].id,
-                          parameters: parsedArgs,
-                        )
-                      }
+                    if let accumulatedArgs = functionCallArguments[index], !accumulatedArgs.isEmpty,
+                       let argsData = accumulatedArgs.data(using: .utf8),
+                       let parsedArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
+                    {
+                      toolCall = AI.ToolCall(name: toolCall.name, id: toolCall.id, parameters: parsedArgs)
                     }
+
+                    toolCallsById[index] = toolCall
                   }
                 }
                 // Perplexity citations
                 let notesText = formatCitations(chunk.citations)
+                let toolCalls = toolCallsById.keys.sorted().compactMap { toolCallsById[$0] }
                 // Yield if we have content, function calls, or a finish reason (final chunk with metadata)
                 if reasoningText != nil || responseText != nil || notesText != nil || !toolCalls.isEmpty || lastFinishReason != nil {
                   var currentMetadata = metadata
@@ -414,6 +411,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                 }
               } else {
                 // Handle empty choices/delta (final chunk with just usage data)
+                let toolCalls = toolCallsById.keys.sorted().compactMap { toolCallsById[$0] }
                 if lastFinishReason != nil {
                   var currentMetadata = metadata
                   currentMetadata.finishReason = parseFinishReason(lastFinishReason)
