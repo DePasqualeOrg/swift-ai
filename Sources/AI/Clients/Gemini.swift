@@ -182,6 +182,7 @@ public final class GeminiClient: APIClient, Sendable {
   private struct StreamResponse {
     let text: String?
     let thought: Bool?
+    let thoughtSignature: String?
     let groundingMetadata: GroundingMetadata?
     let toolCall: ToolCall?
     let usageMetadata: UsageMetadata?
@@ -190,11 +191,27 @@ public final class GeminiClient: APIClient, Sendable {
 
   private static func assistantContent(
     reasoningText: String? = nil,
+    reasoningSignature: String? = nil,
     responseText: String? = nil,
     notesText: String? = nil,
     toolCalls: [ToolCall] = [],
   ) -> [Message.Content] {
-    Message.assistantContent(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
+    // When a Gemini thought signature is present, store it as a provider-scoped opaque block
+    // rather than in the generic .thinking(signature:) slot, which Anthropic treats as its own.
+    if let reasoningText, !reasoningText.isEmpty, let reasoningSignature {
+      var content: [Message.Content] = [
+        .providerOpaque(OpaqueBlock(provider: "gemini", type: "thinking", content: reasoningText, signature: reasoningSignature)),
+      ]
+      if let responseText, !responseText.isEmpty {
+        content.append(.text(responseText))
+      }
+      if let notesText, !notesText.isEmpty {
+        content.append(.endnotes(notesText))
+      }
+      content.append(contentsOf: toolCalls.map(Message.Content.toolCall))
+      return content
+    }
+    return Message.assistantContent(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
   }
 
   private func requestParts(for message: Message, apiKey: String) async throws -> [[String: any Sendable]] {
@@ -343,6 +360,22 @@ public final class GeminiClient: APIClient, Sendable {
 
         case let .text(text) where !text.isEmpty:
           parts.append(["text": text])
+
+        case let .thinking(text, _):
+          parts.append([
+            "text": text,
+            "thought": true,
+          ])
+
+        case let .providerOpaque(opaque) where opaque.provider == "gemini" && opaque.type == "thinking":
+          var part: [String: any Sendable] = [
+            "text": opaque.content ?? "",
+            "thought": true,
+          ]
+          if let signature = opaque.signature {
+            part["thoughtSignature"] = signature
+          }
+          parts.append(part)
 
         default:
           break
@@ -649,7 +682,8 @@ public final class GeminiClient: APIClient, Sendable {
                     if let thought = part["thought"] as? Bool { thought }
                     else if let thought = part["thought"] as? Int { thought == 1 }
                     else { false }
-                  continuation.yield(StreamResponse(text: text, thought: isThinkingText, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
+                  let signature = isThinkingText ? part["thoughtSignature"] as? String : nil
+                  continuation.yield(StreamResponse(text: text, thought: isThinkingText, thoughtSignature: signature, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
                 } else if let functionCall = part["functionCall"] as? [String: any Sendable],
                           let name = functionCall["name"] as? String,
                           let args = functionCall["args"] as? [String: any Sendable]
@@ -668,7 +702,7 @@ public final class GeminiClient: APIClient, Sendable {
                     parameters: parameters,
                     providerMetadata: providerMetadata,
                   )
-                  continuation.yield(StreamResponse(text: nil, thought: nil, groundingMetadata: nil, toolCall: toolCallResponse, usageMetadata: nil, finishReason: nil))
+                  continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: toolCallResponse, usageMetadata: nil, finishReason: nil))
                 } else if let executableCodeDict = part["executableCode"] as? [String: any Sendable] {
                   do {
                     let jsonData = try JSONSerialization.data(withJSONObject: executableCodeDict)
@@ -677,7 +711,7 @@ public final class GeminiClient: APIClient, Sendable {
                     let languageTag = (executableCode.language ?? "").lowercased()
                     if let code = executableCode.code {
                       let markdownText = "\n\n```\(languageTag)\n\(code)\n```\n\n"
-                      continuation.yield(StreamResponse(text: markdownText, thought: false, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
+                      continuation.yield(StreamResponse(text: markdownText, thought: false, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
                     }
                   } catch {
                     geminiLogger.error("Failed to decode or format ExecutableCode: \(error.localizedDescription)")
@@ -689,11 +723,14 @@ public final class GeminiClient: APIClient, Sendable {
                     // Format as Markdown code block (no language tag for result)
                     if let output = executionResult.output {
                       let markdownText = "\n\n```\n\(output)\(output.last == "\n" ? "" : "\n")```\n\n"
-                      continuation.yield(StreamResponse(text: markdownText, thought: false, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
+                      continuation.yield(StreamResponse(text: markdownText, thought: false, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
                     }
                   } catch {
                     geminiLogger.error("Failed to decode or format CodeExecutionResult: \(error.localizedDescription)")
                   }
+                } else if let thoughtSignature = part["thoughtSignature"] as? String {
+                  // Standalone thoughtSignature part (no text or functionCall)
+                  continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: thoughtSignature, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
                 }
               }
             }
@@ -705,7 +742,7 @@ public final class GeminiClient: APIClient, Sendable {
             {
               let metadataData = try JSONSerialization.data(withJSONObject: groundingMetadataDict)
               let groundingMetadata = try JSONDecoder().decode(GroundingMetadata.self, from: metadataData)
-              continuation.yield(StreamResponse(text: nil, thought: nil, groundingMetadata: groundingMetadata, toolCall: nil, usageMetadata: nil, finishReason: nil))
+              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: groundingMetadata, toolCall: nil, usageMetadata: nil, finishReason: nil))
             }
 
             // Parse usage metadata
@@ -714,7 +751,7 @@ public final class GeminiClient: APIClient, Sendable {
                 let metadataData = try JSONSerialization.data(withJSONObject: usageMetadataDict)
                 let decodedUsageMetadata = try JSONDecoder().decode(UsageMetadata.self, from: metadataData)
                 // Yield a StreamResponse that only contains usageMetadata
-                continuation.yield(StreamResponse(text: nil, thought: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: decodedUsageMetadata, finishReason: nil))
+                continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: decodedUsageMetadata, finishReason: nil))
               } catch {
                 geminiLogger.error("Failed to decode usageMetadata: \(error.localizedDescription)")
               }
@@ -726,7 +763,7 @@ public final class GeminiClient: APIClient, Sendable {
                let finishReasonString = firstCandidate["finishReason"] as? String
             {
               let finishReason = FinishReason(rawValue: finishReasonString) ?? .other
-              continuation.yield(StreamResponse(text: nil, thought: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: finishReason))
+              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: finishReason))
               // Only finish the stream on terminal finish reasons
               if finishReason == .stop || finishReason == .maxTokens {
                 continuation.finish()
@@ -949,6 +986,7 @@ public final class GeminiClient: APIClient, Sendable {
     }
     let task = Task<GenerationResponse, Error> {
       var fullReasoningText = ""
+      var reasoningSignature: String?
       var fullResponseText = ""
       var notesText: String?
       var toolCalls: [ToolCall] = []
@@ -998,6 +1036,7 @@ public final class GeminiClient: APIClient, Sendable {
         let sendUpdate = {
           let blocks = Self.assistantContent(
             reasoningText: fullReasoningText,
+            reasoningSignature: reasoningSignature,
             responseText: fullResponseText,
             notesText: notesText,
             toolCalls: toolCalls,
@@ -1023,10 +1062,16 @@ public final class GeminiClient: APIClient, Sendable {
           if let text = chunk.text {
             if let isThinkingText = chunk.thought, isThinkingText {
               fullReasoningText += text
+              if let signature = chunk.thoughtSignature {
+                reasoningSignature = signature
+              }
             } else {
               fullResponseText += text
             }
             await sendUpdate()
+          } else if let signature = chunk.thoughtSignature {
+            // Standalone thoughtSignature part (no text)
+            reasoningSignature = signature
           }
 
           // Handle function calls
@@ -1048,6 +1093,7 @@ public final class GeminiClient: APIClient, Sendable {
         return .init(
           content: Self.assistantContent(
             reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+            reasoningSignature: reasoningSignature,
             responseText: fullResponseText.isEmpty ? nil : fullResponseText,
             notesText: notesText,
             toolCalls: toolCalls,
@@ -1069,6 +1115,7 @@ public final class GeminiClient: APIClient, Sendable {
           return .init(
             content: Self.assistantContent(
               reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+              reasoningSignature: reasoningSignature,
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
               notesText: notesText,
             ),
@@ -1099,6 +1146,7 @@ public final class GeminiClient: APIClient, Sendable {
           return .init(
             content: Self.assistantContent(
               reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+              reasoningSignature: reasoningSignature,
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
               notesText: notesText,
               toolCalls: toolCalls,
