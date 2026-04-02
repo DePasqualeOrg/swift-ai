@@ -185,6 +185,7 @@ public final class GeminiClient: APIClient, Sendable {
     let thoughtSignature: String?
     let groundingMetadata: GroundingMetadata?
     let toolCall: ToolCall?
+    let opaqueBlock: OpaqueBlock?
     let usageMetadata: UsageMetadata?
     let finishReason: FinishReason?
   }
@@ -376,6 +377,15 @@ public final class GeminiClient: APIClient, Sendable {
             part["thoughtSignature"] = signature
           }
           parts.append(part)
+
+        case let .providerOpaque(opaque) where opaque.provider == "gemini"
+        && (opaque.type == "executableCode" || opaque.type == "codeExecutionResult"):
+          if let jsonString = opaque.data,
+             let jsonData = jsonString.data(using: .utf8),
+             let jsonObject = try? JSONSerialization.jsonObject(with: jsonData) as? [String: any Sendable]
+          {
+            parts.append([opaque.type: jsonObject])
+          }
 
         default:
           break
@@ -683,7 +693,7 @@ public final class GeminiClient: APIClient, Sendable {
                     else if let thought = part["thought"] as? Int { thought == 1 }
                     else { false }
                   let signature = isThinkingText ? part["thoughtSignature"] as? String : nil
-                  continuation.yield(StreamResponse(text: text, thought: isThinkingText, thoughtSignature: signature, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
+                  continuation.yield(StreamResponse(text: text, thought: isThinkingText, thoughtSignature: signature, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
                 } else if let functionCall = part["functionCall"] as? [String: any Sendable],
                           let name = functionCall["name"] as? String,
                           let args = functionCall["args"] as? [String: any Sendable]
@@ -702,35 +712,41 @@ public final class GeminiClient: APIClient, Sendable {
                     parameters: parameters,
                     providerMetadata: providerMetadata,
                   )
-                  continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: toolCallResponse, usageMetadata: nil, finishReason: nil))
+                  continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: toolCallResponse, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
                 } else if let executableCodeDict = part["executableCode"] as? [String: any Sendable] {
                   do {
                     let jsonData = try JSONSerialization.data(withJSONObject: executableCodeDict)
                     let executableCode = try JSONDecoder().decode(ExecutableCode.self, from: jsonData)
-                    // Format as Markdown code block with language
                     let languageTag = (executableCode.language ?? "").lowercased()
-                    if let code = executableCode.code {
-                      let markdownText = "\n\n```\(languageTag)\n\(code)\n```\n\n"
-                      continuation.yield(StreamResponse(text: markdownText, thought: false, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
-                    }
+                    let displayText = executableCode.code.map { "\n\n```\(languageTag)\n\($0)\n```\n\n" }
+                    let rawJson = String(data: jsonData, encoding: .utf8)
+                    let block = OpaqueBlock(
+                      provider: "gemini", type: "executableCode",
+                      content: displayText, data: rawJson,
+                      isResponseContent: displayText != nil,
+                    )
+                    continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
                   } catch {
-                    geminiLogger.error("Failed to decode or format ExecutableCode: \(error.localizedDescription)")
+                    geminiLogger.error("Failed to decode ExecutableCode: \(error.localizedDescription)")
                   }
                 } else if let codeExecutionResultDict = part["codeExecutionResult"] as? [String: any Sendable] {
                   do {
                     let jsonData = try JSONSerialization.data(withJSONObject: codeExecutionResultDict)
                     let executionResult = try JSONDecoder().decode(CodeExecutionResult.self, from: jsonData)
-                    // Format as Markdown code block (no language tag for result)
-                    if let output = executionResult.output {
-                      let markdownText = "\n\n```\n\(output)\(output.last == "\n" ? "" : "\n")```\n\n"
-                      continuation.yield(StreamResponse(text: markdownText, thought: false, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
-                    }
+                    let displayText = executionResult.output.map { "\n\n```\n\($0)\($0.last == "\n" ? "" : "\n")```\n\n" }
+                    let rawJson = String(data: jsonData, encoding: .utf8)
+                    let block = OpaqueBlock(
+                      provider: "gemini", type: "codeExecutionResult",
+                      content: displayText, data: rawJson,
+                      isResponseContent: displayText != nil,
+                    )
+                    continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
                   } catch {
-                    geminiLogger.error("Failed to decode or format CodeExecutionResult: \(error.localizedDescription)")
+                    geminiLogger.error("Failed to decode CodeExecutionResult: \(error.localizedDescription)")
                   }
                 } else if let thoughtSignature = part["thoughtSignature"] as? String {
                   // Standalone thoughtSignature part (no text or functionCall)
-                  continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: thoughtSignature, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
+                  continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: thoughtSignature, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
                 }
               }
             }
@@ -742,7 +758,7 @@ public final class GeminiClient: APIClient, Sendable {
             {
               let metadataData = try JSONSerialization.data(withJSONObject: groundingMetadataDict)
               let groundingMetadata = try JSONDecoder().decode(GroundingMetadata.self, from: metadataData)
-              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: groundingMetadata, toolCall: nil, usageMetadata: nil, finishReason: nil))
+              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: groundingMetadata, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
             }
 
             // Parse usage metadata
@@ -751,7 +767,7 @@ public final class GeminiClient: APIClient, Sendable {
                 let metadataData = try JSONSerialization.data(withJSONObject: usageMetadataDict)
                 let decodedUsageMetadata = try JSONDecoder().decode(UsageMetadata.self, from: metadataData)
                 // Yield a StreamResponse that only contains usageMetadata
-                continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: decodedUsageMetadata, finishReason: nil))
+                continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: decodedUsageMetadata, finishReason: nil))
               } catch {
                 geminiLogger.error("Failed to decode usageMetadata: \(error.localizedDescription)")
               }
@@ -763,7 +779,7 @@ public final class GeminiClient: APIClient, Sendable {
                let finishReasonString = firstCandidate["finishReason"] as? String
             {
               let finishReason = FinishReason(rawValue: finishReasonString) ?? .other
-              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: finishReason))
+              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: finishReason))
               // Only finish the stream on terminal finish reasons
               if finishReason == .stop || finishReason == .maxTokens {
                 continuation.finish()
@@ -990,6 +1006,7 @@ public final class GeminiClient: APIClient, Sendable {
       var fullResponseText = ""
       var notesText: String?
       var toolCalls: [ToolCall] = []
+      var opaqueBlocks: [OpaqueBlock] = []
       var usageMetadata: UsageMetadata?
       var finishReason: FinishReason?
 
@@ -1042,7 +1059,7 @@ public final class GeminiClient: APIClient, Sendable {
             responseText: fullResponseText,
             notesText: notesText,
             toolCalls: toolCalls,
-          )
+          ) + opaqueBlocks.map(Message.Content.providerOpaque)
           let metadata = buildMetadata()
           await MainActor.run {
             update(.init(content: blocks, metadata: metadata))
@@ -1082,6 +1099,12 @@ public final class GeminiClient: APIClient, Sendable {
             await sendUpdate()
           }
 
+          // Handle opaque blocks (code execution parts)
+          if let opaqueBlock = chunk.opaqueBlock {
+            opaqueBlocks.append(opaqueBlock)
+            await sendUpdate()
+          }
+
           // Handle grounding metadata
           if let metadata = chunk.groundingMetadata {
             notesText = await formatGroundingInfo(from: metadata)
@@ -1099,7 +1122,7 @@ public final class GeminiClient: APIClient, Sendable {
             responseText: fullResponseText.isEmpty ? nil : fullResponseText,
             notesText: notesText,
             toolCalls: toolCalls,
-          ),
+          ) + opaqueBlocks.map(Message.Content.providerOpaque),
           metadata: buildMetadata(),
         )
       } catch let error as GeminiError {
@@ -1120,7 +1143,7 @@ public final class GeminiClient: APIClient, Sendable {
               reasoningSignature: reasoningSignature,
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
               notesText: notesText,
-            ),
+            ) + opaqueBlocks.map(Message.Content.providerOpaque),
             metadata: partialMetadata,
           )
         }
