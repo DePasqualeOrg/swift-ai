@@ -17,6 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Temporary: macos-latest defaults to Xcode 16.4 (Swift 6.0), but the
+      # package requires Swift 6.1+. Remove this step once the default Xcode
+      # on macos-latest includes Swift 6.1 or later.
+      - name: Select Xcode 26.3
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+
       - name: Build
         run: swift build
 
