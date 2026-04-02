@@ -1023,8 +1023,10 @@ public final class GeminiClient: APIClient, Sendable {
           } else {
             nil
           }
+          // Gemini sends finishReason STOP even when the response contains function calls
+          let effectiveFinishReason = if !toolCalls.isEmpty { GenerationResponse.FinishReason.toolUse } else { generationFinishReason }
           return GenerationResponse.Metadata(
-            finishReason: generationFinishReason,
+            finishReason: effectiveFinishReason,
             inputTokens: usageMetadata?.promptTokenCount,
             outputTokens: usageMetadata?.candidatesTokenCount,
             totalTokens: usageMetadata?.totalTokenCount,
