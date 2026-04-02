@@ -210,6 +210,7 @@ public final class GeminiClient: APIClient, Sendable {
         case let .toolResult(toolResult):
           var functionResponse: [String: any Sendable] = [
             "name": toolResult.name,
+            "id": toolResult.id,
           ]
 
           if toolResult.isError == true {
@@ -644,9 +645,10 @@ public final class GeminiClient: APIClient, Sendable {
                   if let thoughtSignature = part["thoughtSignature"] as? String {
                     providerMetadata = ["thoughtSignature": thoughtSignature]
                   }
+                  let toolCallId = functionCall["id"] as? String ?? generateShortId()
                   let toolCallResponse = ToolCall(
                     name: name,
-                    id: generateShortId(),
+                    id: toolCallId,
                     parameters: parameters,
                     providerMetadata: providerMetadata,
                   )
