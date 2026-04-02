@@ -296,7 +296,7 @@ public final class ResponsesClient: APIClient, Sendable {
           switch block {
             case let .text(text) where !text.isEmpty:
               contentItems.append([
-                "type": ContentType.inputText,
+                "type": ContentType.outputText,
                 "text": text,
               ])
             case let .toolCall(toolCall):
