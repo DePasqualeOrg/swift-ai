@@ -132,6 +132,11 @@ public enum Value: Hashable, Sendable {
         if number.isBool {
           return .bool(number.boolValue)
         } else if number.isInteger {
+          let type = String(cString: number.objCType)
+          // Unsigned 64-bit types (Q, L on 64-bit) can exceed Int.max; fall back to double
+          if type == "Q" || type == "L", number.uint64Value > UInt64(Int.max) {
+            return .double(number.doubleValue)
+          }
           return .int(number.intValue)
         } else {
           return .double(number.doubleValue)
@@ -497,14 +502,16 @@ private extension NSNumber {
     type(of: self) == type(of: NSNumber(value: true))
   }
 
-  /// Determines if this NSNumber represents an integer value.
+  /// Determines if this NSNumber represents an integer value by checking the Objective-C type
+  /// encoding rather than the numeric value. This preserves the int/double distinction from JSON:
+  /// `JSONSerialization` encodes `1` as an integer-typed `NSNumber` and `1.0` as double-typed.
   var isInteger: Bool {
-    let doubleValue = doubleValue
-    return doubleValue == doubleValue.rounded(.towardZero)
-      && !doubleValue.isNaN
-      && !doubleValue.isInfinite
-      && doubleValue >= Double(Int.min)
-      && doubleValue <= Double(Int.max)
+    switch String(cString: objCType) {
+      case "c", "C", "s", "S", "i", "I", "l", "L", "q", "Q":
+        true
+      default:
+        false
+    }
   }
 }
 
