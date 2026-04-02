@@ -1150,34 +1150,44 @@ public final class AnthropicClient: APIClient, Sendable {
         case .serverToolUse:
           // Store as opaque block for round-tripping; the structured data is needed
           // on subsequent turns so the model can reference its own tool invocations.
+          // Display text (e.g., formatted code) is stored in `content` for consumers
+          // who inspect the content array, but is NOT emitted as a separate `.text`
+          // block to avoid duplicate serialization on follow-up turns.
+          var displayText: String?
+          if let serverToolUse = contentBlock.serverToolUse,
+             let textBlock = textBlock(from: serverToolUse),
+             case let .text(text) = textBlock
+          {
+            displayText = text
+          }
           if let jsonData = try? JSONEncoder().encode(contentBlock),
              let jsonString = String(data: jsonData, encoding: .utf8)
           {
             blocks.append(.providerOpaque(OpaqueBlock(
               provider: "anthropic",
               type: contentBlock.type.rawValue,
+              content: displayText,
               data: jsonString,
             )))
-          }
-          // Also produce display text (e.g., formatted code for code_execution)
-          if let serverToolUse = contentBlock.serverToolUse,
-             let textBlock = textBlock(from: serverToolUse)
-          {
-            blocks.append(textBlock)
           }
         case .codeExecutionToolResult:
+          let displayText: String? = if let codeExecutionToolResult = contentBlock.codeExecutionToolResult {
+            textBlocks(from: codeExecutionToolResult).compactMap { block -> String? in
+              if case let .text(text) = block { return text }
+              return nil
+            }.joined()
+          } else {
+            nil
+          }
           if let jsonData = try? JSONEncoder().encode(contentBlock),
              let jsonString = String(data: jsonData, encoding: .utf8)
           {
             blocks.append(.providerOpaque(OpaqueBlock(
               provider: "anthropic",
               type: contentBlock.type.rawValue,
+              content: displayText,
               data: jsonString,
             )))
-          }
-          // Also produce display text (formatted stdout/stderr)
-          if let codeExecutionToolResult = contentBlock.codeExecutionToolResult {
-            blocks.append(contentsOf: textBlocks(from: codeExecutionToolResult))
           }
         case .webSearchToolResult:
           if let jsonData = try? JSONEncoder().encode(contentBlock),
@@ -1198,23 +1208,24 @@ public final class AnthropicClient: APIClient, Sendable {
             }
           }
         case .webFetchToolResult:
+          var displayText: String?
+          if let webFetchToolResult = contentBlock.webFetchToolResult {
+            if case let .result(result) = webFetchToolResult.content {
+              appendCitationURL(result.url)
+              if result.content.source.type == "text", !result.content.source.data.isEmpty {
+                displayText = result.content.source.data
+              }
+            }
+          }
           if let jsonData = try? JSONEncoder().encode(contentBlock),
              let jsonString = String(data: jsonData, encoding: .utf8)
           {
             blocks.append(.providerOpaque(OpaqueBlock(
               provider: "anthropic",
               type: contentBlock.type.rawValue,
+              content: displayText,
               data: jsonString,
             )))
-          }
-          // Also extract citation URLs for endnotes and produce display text
-          if let webFetchToolResult = contentBlock.webFetchToolResult {
-            if case let .result(result) = webFetchToolResult.content {
-              appendCitationURL(result.url)
-              if result.content.source.type == "text", !result.content.source.data.isEmpty {
-                blocks.append(.text(result.content.source.data))
-              }
-            }
           }
         case .image, .document:
           break
