@@ -262,6 +262,10 @@ public actor MCPToolProvider {
   /// - Returns: The tool result
   /// - Throws: `MCPToolProviderError.toolNotFound` if the tool is not provided by any server
   public func execute(_ toolCall: AI.ToolCall) async throws -> AI.ToolResult {
+    // Ensure server names are available for namespace-based resolution
+    if serverNames.isEmpty {
+      serverNames = await buildServerNames()
+    }
     let (index, originalName) = try resolveClientIndex(for: toolCall.name)
     let entry = entries[index]
 
@@ -421,9 +425,8 @@ public actor MCPToolProvider {
   }
 
   private func resolveClientIndex(for toolName: String) throws -> (index: Int, originalName: String) {
-    // Check if we have a direct mapping
+    // Check if we have a direct mapping from a prior tools() call
     if let index = toolToClientIndex[toolName] {
-      // Check if it's a namespaced name (server__tool format)
       if let separatorRange = toolName.range(of: "__") {
         let originalName = String(toolName[separatorRange.upperBound...])
         return (index, originalName)
@@ -431,9 +434,21 @@ public actor MCPToolProvider {
       return (index, toolName)
     }
 
-    // For single-client case without prior tools() call
+    // For single-client case, use the tool name directly (strip namespace if present)
     if entries.count == 1 {
+      if let separatorRange = toolName.range(of: "__") {
+        return (0, String(toolName[separatorRange.upperBound...]))
+      }
       return (0, toolName)
+    }
+
+    // For multi-client without prior tools() call, resolve via namespaced name
+    if let separatorRange = toolName.range(of: "__") {
+      let serverName = String(toolName[..<separatorRange.lowerBound])
+      let originalName = String(toolName[separatorRange.upperBound...])
+      if let index = serverNames.firstIndex(of: serverName) {
+        return (index, originalName)
+      }
     }
 
     throw MCPToolProviderError.toolNotFound(toolName)
