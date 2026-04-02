@@ -328,9 +328,10 @@ public final class ResponsesClient: APIClient, Sendable {
                       "image_url": dataURL,
                     ])
                   } else {
+                    // Use data URL format consistent with input file encoding
                     var fileItem: [String: any Sendable] = [
                       "type": ContentType.inputFile,
-                      "file_data": data.base64EncodedString(),
+                      "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
                     ]
                     if let filename {
                       fileItem["filename"] = filename
