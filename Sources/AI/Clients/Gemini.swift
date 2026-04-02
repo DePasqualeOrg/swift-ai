@@ -369,19 +369,31 @@ public final class GeminiClient: APIClient, Sendable {
 
     let patchedMessages = Message.patchingOrphanedToolCalls(messages)
     var processedMessages: [[String: any Sendable]] = []
+    // Gemini only allows "user" and "model" roles in history (plus "function" for tool results).
+    // System/developer messages are extracted and merged into system_instruction.
+    var additionalSystemParts: [[String: any Sendable]] = []
     for message in patchedMessages {
-      let parts = try await requestParts(for: message, apiKey: apiKey)
-
-      let role = switch message.role {
-        case .assistant: "model" // Gemini uses "model" instead of "assistant"
-        case .tool: "function" // For function responses
-        default: message.role.rawValue
+      switch message.role {
+        case .system, .developer:
+          let text = message.content.compactMap { block -> String? in
+            if case let .text(text) = block { return text }
+            return nil
+          }.joined(separator: "\n")
+          if !text.isEmpty {
+            additionalSystemParts.append(["text": text])
+          }
+        case .assistant, .user, .tool:
+          let parts = try await requestParts(for: message, apiKey: apiKey)
+          let role = switch message.role {
+            case .assistant: "model"
+            case .tool: "function"
+            default: message.role.rawValue
+          }
+          processedMessages.append([
+            "role": role,
+            "parts": parts,
+          ])
       }
-
-      processedMessages.append([
-        "role": role,
-        "parts": parts,
-      ])
     }
 
     var generationConfig: [String: any Sendable] = [:]
@@ -481,9 +493,14 @@ public final class GeminiClient: APIClient, Sendable {
       }
     }
 
-    // System prompt
+    // System prompt and any system/developer messages extracted from history
+    var systemParts: [[String: any Sendable]] = []
     if let systemPrompt, !systemPrompt.isEmpty {
-      body["system_instruction"] = ["parts": [["text": systemPrompt]]]
+      systemParts.append(["text": systemPrompt])
+    }
+    systemParts.append(contentsOf: additionalSystemParts)
+    if !systemParts.isEmpty {
+      body["system_instruction"] = ["parts": systemParts]
     }
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
     let (result, response) = try await session.bytes(for: request)
