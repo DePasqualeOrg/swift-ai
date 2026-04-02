@@ -1561,22 +1561,16 @@ public final class AnthropicClient: APIClient, Sendable {
       })
     }
     if let toolChoice = params.toolChoice {
-      switch toolChoice {
-        case .auto:
-          requestBody["tool_choice"] = .object(["type": .string("auto")])
-        case .any:
-          requestBody["tool_choice"] = .object(["type": .string("any")])
-        case .none:
-          requestBody["tool_choice"] = .object(["type": .string("none")])
-        case let .tool(name):
-          requestBody["tool_choice"] = .object([
-            "type": .string("tool"),
-            "name": .string(name),
-          ])
+      var toolChoiceDict: [String: Value] = switch toolChoice {
+        case .auto: ["type": .string("auto")]
+        case .any: ["type": .string("any")]
+        case .none: ["type": .string("none")]
+        case let .tool(name): ["type": .string("tool"), "name": .string(name)]
       }
-    }
-    if let disableParallelToolUse = params.disableParallelToolUse {
-      requestBody["disable_parallel_tool_use"] = .bool(disableParallelToolUse)
+      if case .none = toolChoice {} else if let disableParallelToolUse = params.disableParallelToolUse {
+        toolChoiceDict["disable_parallel_tool_use"] = .bool(disableParallelToolUse)
+      }
+      requestBody["tool_choice"] = .object(toolChoiceDict)
     }
     if let metadata = params.metadata {
       var metadataDict: [String: Value] = [:]
