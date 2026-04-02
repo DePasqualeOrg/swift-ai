@@ -50,6 +50,8 @@ public final class ResponsesClient: APIClient, Sendable {
   /// The ID of the currently active background response, if any
   /// This can be used to manually interrupt and resume background streams
   @MainActor public private(set) var activeBackgroundResponseId: String?
+  /// The API key associated with the active background response, used for authenticated cancellation
+  @MainActor private var activeBackgroundResponseApiKey: String?
 
   private let session: URLSession
 
@@ -546,6 +548,7 @@ public final class ResponsesClient: APIClient, Sendable {
           }
           await MainActor.run {
             activeBackgroundResponseId = responseId
+            activeBackgroundResponseApiKey = apiKey
           }
           // Poll for completion
           try await pollBackgroundResponse(responseId: responseId, apiKey: apiKey, continuation: continuation)
@@ -810,6 +813,7 @@ public final class ResponsesClient: APIClient, Sendable {
     isGenerating = false
     currentTask = nil
     activeBackgroundResponseId = nil
+    activeBackgroundResponseApiKey = nil
   }
 
   /// Cancels any ongoing generation task and active background response.
@@ -819,9 +823,10 @@ public final class ResponsesClient: APIClient, Sendable {
     currentTask?.cancel()
     // Also cancel background response if one is active
     if let backgroundResponseId = activeBackgroundResponseId {
+      let apiKey = activeBackgroundResponseApiKey
       openAIResponsesLogger.log("Stop called - cancelling background response \(backgroundResponseId)")
       Task {
-        try? await cancelBackgroundResponse(responseId: backgroundResponseId, apiKey: nil)
+        try? await cancelBackgroundResponse(responseId: backgroundResponseId, apiKey: apiKey)
       }
     }
   }
@@ -1031,6 +1036,7 @@ public final class ResponsesClient: APIClient, Sendable {
           openAIResponsesLogger.log("\(logPrefix): Got response ID: \(id)")
           await MainActor.run { [weak self] in
             self?.activeBackgroundResponseId = id
+            self?.activeBackgroundResponseApiKey = apiKey
           }
         } : nil,
         sequenceHandler: { sequenceNumber in
@@ -1422,6 +1428,7 @@ public final class ResponsesClient: APIClient, Sendable {
     await MainActor.run {
       isGenerating = true
       activeBackgroundResponseId = responseId
+      activeBackgroundResponseApiKey = apiKey
     }
 
     let task = Task<GenerationResponse, Error> {
