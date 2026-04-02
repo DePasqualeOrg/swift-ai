@@ -302,7 +302,7 @@ struct AIToolsE2ETests {
         provider: provider,
       )
 
-      print("[\(provider.name)] Iteration \(iterations): \(response.toolCalls.count) tool calls")
+      print("[\(provider.name)] Iteration \(iterations): \(response.toolCalls.count) tool calls, finishReason: \(String(describing: response.metadata?.finishReason))")
 
       if !response.toolCalls.isEmpty {
         for call in response.toolCalls {
@@ -322,6 +322,13 @@ struct AIToolsE2ETests {
         }
 
         messages.append(results.message)
+        continue
+      }
+
+      // Retry if the model returned an empty response with a non-terminal finish reason
+      // (e.g., Gemini MALFORMED_FUNCTION_CALL — the model intended to call tools but failed)
+      if response.responseText == nil, response.metadata?.finishReason != .stop {
+        print("[\(provider.name)] Empty response with finish reason \(String(describing: response.metadata?.finishReason)), retrying...")
         continue
       }
 
@@ -352,6 +359,13 @@ struct AIToolsE2ETests {
     switch provider {
       case let .gemini(apiKey, modelId):
         let client = GeminiClient()
+        // Thinking config is required for Gemini 3 models; without it, thinking tokens count
+        // against maxOutputTokens and the model can exhaust its budget on reasoning alone.
+        let (thinkingLevel, thinkingBudget) = GeminiClient.thinkingConfig(for: modelId, reasoning: true)
+        let configuration = GeminiClient.Configuration(
+          thinkingBudget: thinkingBudget,
+          thinkingLevel: thinkingLevel,
+        )
         return try await client.generateText(
           modelId: modelId,
           tools: tools,
@@ -359,6 +373,7 @@ struct AIToolsE2ETests {
           messages: messages,
           maxTokens: 4096,
           apiKey: apiKey,
+          configuration: configuration,
         )
 
       case let .anthropic(apiKey, modelId):
