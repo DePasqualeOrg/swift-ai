@@ -207,10 +207,13 @@ public final class GeminiClient: APIClient, Sendable {
           for (key, value) in toolCall.parameters {
             nativeArgs[key] = value.toAny()
           }
-          let toolCallDict: [String: any Sendable] = [
+          var toolCallDict: [String: any Sendable] = [
             "name": toolCall.name,
             "args": nativeArgs,
           ]
+          if !toolCall.id.isEmpty {
+            toolCallDict["id"] = toolCall.id
+          }
           var partDict: [String: any Sendable] = [
             "functionCall": toolCallDict,
           ]
