@@ -267,8 +267,8 @@ public final class GeminiClient: APIClient, Sendable {
             case let .image(data, mimeType):
               let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
               parts.append([
-                "inline_data": [
-                  "mime_type": mimeType,
+                "inlineData": [
+                  "mimeType": mimeType,
                   "data": processedImageData.base64EncodedString(),
                 ],
               ])
@@ -280,9 +280,9 @@ public final class GeminiClient: APIClient, Sendable {
                 apiKey: apiKey,
               )
               parts.append([
-                "file_data": [
-                  "mime_type": mimeType,
-                  "file_uri": fileUri,
+                "fileData": [
+                  "mimeType": mimeType,
+                  "fileUri": fileUri,
                 ],
               ])
             case let .audio(data, mimeType):
@@ -293,9 +293,9 @@ public final class GeminiClient: APIClient, Sendable {
                 apiKey: apiKey,
               )
               parts.append([
-                "file_data": [
-                  "mime_type": mimeType,
-                  "file_uri": fileUri,
+                "fileData": [
+                  "mimeType": mimeType,
+                  "fileUri": fileUri,
                 ],
               ])
             case let .document(data, mimeType):
@@ -305,8 +305,8 @@ public final class GeminiClient: APIClient, Sendable {
               }
               if data.count < 20_000_000 {
                 parts.append([
-                  "inline_data": [
-                    "mime_type": mimeTypeForGemini,
+                  "inlineData": [
+                    "mimeType": mimeTypeForGemini,
                     "data": data.base64EncodedString(),
                   ],
                 ])
@@ -318,9 +318,9 @@ public final class GeminiClient: APIClient, Sendable {
                   apiKey: apiKey,
                 )
                 parts.append([
-                  "file_data": [
-                    "mime_type": mimeTypeForGemini,
-                    "file_uri": fileUri,
+                  "fileData": [
+                    "mimeType": mimeTypeForGemini,
+                    "fileUri": fileUri,
                   ],
                 ])
               }
@@ -433,20 +433,20 @@ public final class GeminiClient: APIClient, Sendable {
     // Search grounding
     if searchGrounding {
       toolsArray.append([
-        "google_search": [:] as [String: any Sendable],
+        "googleSearch": [:] as [String: any Sendable],
       ])
     }
 
     if webContent {
       toolsArray.append([
-        "url_context": [:] as [String: any Sendable],
+        "urlContext": [:] as [String: any Sendable],
       ])
     }
 
     // Code execution
     if codeExecution {
       toolsArray.append([
-        "code_execution": [:] as [String: any Sendable],
+        "codeExecution": [:] as [String: any Sendable],
       ])
     }
 
@@ -463,7 +463,7 @@ public final class GeminiClient: APIClient, Sendable {
         return declarationDict
       }
       toolsArray.append([
-        "function_declarations": functionDeclarations,
+        "functionDeclarations": functionDeclarations,
       ])
     }
 
@@ -486,8 +486,8 @@ public final class GeminiClient: APIClient, Sendable {
 
       // Add tool choice configuration if we have function declarations
       if !tools.isEmpty {
-        body["tool_config"] = [
-          "function_calling_config": [
+        body["toolConfig"] = [
+          "functionCallingConfig": [
             "mode": "AUTO", // Can be "AUTO", "ANY", or "NONE"
           ],
         ]
@@ -501,7 +501,7 @@ public final class GeminiClient: APIClient, Sendable {
     }
     systemParts.append(contentsOf: additionalSystemParts)
     if !systemParts.isEmpty {
-      body["system_instruction"] = ["parts": systemParts]
+      body["systemInstruction"] = ["parts": systemParts]
     }
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
     let (result, response) = try await session.bytes(for: request)
@@ -1127,7 +1127,7 @@ public final class GeminiClient: APIClient, Sendable {
     request.setValue("\(data.count)", forHTTPHeaderField: "X-Goog-Upload-Header-Content-Length")
     request.setValue(mimeType, forHTTPHeaderField: "X-Goog-Upload-Header-Content-Type")
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    let metadata = ["file": ["display_name": displayName]]
+    let metadata = ["file": ["displayName": displayName]]
     request.httpBody = try JSONSerialization.data(withJSONObject: metadata)
     let (_, response) = try await session.data(for: request)
     guard let httpResponse = response as? HTTPURLResponse else {

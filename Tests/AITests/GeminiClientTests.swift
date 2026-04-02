@@ -441,8 +441,8 @@ struct GeminiClientTests {
     #expect(body != nil)
 
     // Verify system instruction is included
-    let systemInstruction = body?["system_instruction"] as? [String: Any]
-    #expect(systemInstruction != nil, "Request should include system_instruction")
+    let systemInstruction = body?["systemInstruction"] as? [String: Any]
+    #expect(systemInstruction != nil, "Request should include systemInstruction")
 
     let parts = systemInstruction?["parts"] as? [[String: Any]]
     #expect(parts != nil)
@@ -510,7 +510,7 @@ struct GeminiClientTests {
     #expect(try #require(tools).isEmpty == false)
 
     // Verify function declaration structure
-    let functionDeclarations = tools?.first?["function_declarations"] as? [[String: Any]]
+    let functionDeclarations = tools?.first?["functionDeclarations"] as? [[String: Any]]
     #expect(functionDeclarations != nil)
     #expect(functionDeclarations?.first?["name"] as? String == "get_weather")
     #expect(functionDeclarations?.first?["description"] as? String == "Get current weather")
@@ -672,8 +672,8 @@ struct GeminiClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
 
-    // Verify system_instruction contains the systemPrompt and extracted system/developer messages
-    let systemInstruction = try #require(body?["system_instruction"] as? [String: Any])
+    // Verify systemInstruction contains the systemPrompt and extracted system/developer messages
+    let systemInstruction = try #require(body?["systemInstruction"] as? [String: Any])
     let parts = try #require(systemInstruction["parts"] as? [[String: Any]])
     let texts = parts.compactMap { $0["text"] as? String }
     #expect(texts.contains("Base instructions"))
