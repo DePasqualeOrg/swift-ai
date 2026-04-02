@@ -126,6 +126,43 @@ enum MediaProcessor {
     "data:\(mimeType);base64,\(data.base64EncodedString())"
   }
 
+  /// Image MIME types supported by Anthropic's API.
+  static let anthropicSupportedImageTypes: Set<String> = [
+    "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
+  ]
+
+  /// Converts an image to a format supported by Anthropic if needed.
+  /// Unsupported formats (e.g., HEIC) are converted to JPEG.
+  static func normalizeImageForAnthropic(
+    _ imageData: Data,
+    mimeType: String,
+  ) async throws -> (data: Data, mimeType: String) {
+    if anthropicSupportedImageTypes.contains(mimeType.lowercased()) {
+      return (imageData, mimeType)
+    }
+    // Convert unsupported format to JPEG
+    guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
+          let cgImage = CGImageSourceCreateImageAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+          ] as CFDictionary)
+    else {
+      throw AIError.parsing(message: "Unable to read image for format conversion")
+    }
+    guard let mutableData = CFDataCreateMutable(nil, 0),
+          let destination = CGImageDestinationCreateWithData(mutableData, UTType.jpeg.identifier as CFString, 1, nil)
+    else {
+      throw AIError.parsing(message: "Failed to create JPEG destination for format conversion")
+    }
+    CGImageDestinationAddImage(destination, cgImage, [
+      kCGImageDestinationLossyCompressionQuality: 0.85 as CFNumber,
+    ] as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else {
+      throw AIError.parsing(message: "Failed to finalize JPEG conversion")
+    }
+    return (mutableData as Data, "image/jpeg")
+  }
+
   // MARK: - Private Helpers
 
   /// Returns the UTType for a given MIME type.

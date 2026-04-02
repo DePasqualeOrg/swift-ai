@@ -1266,18 +1266,20 @@ public final class AnthropicClient: APIClient, Sendable {
               case let .text(text):
                 resultContentBlocks.append(.text(text))
               case let .image(data, mimeType):
+                let (normalizedData, normalizedMime) = try await MediaProcessor.normalizeImageForAnthropic(data, mimeType: mimeType ?? "image/png")
                 resultContentBlocks.append(.image(
-                  mediaType: mimeType ?? "image/png",
-                  data: data.base64EncodedString(),
+                  mediaType: normalizedMime,
+                  data: normalizedData.base64EncodedString(),
                 ))
               case let .audio(data, mimeType):
                 anthropicLogger.warning("Tool '\(toolResult.name)' returned audio, which is not supported by Anthropic. Using fallback text.")
                 resultContentBlocks.append(.text(ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription))
               case let .file(data, mimeType, filename):
                 if mimeType.hasPrefix("image/") {
+                  let (normalizedData, normalizedMime) = try await MediaProcessor.normalizeImageForAnthropic(data, mimeType: mimeType)
                   resultContentBlocks.append(.image(
-                    mediaType: mimeType,
-                    data: data.base64EncodedString(),
+                    mediaType: normalizedMime,
+                    data: normalizedData.base64EncodedString(),
                   ))
                 } else if mimeType == "application/pdf" {
                   resultContentBlocks.append(.document(
@@ -1317,12 +1319,13 @@ public final class AnthropicClient: APIClient, Sendable {
           switch attachment.kind {
             case let .image(data, mimeType):
               let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+              let (normalizedData, normalizedMime) = try await MediaProcessor.normalizeImageForAnthropic(processedImageData, mimeType: mimeType)
               contentBlocks.append(.init(
                 type: .image,
                 source: .init(
                   type: "base64",
-                  mediaType: mimeType,
-                  data: processedImageData.base64EncodedString(),
+                  mediaType: normalizedMime,
+                  data: normalizedData.base64EncodedString(),
                   url: nil,
                 ),
               ))
