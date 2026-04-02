@@ -91,9 +91,17 @@ public final class ResponsesClient: APIClient, Sendable {
     var indexedContent: [Int: Message.Content] = [:]
     var fallbackContent: [Message.Content] = []
     var toolCallArgumentBuffers: [Int: String] = [:]
+    /// Separate buffer for reasoning summary deltas, keyed by output index.
+    /// Used as a fallback when no full reasoning text is available at that index.
+    var summaryContent: [Int: String] = [:]
 
     var content: [Message.Content] {
-      indexedContent.keys.sorted().compactMap { indexedContent[$0] } + fallbackContent
+      // For output indices that have summary but no reasoning text, use the summary
+      var merged = indexedContent
+      for (index, summary) in summaryContent where merged[index] == nil {
+        merged[index] = .thinking(text: summary, signature: nil)
+      }
+      return merged.keys.sorted().compactMap { merged[$0] } + fallbackContent
     }
 
     mutating func appendTextDelta(_ delta: String, outputIndex: Int?) {
@@ -102,6 +110,14 @@ public final class ResponsesClient: APIClient, Sendable {
 
     mutating func appendReasoningDelta(_ delta: String, outputIndex: Int?) {
       append(delta: delta, outputIndex: outputIndex, as: { .thinking(text: $0, signature: nil) })
+    }
+
+    mutating func appendSummaryDelta(_ delta: String, outputIndex: Int?) {
+      guard let outputIndex else {
+        appendFallback(.thinking(text: delta, signature: nil))
+        return
+      }
+      summaryContent[outputIndex, default: ""] += delta
     }
 
     mutating func setToolCall(_ toolCall: ToolCall, outputIndex: Int?) {
@@ -929,9 +945,15 @@ public final class ResponsesClient: APIClient, Sendable {
           yieldCurrentState()
         }
 
-      case StreamEventType.reasoningTextDelta, StreamEventType.reasoningDelta, StreamEventType.reasoningSummaryDelta:
+      case StreamEventType.reasoningTextDelta, StreamEventType.reasoningDelta:
         if let delta = event.delta {
           streamingState.appendReasoningDelta(delta, outputIndex: event.outputIndex)
+          yieldCurrentState()
+        }
+
+      case StreamEventType.reasoningSummaryDelta:
+        if let delta = event.delta {
+          streamingState.appendSummaryDelta(delta, outputIndex: event.outputIndex)
           yieldCurrentState()
         }
 
