@@ -190,6 +190,8 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             case .video, .audio:
               openAILogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported by ChatCompletions and will be omitted.")
             case let .document(data, mimeType):
+              // The API expects a data URL (e.g. "data:application/pdf;base64,...") for file_data,
+              // despite the OpenAI TS SDK describing it as "base64-encoded data".
               var fileDict: [String: any Sendable] = [
                 "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
               ]

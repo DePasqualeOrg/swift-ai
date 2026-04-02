@@ -228,6 +228,8 @@ public final class ResponsesClient: APIClient, Sendable {
                     "image_url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: mimeType),
                   ])
                 case let .document(data, mimeType):
+                  // The API expects a data URL (e.g. "data:application/pdf;base64,...") for file_data,
+                  // despite the OpenAI TS SDK describing it as "base64-encoded data".
                   var contentItem: [String: any Sendable] = [
                     "type": ContentType.inputFile,
                     "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
