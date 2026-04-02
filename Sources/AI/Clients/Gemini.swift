@@ -632,7 +632,10 @@ public final class GeminiClient: APIClient, Sendable {
             {
               for part in parts {
                 if let text = part["text"] as? String {
-                  let isThinkingText = if let thought = part["thought"] as? Int { thought == 1 } else { false }
+                  let isThinkingText =
+                    if let thought = part["thought"] as? Bool { thought }
+                    else if let thought = part["thought"] as? Int { thought == 1 }
+                    else { false }
                   continuation.yield(StreamResponse(text: text, thought: isThinkingText, groundingMetadata: nil, toolCall: nil, usageMetadata: nil, finishReason: nil))
                 } else if let functionCall = part["functionCall"] as? [String: any Sendable],
                           let name = functionCall["name"] as? String,
