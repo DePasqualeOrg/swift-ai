@@ -909,7 +909,7 @@ extension AnthropicClient {
 /// ```
 @Observable
 public final class AnthropicClient: APIClient, Sendable {
-  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .image]
+  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .image, .file]
 
   private let baseURL = URL(string: "https://api.anthropic.com/v1")!
   private let messagesEndpoint: URL
@@ -1268,6 +1268,17 @@ public final class AnthropicClient: APIClient, Sendable {
                   resultContentBlocks.append(.image(
                     mediaType: mimeType,
                     data: data.base64EncodedString(),
+                  ))
+                } else if mimeType == "application/pdf" {
+                  resultContentBlocks.append(.document(
+                    mediaType: mimeType,
+                    data: data.base64EncodedString(),
+                  ))
+                } else if mimeType == "text/plain", let text = String(data: data, encoding: .utf8) {
+                  resultContentBlocks.append(.document(
+                    mediaType: mimeType,
+                    data: text,
+                    sourceType: "text",
                   ))
                 } else {
                   anthropicLogger.warning("Tool '\(toolResult.name)' returned a file (\(mimeType)), which is not supported by Anthropic. Using fallback text.")
@@ -1781,6 +1792,14 @@ extension AnthropicClient {
         type: "image",
         text: nil,
         source: ContentBlockSource(type: "base64", mediaType: mediaType, data: data, url: nil),
+      )
+    }
+
+    static func document(mediaType: String, data: String, sourceType: String = "base64") -> ToolResultContentBlock {
+      ToolResultContentBlock(
+        type: "document",
+        text: nil,
+        source: ContentBlockSource(type: sourceType, mediaType: mediaType, data: data, url: nil),
       )
     }
   }
