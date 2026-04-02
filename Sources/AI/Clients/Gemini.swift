@@ -1236,7 +1236,7 @@ public final class GeminiClient: APIClient, Sendable {
           let status: String
         }
       }
-      if let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: responseData) {
+      if let errorResponse = try? JSONDecoder().decode(ErrorResponse.self, from: uploadResponseData) {
         throw AIError.serverError(statusCode: errorResponse.error.code, message: errorResponse.error.message, context: nil)
       }
       throw AIError.parsing(message: "Failed to decode response: \(error.localizedDescription)")
