@@ -1131,7 +1131,11 @@ public final class GeminiClient: APIClient, Sendable {
   }
 
   private func uploadFile(data: Data, mimeType: String, displayName: String, apiKey: String) async throws -> String {
-    let uploadURL = URL(string: "https://generativelanguage.googleapis.com/upload/v1beta/files")!
+    // Derive upload URL from the configured models endpoint so custom endpoints (proxies, mocks) work
+    var uploadComponents = URLComponents(url: modelsEndpoint, resolvingAgainstBaseURL: true)!
+    uploadComponents.path = "/upload/v1beta/files"
+    uploadComponents.queryItems = nil
+    let uploadURL = uploadComponents.url!
     var components = URLComponents(url: uploadURL, resolvingAgainstBaseURL: true)!
     components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
     // Start resumable upload
