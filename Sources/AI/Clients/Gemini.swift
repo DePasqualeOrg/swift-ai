@@ -1131,9 +1131,16 @@ public final class GeminiClient: APIClient, Sendable {
   }
 
   private func uploadFile(data: Data, mimeType: String, displayName: String, apiKey: String) async throws -> String {
-    // Derive upload URL from the configured models endpoint so custom endpoints (proxies, mocks) work
+    // Derive upload URL from the configured models endpoint so custom endpoints (proxies, mocks) work.
+    // modelsEndpoint path is e.g. "/v1beta/models" or "/prefix/v1beta/models";
+    // replace the version+models suffix with the upload path, preserving any proxy prefix.
     var uploadComponents = URLComponents(url: modelsEndpoint, resolvingAgainstBaseURL: true)!
-    uploadComponents.path = "/upload/v1beta/files"
+    let path = uploadComponents.path
+    if let range = path.range(of: "/v1beta/models", options: .backwards) {
+      uploadComponents.path = String(path[..<range.lowerBound]) + "/upload/v1beta/files"
+    } else {
+      uploadComponents.path = "/upload/v1beta/files"
+    }
     uploadComponents.queryItems = nil
     let uploadURL = uploadComponents.url!
     var components = URLComponents(url: uploadURL, resolvingAgainstBaseURL: true)!
