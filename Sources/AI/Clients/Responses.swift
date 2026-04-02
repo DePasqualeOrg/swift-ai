@@ -281,6 +281,21 @@ public final class ResponsesClient: APIClient, Sendable {
                 "name": toolCall.name,
                 "arguments": argumentsString,
               ])
+            case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "reasoning":
+              flushContentItems()
+              var reasoningItem: [String: any Sendable] = [
+                "type": OutputItemType.reasoning,
+              ]
+              if let id = block.signature {
+                reasoningItem["id"] = id
+              }
+              if let summaryText = block.content {
+                reasoningItem["summary"] = [["type": "summary_text", "text": summaryText]]
+              }
+              if let encryptedContent = block.data {
+                reasoningItem["encrypted_content"] = encryptedContent
+              }
+              items.append(reasoningItem)
             default:
               break
           }
@@ -1796,6 +1811,16 @@ extension ResponsesClient {
               if let reasoningText, !reasoningText.isEmpty {
                 content.append(.thinking(text: reasoningText, signature: nil))
               }
+              // Preserve the full reasoning item for round-tripping via the Responses API
+              if let itemId = item.id {
+                content.append(.providerOpaque(OpaqueBlock(
+                  provider: "openai-responses",
+                  type: "reasoning",
+                  content: reasoningText,
+                  signature: itemId,
+                  data: item.encryptedContent,
+                )))
+              }
             case OutputItemType.functionCall:
               if let name = item.name,
                  let callId = item.callId,
@@ -1868,16 +1893,19 @@ extension ResponsesClient {
   }
 
   struct ResponseOutputItem: Decodable {
+    let id: String?
     let type: String?
     let content: [ContentItem]?
     let name: String?
     let callId: String?
     let arguments: String?
     let summary: [SummaryItem]?
+    let encryptedContent: String?
 
     enum CodingKeys: String, CodingKey {
-      case type, content, name, arguments, summary
+      case id, type, content, name, arguments, summary
       case callId = "call_id"
+      case encryptedContent = "encrypted_content"
     }
   }
 

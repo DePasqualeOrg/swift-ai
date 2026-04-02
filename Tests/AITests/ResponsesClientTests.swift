@@ -878,6 +878,80 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Reasoning items round-trip with correct wire shape`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"o3-mini"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"o3-mini","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    // Build history with a preserved reasoning opaque block
+    let reasoningBlock = OpaqueBlock(
+      provider: "openai-responses",
+      type: "reasoning",
+      content: "Let me think step by step.",
+      signature: "reasoning_item_abc123",
+      data: "encrypted_data_here",
+    )
+    let messages = [
+      Message(role: .assistant, content: [
+        .thinking(text: "Let me think step by step.", signature: nil),
+        .providerOpaque(reasoningBlock),
+        .text("The answer is 42."),
+      ]),
+      Message(role: .user, content: "Can you explain more?"),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "o3-mini",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+
+    // The reasoning opaque block should be serialized as a standalone reasoning item
+    let reasoningItem = try #require(input.first(where: { $0["type"] as? String == "reasoning" }))
+    #expect(reasoningItem["id"] as? String == "reasoning_item_abc123")
+    #expect(reasoningItem["encrypted_content"] as? String == "encrypted_data_here")
+
+    let summary = try #require(reasoningItem["summary"] as? [[String: Any]])
+    #expect(summary.count == 1)
+    #expect(summary[0]["type"] as? String == "summary_text")
+    #expect(summary[0]["text"] as? String == "Let me think step by step.")
+
+    // The assistant message should contain the text as input_text (not the thinking block)
+    let assistantMsg = try #require(input.first(where: {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    }))
+    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    #expect(content.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "The answer is 42." }))
+  }
+
+  @Test
   func `Stop sends authenticated cancel for background response`() async throws {
     var cancelRequest: URLRequest?
     let streamGate = AsyncStream<Data>.makeStream()
