@@ -2,24 +2,20 @@
 
 @testable import AI
 import Foundation
+import os
 import Testing
 
 /// Thread-safe collector for streaming updates in tests.
 /// Uses a lock instead of an actor since update closures are synchronous.
-final class UpdateCollector: @unchecked Sendable {
-  private let lock = NSLock()
-  private var _updates: [GenerationResponse] = []
+final class UpdateCollector: Sendable {
+  private let storage = OSAllocatedUnfairLock(initialState: [GenerationResponse]())
 
   func append(_ response: GenerationResponse) {
-    lock.lock()
-    defer { lock.unlock() }
-    _updates.append(response)
+    storage.withLock { $0.append(response) }
   }
 
   var updates: [GenerationResponse] {
-    lock.lock()
-    defer { lock.unlock() }
-    return _updates
+    storage.withLock { Array($0) }
   }
 }
 

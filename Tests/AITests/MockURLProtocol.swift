@@ -1,6 +1,7 @@
 // Copyright © Anthony DePasquale
 
 import Foundation
+import os
 
 /// A mock URL protocol for testing HTTP requests without network access.
 ///
@@ -17,62 +18,37 @@ import Foundation
 /// // Use URL: https://mock.test/\(testId)
 /// ```
 final class MockURLProtocol: URLProtocol, @unchecked Sendable {
-  /// Lock for thread-safe access to static properties.
-  private static let lock = NSLock()
+  private struct State: @unchecked Sendable {
+    /// URL-keyed handlers for test isolation. The key is extracted from the URL path.
+    var handlers: [String: (URLRequest) throws -> (HTTPURLResponse, Data)] = [:]
+    /// Global handler for non-URL-keyed requests.
+    var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+    /// Handler for streaming responses that yields data chunks over time.
+    var streamHandler: ((URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))?
+  }
 
-  /// URL-keyed handlers for test isolation.
-  /// The key is extracted from the URL path.
-  /// Thread-safety is guaranteed by the lock.
-  private nonisolated(unsafe) static var _handlers: [String: (URLRequest) throws -> (HTTPURLResponse, Data)] = [:]
-
-  /// Legacy global handler (for backwards compatibility).
-  /// Thread-safety is guaranteed by the lock.
-  private nonisolated(unsafe) static var _requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
-
-  /// Handler for streaming responses that yields data chunks over time.
-  /// Thread-safety is guaranteed by the lock.
-  private nonisolated(unsafe) static var _streamHandler: ((URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))?
+  private static let state = OSAllocatedUnfairLock(initialState: State())
 
   /// Thread-safe accessor for requestHandler.
   static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))? {
-    get {
-      lock.lock()
-      defer { lock.unlock() }
-      return _requestHandler
-    }
-    set {
-      lock.lock()
-      defer { lock.unlock() }
-      _requestHandler = newValue
-    }
+    get { state.withLockUnchecked { $0.requestHandler } }
+    set { state.withLockUnchecked { $0.requestHandler = newValue } }
   }
 
   /// Thread-safe accessor for streamHandler.
   static var streamHandler: ((URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))? {
-    get {
-      lock.lock()
-      defer { lock.unlock() }
-      return _streamHandler
-    }
-    set {
-      lock.lock()
-      defer { lock.unlock() }
-      _streamHandler = newValue
-    }
+    get { state.withLockUnchecked { $0.streamHandler } }
+    set { state.withLockUnchecked { $0.streamHandler = newValue } }
   }
 
   /// Sets a handler for a specific test ID.
   static func setHandler(for testId: String, handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)) {
-    lock.lock()
-    defer { lock.unlock() }
-    _handlers[testId] = handler
+    state.withLockUnchecked { $0.handlers[testId] = handler }
   }
 
   /// Removes a handler for a specific test ID.
   static func removeHandler(for testId: String) {
-    lock.lock()
-    defer { lock.unlock() }
-    _handlers.removeValue(forKey: testId)
+    state.withLockUnchecked { _ = $0.handlers.removeValue(forKey: testId) }
   }
 
   override class func canInit(with _: URLRequest) -> Bool {
@@ -88,22 +64,21 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     guard let path = request.url?.path else { return nil }
     let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
 
-    MockURLProtocol.lock.lock()
-    defer { MockURLProtocol.lock.unlock() }
-
-    // First try exact match
-    if let handler = MockURLProtocol._handlers[cleanPath] {
-      return handler
-    }
-
-    // Then try prefix match (for cases like "/testId/modelId:action")
-    for (testId, handler) in MockURLProtocol._handlers {
-      if cleanPath.hasPrefix(testId) {
+    return MockURLProtocol.state.withLockUnchecked { state in
+      // First try exact match
+      if let handler = state.handlers[cleanPath] {
         return handler
       }
-    }
 
-    return nil
+      // Then try prefix match (for cases like "/testId/modelId:action")
+      for (testId, handler) in state.handlers {
+        if cleanPath.hasPrefix(testId) {
+          return handler
+        }
+      }
+
+      return nil
+    }
   }
 
   override func startLoading() {
