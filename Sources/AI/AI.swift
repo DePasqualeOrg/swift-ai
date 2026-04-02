@@ -106,12 +106,6 @@ public func generateText(
 
     case let .chatCompletions(modelId, endpoint):
       let client = ChatCompletionsClient(endpoint: endpoint)
-      let extraParameters: [String: any Sendable]? = if reasoning {
-        ["reasoning_effort": "high"]
-      } else {
-        nil
-      }
-      let configuration = ChatCompletionsClient.Configuration(extraParameters: extraParameters)
       return try await client.generateText(
         modelId: modelId,
         tools: tools,
@@ -120,7 +114,6 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration,
       )
 
     case let .responses(modelId, endpoint):
@@ -210,12 +203,6 @@ public func streamText(
 
     case let .chatCompletions(modelId, endpoint):
       let client = ChatCompletionsClient(endpoint: endpoint)
-      let extraParameters: [String: any Sendable]? = if reasoning {
-        ["reasoning_effort": "high"]
-      } else {
-        nil
-      }
-      let configuration = ChatCompletionsClient.Configuration(extraParameters: extraParameters)
       return client.streamText(
         modelId: modelId,
         tools: tools,
@@ -224,7 +211,6 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration,
       )
 
     case let .responses(modelId, endpoint):
