@@ -965,14 +965,25 @@ public final class AnthropicClient: APIClient, Sendable {
     /// Enables code execution in a sandboxed environment.
     public var codeExecution: Bool
 
-    var thinkingConfig: ThinkingConfig? {
+    /// Returns the thinking config adjusted for the given maxTokens.
+    /// Returns nil if thinking should be skipped (e.g., budget would fall below 1024).
+    func effectiveThinkingConfig(maxTokens: Int?) -> ThinkingConfig? {
       if effort != nil {
-        ThinkingConfig(type: .adaptive, budgetTokens: nil)
-      } else if let maxThinkingTokens, maxThinkingTokens > 0 {
-        ThinkingConfig(type: .enabled, budgetTokens: maxThinkingTokens)
-      } else {
-        nil
+        return ThinkingConfig(type: .adaptive, budgetTokens: nil)
       }
+      guard let maxThinkingTokens, maxThinkingTokens > 0 else {
+        return nil
+      }
+      var budgetTokens = maxThinkingTokens
+      // budget_tokens must be less than max_tokens
+      if let maxTokens, budgetTokens >= maxTokens {
+        budgetTokens = min(budgetTokens - 1, maxTokens - 1)
+      }
+      // budget_tokens must be at least 1024
+      if budgetTokens < 1024 {
+        return nil
+      }
+      return ThinkingConfig(type: .enabled, budgetTokens: budgetTokens)
     }
 
     /// Creates a new configuration with the specified options.
@@ -1527,34 +1538,13 @@ public final class AnthropicClient: APIClient, Sendable {
     // Thinking
     // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
     if let thinking = params.thinking {
-      // budget_tokens must be less than max_tokens and at least 1024
-      let adjustedBudgetTokens: Int? = if let budgetTokens = thinking.budgetTokens,
-                                          let maxTokens = params.maxTokens,
-                                          budgetTokens >= maxTokens
-      {
-        min(budgetTokens - 1, maxTokens - 1)
-      } else {
-        thinking.budgetTokens
+      var thinkingDict: [String: Value] = [
+        "type": .string(thinking.type.rawValue),
+      ]
+      if case .enabled = thinking.type, let budgetTokens = thinking.budgetTokens {
+        thinkingDict["budget_tokens"] = .int(budgetTokens)
       }
-      // Skip thinking if the adjusted budget would fall below Anthropic's 1024-token minimum
-      let shouldSkipThinking = if case .enabled = thinking.type,
-                                  let budgetTokens = adjustedBudgetTokens,
-                                  budgetTokens < 1024
-      {
-        true
-      } else {
-        false
-      }
-      if !shouldSkipThinking {
-        var thinkingDict: [String: Value] = [
-          "type": .string(thinking.type.rawValue),
-        ]
-        // Only include budget_tokens when type is `enabled`
-        if case .enabled = thinking.type, let budgetTokens = adjustedBudgetTokens {
-          thinkingDict["budget_tokens"] = .int(budgetTokens)
-        }
-        requestBody["thinking"] = .object(thinkingDict)
-      }
+      requestBody["thinking"] = .object(thinkingDict)
     }
     if let effort = params.effort {
       requestBody["output_config"] = .object(["effort": .string(effort.rawValue)])
@@ -2102,11 +2092,13 @@ public extension AnthropicClient {
       var finalMessage: APIMessage?
       // Patch orphaned tool calls (e.g., from canceled or timed-out generation)
       let patchedMessages = Message.patchingOrphanedToolCalls(messages)
+      // Compute the effective thinking config, accounting for maxTokens and budget minimum
+      let effectiveThinking = configuration.effectiveThinkingConfig(maxTokens: maxTokens)
       // When thinking is enabled, preprocess messages to handle missing opaque blocks.
       // Assistant messages with tool calls that lack Anthropic thinking blocks are collapsed to text,
       // along with their following tool result messages, to avoid the
       // "final assistant message must start with a thinking block" error.
-      let processedMessages: [Message] = if configuration.thinkingConfig != nil {
+      let processedMessages: [Message] = if effectiveThinking != nil {
         {
           var result: [Message] = []
           var skipNext = false
@@ -2156,7 +2148,7 @@ public extension AnthropicClient {
         ))
       }
       // Temperature must be set to 1 when thinking is enabled.
-      let adjustedTemperature = configuration.thinkingConfig != nil ? 1.0 : temperature
+      let adjustedTemperature = effectiveThinking != nil ? 1.0 : temperature
 
       // Create parameters
       var params = MessageCreateParams(
@@ -2165,7 +2157,7 @@ public extension AnthropicClient {
         maxTokens: maxTokens,
         system: systemPrompt,
         temperature: adjustedTemperature,
-        thinking: configuration.thinkingConfig,
+        thinking: effectiveThinking,
         effort: configuration.effort,
       )
       // Tools - rawInputSchema is always populated (either explicit or generated from parameters)
