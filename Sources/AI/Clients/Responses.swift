@@ -87,13 +87,6 @@ public final class ResponsesClient: APIClient, Sendable {
     static let functionCallOutput = "function_call_output"
   }
 
-  private static func filteringParseErrorToolCalls(in content: [Message.Content]) -> [Message.Content] {
-    content.filter { block in
-      guard case let .toolCall(toolCall) = block else { return true }
-      return !toolCall.parameters.keys.contains("_parseError")
-    }
-  }
-
   private struct StreamingResponseState {
     var indexedContent: [Int: Message.Content] = [:]
     var fallbackContent: [Message.Content] = []
@@ -785,7 +778,7 @@ public final class ResponsesClient: APIClient, Sendable {
         }
 
         // Stream finished normally, return the final state
-        return .init(content: Self.filteringParseErrorToolCalls(in: finalContent), metadata: finalMetadata)
+        return .init(content: finalContent, metadata: finalMetadata)
 
       } catch {
         // Handle cancellation error specifically if it bubbles up
@@ -1464,7 +1457,7 @@ public final class ResponsesClient: APIClient, Sendable {
         }
       }
 
-      return .init(content: Self.filteringParseErrorToolCalls(in: finalContent), metadata: finalMetadata)
+      return .init(content: finalContent, metadata: finalMetadata)
     }
 
     await MainActor.run {
