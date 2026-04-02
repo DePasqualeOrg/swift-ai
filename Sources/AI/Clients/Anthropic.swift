@@ -1527,7 +1527,7 @@ public final class AnthropicClient: APIClient, Sendable {
     // Thinking
     // https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
     if let thinking = params.thinking {
-      // If used, budget_tokens must be less than max_tokens and must be at least 1024
+      // budget_tokens must be less than max_tokens and at least 1024
       let adjustedBudgetTokens: Int? = if let budgetTokens = thinking.budgetTokens,
                                           let maxTokens = params.maxTokens,
                                           budgetTokens >= maxTokens
@@ -1536,14 +1536,25 @@ public final class AnthropicClient: APIClient, Sendable {
       } else {
         thinking.budgetTokens
       }
-      var thinkingDict: [String: Value] = [
-        "type": .string(thinking.type.rawValue),
-      ]
-      // Only include budget_tokens when type is `enabled`
-      if case .enabled = thinking.type, let budgetTokens = adjustedBudgetTokens {
-        thinkingDict["budget_tokens"] = .int(budgetTokens)
+      // Skip thinking if the adjusted budget would fall below Anthropic's 1024-token minimum
+      let shouldSkipThinking = if case .enabled = thinking.type,
+                                  let budgetTokens = adjustedBudgetTokens,
+                                  budgetTokens < 1024
+      {
+        true
+      } else {
+        false
       }
-      requestBody["thinking"] = .object(thinkingDict)
+      if !shouldSkipThinking {
+        var thinkingDict: [String: Value] = [
+          "type": .string(thinking.type.rawValue),
+        ]
+        // Only include budget_tokens when type is `enabled`
+        if case .enabled = thinking.type, let budgetTokens = adjustedBudgetTokens {
+          thinkingDict["budget_tokens"] = .int(budgetTokens)
+        }
+        requestBody["thinking"] = .object(thinkingDict)
+      }
     }
     if let effort = params.effort {
       requestBody["output_config"] = .object(["effort": .string(effort.rawValue)])
