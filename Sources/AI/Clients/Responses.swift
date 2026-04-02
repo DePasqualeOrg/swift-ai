@@ -101,12 +101,7 @@ public final class ResponsesClient: APIClient, Sendable {
     }
 
     mutating func appendReasoningDelta(_ delta: String, outputIndex: Int?) {
-      append(delta: delta, outputIndex: outputIndex) { existing in
-        let separator = existing.isEmpty || delta.isEmpty || existing.hasSuffix("\n") ? "" : "\n"
-        return .thinking(text: existing + separator + delta, signature: nil)
-      } create: {
-        .thinking(text: delta, signature: nil)
-      }
+      append(delta: delta, outputIndex: outputIndex, as: { .thinking(text: $0, signature: nil) })
     }
 
     mutating func setToolCall(_ toolCall: ToolCall, outputIndex: Int?) {
@@ -217,7 +212,7 @@ public final class ResponsesClient: APIClient, Sendable {
         case let (.text(existing), .text(delta)):
           fallbackContent[fallbackContent.count - 1] = .text(existing + delta)
         case let (.thinking(text: existing, signature: existingSignature), .thinking(text: delta, signature: nil)):
-          fallbackContent[fallbackContent.count - 1] = .thinking(text: existing + (existing.hasSuffix("\n") ? "" : "\n") + delta, signature: existingSignature)
+          fallbackContent[fallbackContent.count - 1] = .thinking(text: existing + delta, signature: existingSignature)
         default:
           fallbackContent.append(block)
       }
