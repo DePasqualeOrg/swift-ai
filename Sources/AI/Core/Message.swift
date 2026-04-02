@@ -155,8 +155,11 @@ public extension Message {
       return attachment
     }
     var text = content.compactMap { item -> String? in
-      guard case let .text(text) = item else { return nil }
-      return text
+      switch item {
+        case let .text(text): text
+        case let .endnotes(endnotes): endnotes
+        default: nil
+      }
     }.joined()
     for item in content {
       guard case let .toolCall(toolCall) = item else { continue }
@@ -186,25 +189,18 @@ public extension Message {
       return attachment
     }
     var text = content.compactMap { item -> String? in
-      guard case let .text(text) = item else { return nil }
-      return text
+      switch item {
+        case let .text(text): text
+        case let .endnotes(endnotes): endnotes
+        default: nil
+      }
     }.joined()
 
     for item in content {
       guard case let .toolResult(toolResult) = item else { continue }
-      if toolResult.isError == true {
-        let errorText = toolResult.content.compactMap { content -> String? in
-          if case let .text(str) = content { return str }
-          return nil
-        }.joined(separator: " ")
-        text += "\n\n[Error from tool \"\(toolResult.name)\": \(errorText)]"
-      } else {
-        let resultText = toolResult.content.compactMap { content -> String? in
-          if case let .text(str) = content { return str }
-          return nil
-        }.joined(separator: " ")
-        text += "\n\n[Result from tool \"\(toolResult.name)\": \(resultText)]"
-      }
+      let label = toolResult.isError == true ? "Error from" : "Result from"
+      let resultText = toolResult.content.map(\.fallbackDescription).joined(separator: " ")
+      text += "\n\n[\(label) tool \"\(toolResult.name)\": \(resultText)]"
     }
 
     var collapsed: [Content] = []
