@@ -283,16 +283,8 @@ public final class ResponsesClient: APIClient, Sendable {
       case .assistant:
         var items: [[String: any Sendable]] = []
         var contentItems: [[String: any Sendable]] = []
-        // Extract phase from opaque blocks if present
-        var phase: String?
-        for block in message.content {
-          if case let .providerOpaque(opaqueBlock) = block,
-             opaqueBlock.provider == "openai-responses",
-             opaqueBlock.type == "phase"
-          {
-            phase = opaqueBlock.content
-          }
-        }
+        // Per-message metadata, updated when a message_metadata marker is encountered
+        var currentMetadata: [String: String] = [:]
 
         func flushContentItems() {
           guard !contentItems.isEmpty else { return }
@@ -301,20 +293,53 @@ public final class ResponsesClient: APIClient, Sendable {
             "role": "assistant",
             "content": contentItems,
           ]
-          if let phase {
-            messageItem["phase"] = phase
-          }
+          if let id = currentMetadata["id"] { messageItem["id"] = id }
+          if let status = currentMetadata["status"] { messageItem["status"] = status }
+          if let phase = currentMetadata["phase"] { messageItem["phase"] = phase }
           items.append(messageItem)
           contentItems.removeAll(keepingCapacity: true)
         }
 
         for block in message.content {
           switch block {
+            case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "message_metadata":
+              // Flush any preceding content items with the previous metadata,
+              // then start a new message group with the new metadata
+              flushContentItems()
+              if let jsonString = opaque.data,
+                 let jsonData = jsonString.data(using: .utf8),
+                 let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: String]
+              {
+                currentMetadata = parsed
+              } else {
+                currentMetadata = [:]
+              }
             case let .text(text) where !text.isEmpty:
               contentItems.append([
                 "type": ContentType.outputText,
                 "text": text,
               ])
+            case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "annotated_output_text":
+              if let text = block.content {
+                var item: [String: any Sendable] = [
+                  "type": ContentType.outputText,
+                  "text": text,
+                ]
+                if let jsonString = block.data,
+                   let jsonData = jsonString.data(using: .utf8),
+                   let annotations = try? JSONSerialization.jsonObject(with: jsonData) as? [[String: any Sendable]]
+                {
+                  item["annotations"] = annotations
+                }
+                contentItems.append(item)
+              }
+            case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "refusal":
+              if let refusal = block.content {
+                contentItems.append([
+                  "type": OutputItemType.refusal,
+                  "refusal": refusal,
+                ])
+              }
             case let .toolCall(toolCall):
               flushContentItems()
               let foundationParams = Value.toSendable(toolCall.parameters)
@@ -1852,12 +1877,28 @@ extension ResponsesClient {
 
           switch itemType {
             case OutputItemType.message:
+              // Insert a boundary marker before each message item's content so that
+              // multi-message assistant turns can be split back into separate items
+              // during serialization.
+              var metadata: [String: String] = [:]
+              if let messageId = item.id { metadata["id"] = messageId }
+              if let status = item.status { metadata["status"] = status }
+              if let phase = item.phase { metadata["phase"] = phase }
+              if !metadata.isEmpty,
+                 let jsonData = try? JSONSerialization.data(withJSONObject: metadata),
+                 let jsonString = String(data: jsonData, encoding: .utf8)
+              {
+                content.append(.providerOpaque(OpaqueBlock(
+                  provider: "openai-responses",
+                  type: "message_metadata",
+                  data: jsonString,
+                )))
+              }
               if let contentArray = item.content {
                 for contentItem in contentArray {
                   if contentItem.type == OutputItemType.outputText, let text = contentItem.text, !text.isEmpty {
-                    content.append(.text(text))
-                    // Collect citations from annotations
-                    if let annotations = contentItem.annotations {
+                    if let annotations = contentItem.annotations, !annotations.isEmpty {
+                      // Collect citations for display endnotes
                       for annotation in annotations {
                         switch annotation.type {
                           case "url_citation":
@@ -1872,19 +1913,30 @@ extension ResponsesClient {
                             break
                         }
                       }
+                      // Preserve all annotation fields for lossless round-tripping
+                      let annotationsRaw = annotations.map { Value.toSendable($0.raw) }
+                      let annotationsJson = (try? JSONSerialization.data(withJSONObject: annotationsRaw))
+                        .flatMap { String(data: $0, encoding: .utf8) }
+                      content.append(.providerOpaque(OpaqueBlock(
+                        provider: "openai-responses",
+                        type: "annotated_output_text",
+                        content: text,
+                        data: annotationsJson,
+                        isResponseContent: true,
+                      )))
+                    } else {
+                      content.append(.text(text))
                     }
                   } else if contentItem.type == OutputItemType.refusal, let refusal = contentItem.refusal, !refusal.isEmpty {
-                    content.append(.text(refusal))
+                    content.append(.providerOpaque(OpaqueBlock(
+                      provider: "openai-responses",
+                      type: "refusal",
+                      content: refusal,
+                      isResponseContent: true,
+                    )))
                     hasRefusal = true
                   }
                 }
-              }
-              if let phase = item.phase {
-                content.append(.providerOpaque(OpaqueBlock(
-                  provider: "openai-responses",
-                  type: "phase",
-                  content: phase,
-                )))
               }
             case OutputItemType.reasoning:
               // Prefer reasoning text from content array (reasoning_text items),
@@ -2007,6 +2059,7 @@ extension ResponsesClient {
   struct ResponseOutputItem: Decodable {
     let id: String?
     let type: String?
+    let status: String?
     let content: [ContentItem]?
     let name: String?
     let callId: String?
@@ -2016,7 +2069,7 @@ extension ResponsesClient {
     let phase: String?
 
     enum CodingKeys: String, CodingKey {
-      case id, type, content, name, arguments, summary, phase
+      case id, type, status, content, name, arguments, summary, phase
       case callId = "call_id"
       case encryptedContent = "encrypted_content"
     }
@@ -2030,17 +2083,32 @@ extension ResponsesClient {
   }
 
   struct AnnotationItem: Decodable {
-    let type: String?
-    // url_citation
-    let url: String?
-    let title: String?
-    // file_citation, container_file_citation
-    let filename: String?
-    let fileId: String?
+    /// All annotation fields, preserved for lossless round-tripping.
+    let raw: [String: Value]
 
-    enum CodingKeys: String, CodingKey {
-      case type, url, title, filename
-      case fileId = "file_id"
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    var type: String? {
+      raw["type"]?.stringValue
+    }
+
+    var url: String? {
+      raw["url"]?.stringValue
+    }
+
+    var title: String? {
+      raw["title"]?.stringValue
+    }
+
+    var filename: String? {
+      raw["filename"]?.stringValue
+    }
+
+    var fileId: String? {
+      raw["file_id"]?.stringValue
     }
   }
 
