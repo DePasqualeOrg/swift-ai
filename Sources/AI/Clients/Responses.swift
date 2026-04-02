@@ -1812,7 +1812,7 @@ extension ResponsesClient {
     func toGenerationResponse() -> GenerationResponse {
       var content: [Message.Content] = []
       var hasRefusal = false
-      var citationURLs: [(url: String, title: String?)] = []
+      var citations: [(label: String, url: String?)] = []
 
       if let outputArray = output, !outputArray.isEmpty {
         for item in outputArray {
@@ -1824,11 +1824,20 @@ extension ResponsesClient {
                 for contentItem in contentArray {
                   if contentItem.type == OutputItemType.outputText, let text = contentItem.text, !text.isEmpty {
                     content.append(.text(text))
-                    // Collect URL citations from annotations
+                    // Collect citations from annotations
                     if let annotations = contentItem.annotations {
-                      for annotation in annotations where annotation.type == "url_citation" {
-                        if let url = annotation.url {
-                          citationURLs.append((url: url, title: annotation.title))
+                      for annotation in annotations {
+                        switch annotation.type {
+                          case "url_citation":
+                            if let url = annotation.url {
+                              citations.append((label: annotation.title ?? url, url: url))
+                            }
+                          case "file_citation", "container_file_citation":
+                            if let filename = annotation.filename {
+                              citations.append((label: filename, url: nil))
+                            }
+                          default:
+                            break
                         }
                       }
                     }
@@ -1896,16 +1905,20 @@ extension ResponsesClient {
         content.append(.text(outputText))
       }
 
-      // Format URL citations as endnotes
-      if !citationURLs.isEmpty {
-        let uniqueURLs = citationURLs.reduce(into: [(url: String, title: String?)]()) { result, citation in
-          if !result.contains(where: { $0.url == citation.url }) {
+      // Format citations as endnotes
+      if !citations.isEmpty {
+        let uniqueCitations = citations.reduce(into: [(label: String, url: String?)]()) { result, citation in
+          let key = citation.url ?? citation.label
+          if !result.contains(where: { ($0.url ?? $0.label) == key }) {
             result.append(citation)
           }
         }
-        let endnotes = uniqueURLs.map { citation in
-          let label = citation.title ?? citation.url
-          return "- [\(label)](\(citation.url))"
+        let endnotes = uniqueCitations.map { citation in
+          if let url = citation.url {
+            "- [\(citation.label)](\(url))"
+          } else {
+            "- \(citation.label)"
+          }
         }.joined(separator: "\n") + "\n"
         content.append(.endnotes(endnotes))
       }
@@ -1984,8 +1997,17 @@ extension ResponsesClient {
 
   struct AnnotationItem: Decodable {
     let type: String?
+    // url_citation
     let url: String?
     let title: String?
+    // file_citation, container_file_citation
+    let filename: String?
+    let fileId: String?
+
+    enum CodingKeys: String, CodingKey {
+      case type, url, title, filename
+      case fileId = "file_id"
+    }
   }
 
   struct ErrorObject: Decodable {
