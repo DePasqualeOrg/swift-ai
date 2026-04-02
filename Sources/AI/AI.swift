@@ -31,6 +31,9 @@ public enum Model: Sendable {
 
 /// Generate a text response from an LLM without streaming.
 ///
+/// This function creates a new client for each call. For cancellation support and generation
+/// state observation, use the provider-specific client directly (e.g., ``AnthropicClient``).
+///
 /// Example usage:
 /// ```swift
 /// let response = try await generateText(
@@ -135,6 +138,9 @@ public func generateText(
 }
 
 /// Generate a text response from an LLM with streaming.
+///
+/// This function creates a new client for each call. For cancellation support and generation
+/// state observation, use the provider-specific client directly (e.g., ``AnthropicClient``).
 ///
 /// - Parameters:
 ///   - model: The model to use, including provider and model ID.
