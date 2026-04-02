@@ -956,17 +956,9 @@ public final class ResponsesClient: APIClient, Sendable {
                 yieldCurrentState()
               }
             case OutputItemType.reasoning:
-              if let summaryArray = item.summary {
-                let summaryText = summaryArray
-                  .compactMap(\.text)
-                  .joined(separator: "\n")
-                if !summaryText.isEmpty {
-                  streamingState.appendReasoningDelta(summaryText, outputIndex: event.outputIndex)
-                  yieldCurrentState()
-                }
-              } else {
-                openAIResponsesLogger.warning("Received reasoning item without expected summary array")
-              }
+              // Reasoning text arrives via subsequent reasoning_text.delta events.
+              // Don't append summary text here — it would be duplicated by the deltas.
+              break
             case OutputItemType.codeInterpreterCall:
               openAIResponsesLogger.log("Received code_interpreter_call item")
             case OutputItemType.webSearchCall:
