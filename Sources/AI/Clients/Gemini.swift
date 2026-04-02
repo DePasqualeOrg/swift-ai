@@ -85,7 +85,17 @@ public final class GeminiClient: APIClient, Sendable {
     case maxTokens = "MAX_TOKENS"
     case safety = "SAFETY"
     case recitation = "RECITATION"
-    case other = "FINISH_REASON_UNSPECIFIED"
+    case language = "LANGUAGE"
+    case blocklist = "BLOCKLIST"
+    case prohibitedContent = "PROHIBITED_CONTENT"
+    case spii = "SPII"
+    case malformedFunctionCall = "MALFORMED_FUNCTION_CALL"
+    case imageSafety = "IMAGE_SAFETY"
+    case unexpectedToolCall = "UNEXPECTED_TOOL_CALL"
+    case imageProhibitedContent = "IMAGE_PROHIBITED_CONTENT"
+    case noImage = "NO_IMAGE"
+    case other = "OTHER"
+    case unspecified = "FINISH_REASON_UNSPECIFIED"
   }
 
   struct SafetyRating: Codable {
@@ -589,9 +599,12 @@ public final class GeminiClient: APIClient, Sendable {
             {
               // Check for finish reason first
               if let finishReason = firstCandidate["finishReason"] as? String {
-                if finishReason == "SAFETY" || finishReason == "RECITATION" {
+                let contentBlockingReasons: Set = [
+                  "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT",
+                  "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
+                ]
+                if contentBlockingReasons.contains(finishReason) {
                   let finishMessage = (firstCandidate["finishMessage"] as? String) ?? "Content was blocked due to finish reason \"\(finishReason.lowercased())\"."
-                  // Create a GenerateContentResponse to include in the error
                   let candidate = Candidate(
                     content: nil,
                     finishReason: FinishReason(rawValue: finishReason) ?? .safety,
@@ -612,15 +625,10 @@ public final class GeminiClient: APIClient, Sendable {
                     response: errorResponse,
                   ))
                   return
-                } else if finishReason == "MAX_TOKENS" {
-                  // MAX_TOKENS is handled later in the parsing flow
-                  // Continue to extract text and yield the finish reason at the end
-                } else if finishReason != "FINISH_REASON_UNSPECIFIED", finishReason != "STOP" {
-                  // For other finish reasons, just log and finish normally
-                  geminiLogger.log("Generation stopped due to finish reason \"\(finishReason.lowercased())\"")
-                  continuation.finish()
-                  return
                 }
+                // All other finish reasons (STOP, MAX_TOKENS, MALFORMED_FUNCTION_CALL,
+                // UNEXPECTED_TOOL_CALL, LANGUAGE, NO_IMAGE, OTHER, etc.) continue
+                // parsing so text/metadata in the chunk is not lost.
               }
             }
 
@@ -964,8 +972,9 @@ public final class GeminiClient: APIClient, Sendable {
             switch reason {
               case .stop: .stop
               case .maxTokens: .maxTokens
-              case .safety, .recitation: .contentFilter
-              case .other: .other
+              case .safety, .recitation, .blocklist, .prohibitedContent, .spii, .imageSafety, .imageProhibitedContent: .contentFilter
+              case .malformedFunctionCall, .unexpectedToolCall: .toolUse
+              case .language, .noImage, .other, .unspecified: .other
             }
           } else {
             nil
