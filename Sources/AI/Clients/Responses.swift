@@ -159,7 +159,7 @@ public final class ResponsesClient: APIClient, Sendable {
         toolCall.parameters = parsedArguments
       } else {
         openAIResponsesLogger.error("Failed to parse final function call arguments: \(argumentsString)")
-        toolCall.parameters = ["_parseError": .string("Failed to parse arguments JSON")]
+        toolCall.parameters = ["_parseError": .string("Failed to parse arguments JSON"), "_rawArguments": .string(argumentsString)]
       }
 
       if let outputIndex {
@@ -1900,6 +1900,8 @@ extension ResponsesClient {
                    let parsedArgs = try? JSONDecoder().decode([String: Value].self, from: argumentsData)
                 {
                   parameters = parsedArgs
+                } else if !argumentsString.isEmpty {
+                  parameters = ["_parseError": .string("Failed to parse arguments JSON"), "_rawArguments": .string(argumentsString)]
                 }
                 content.append(.toolCall(ToolCall(
                   name: name,
