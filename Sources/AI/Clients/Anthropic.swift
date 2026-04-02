@@ -1269,6 +1269,7 @@ public final class AnthropicClient: APIClient, Sendable {
           true
         case let .providerOpaque(opaqueBlock):
           opaqueBlock.provider == "anthropic"
+            && (opaqueBlock.type == "thinking" || opaqueBlock.type == "redacted_thinking")
         default:
           false
       }
