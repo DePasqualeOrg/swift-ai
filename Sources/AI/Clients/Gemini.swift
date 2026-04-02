@@ -93,6 +93,8 @@ public final class GeminiClient: APIClient, Sendable {
     case imageSafety = "IMAGE_SAFETY"
     case unexpectedToolCall = "UNEXPECTED_TOOL_CALL"
     case imageProhibitedContent = "IMAGE_PROHIBITED_CONTENT"
+    case imageRecitation = "IMAGE_RECITATION"
+    case imageOther = "IMAGE_OTHER"
     case noImage = "NO_IMAGE"
     case other = "OTHER"
     case unspecified = "FINISH_REASON_UNSPECIFIED"
@@ -601,7 +603,7 @@ public final class GeminiClient: APIClient, Sendable {
               if let finishReason = firstCandidate["finishReason"] as? String {
                 let contentBlockingReasons: Set = [
                   "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT",
-                  "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT",
+                  "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION",
                 ]
                 if contentBlockingReasons.contains(finishReason) {
                   let finishMessage = (firstCandidate["finishMessage"] as? String) ?? "Content was blocked due to finish reason \"\(finishReason.lowercased())\"."
@@ -972,9 +974,10 @@ public final class GeminiClient: APIClient, Sendable {
             switch reason {
               case .stop: .stop
               case .maxTokens: .maxTokens
-              case .safety, .recitation, .blocklist, .prohibitedContent, .spii, .imageSafety, .imageProhibitedContent: .contentFilter
-              case .malformedFunctionCall, .unexpectedToolCall: .toolUse
-              case .language, .noImage, .other, .unspecified: .other
+              case .safety, .recitation, .blocklist, .prohibitedContent, .spii,
+                   .imageSafety, .imageProhibitedContent, .imageRecitation: .contentFilter
+              case .malformedFunctionCall, .unexpectedToolCall,
+                   .language, .noImage, .imageOther, .other, .unspecified: .other
             }
           } else {
             nil
