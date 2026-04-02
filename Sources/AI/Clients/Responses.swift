@@ -936,7 +936,12 @@ public final class ResponsesClient: APIClient, Sendable {
         }
 
       case StreamEventType.contentPartAdded:
-        break // Content parts are initialized via output_item.added; deltas arrive via reasoning_text.delta
+        // The OpenAI Responses API tracks content parts per output item (output_index + content_index),
+        // but this library flattens to one Message.Content per output_index. Deltas at the same
+        // output_index are concatenated, which produces identical final text. Partial stream snapshots
+        // may collapse multiple content parts into fewer blocks, but completed responses are built
+        // from the full response payload.
+        break
 
       case StreamEventType.outputItemAdded:
         if let item = event.item, let itemType = item.type {
