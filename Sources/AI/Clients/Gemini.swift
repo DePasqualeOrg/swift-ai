@@ -29,12 +29,12 @@ public final class GeminiClient: APIClient, Sendable {
 
   private let modelsEndpoint: URL
 
-  /// URLSession configured with no timeout for long-running requests (like extended thinking)
-  /// This mirrors the TypeScript SDK approach which doesn't set a default timeout
+  /// URLSession with no timeout, since Gemini thinking requests can take several minutes.
+  /// Callers that need a timeout can pass their own URLSession.
   public static let defaultSession: URLSession = {
     let config = URLSessionConfiguration.default
-    config.timeoutIntervalForRequest = .infinity // No timeout for individual requests
-    config.timeoutIntervalForResource = .infinity // No timeout for entire resource transfer
+    config.timeoutIntervalForRequest = .infinity
+    config.timeoutIntervalForResource = .infinity
     return URLSession(configuration: config)
   }()
 
