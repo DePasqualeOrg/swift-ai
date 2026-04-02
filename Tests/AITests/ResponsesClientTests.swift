@@ -807,6 +807,77 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Mixed tool output preserves original content order`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    // Build a conversation with a tool call followed by a mixed tool result: [image, text, file]
+    let imageData = Data("fake-image".utf8)
+    let pdfData = Data("fake-pdf".utf8)
+    let toolCall = ToolCall(name: "analyze", id: "call_123", parameters: [:])
+    let toolResult = ToolResult(
+      name: "analyze",
+      id: "call_123",
+      content: [
+        .image(imageData, mimeType: "image/png"),
+        .text("Analysis complete"),
+        .file(pdfData, mimeType: "application/pdf", filename: "report.pdf"),
+      ],
+    )
+    let messages = [
+      Message(role: .assistant, content: [.toolCall(toolCall)]),
+      Message(role: .tool, content: [.toolResult(toolResult)]),
+      Message(role: .user, content: "What did you find?"),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+
+    // Find the function_call_output item
+    let toolOutput = try #require(input.first(where: { $0["type"] as? String == "function_call_output" }))
+    let outputItems = try #require(toolOutput["output"] as? [[String: Any]])
+
+    // Verify order: image, text, file — matching the original ToolResult.content order
+    #expect(outputItems.count == 3)
+    #expect(outputItems[0]["type"] as? String == "input_image")
+    #expect(outputItems[1]["type"] as? String == "input_text")
+    #expect(outputItems[1]["text"] as? String == "Analysis complete")
+    #expect(outputItems[2]["type"] as? String == "input_file")
+    #expect(outputItems[2]["filename"] as? String == "report.pdf")
+  }
+
+  @Test
   func `Stop sends authenticated cancel for background response`() async throws {
     var cancelRequest: URLRequest?
     let streamGate = AsyncStream<Data>.makeStream()

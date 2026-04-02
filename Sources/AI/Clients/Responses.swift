@@ -302,13 +302,17 @@ public final class ResponsesClient: APIClient, Sendable {
             resultOutput = "{\"error\": \"\((errorText.isEmpty ? "Unknown error" : errorText).replacingOccurrences(of: "\"", with: "\\\""))\"}"
           } else {
             var outputItems: [[String: any Sendable]] = []
-            var textOutputs: [String] = []
+            var hasNonTextContent = false
 
             for content in toolResult.content {
               switch content {
                 case let .text(text):
-                  textOutputs.append(text)
+                  outputItems.append([
+                    "type": ContentType.inputText,
+                    "text": text,
+                  ])
                 case let .image(data, mimeType):
+                  hasNonTextContent = true
                   let mediaType = mimeType ?? "image/png"
                   let dataURL = "data:\(mediaType);base64,\(data.base64EncodedString())"
                   outputItems.append([
@@ -318,8 +322,12 @@ public final class ResponsesClient: APIClient, Sendable {
                   ])
                 case let .audio(data, mimeType):
                   openAIResponsesLogger.warning("Tool '\(toolResult.name)' returned audio, which is not supported by Responses API. Using fallback text.")
-                  textOutputs.append(ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription)
+                  outputItems.append([
+                    "type": ContentType.inputText,
+                    "text": ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription,
+                  ])
                 case let .file(data, mimeType, filename):
+                  hasNonTextContent = true
                   if mimeType.hasPrefix("image/") {
                     let dataURL = "data:\(mimeType);base64,\(data.base64EncodedString())"
                     outputItems.append([
@@ -341,13 +349,12 @@ public final class ResponsesClient: APIClient, Sendable {
               }
             }
 
-            let textOutput = textOutputs.joined(separator: "\n")
-            if !textOutput.isEmpty, outputItems.isEmpty {
-              resultOutput = textOutput
-            } else if !outputItems.isEmpty {
+            if hasNonTextContent {
               resultOutput = outputItems
             } else {
-              resultOutput = textOutput
+              // Text-only: use plain string shorthand
+              let texts = outputItems.compactMap { $0["text"] as? String }
+              resultOutput = texts.joined(separator: "\n")
             }
           }
 
