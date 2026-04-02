@@ -187,8 +187,26 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                   "url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: mimeType),
                 ],
               ])
-            case .video, .audio:
-              openAILogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported by ChatCompletions and will be omitted.")
+            case let .audio(data, mimeType):
+              // Map MIME type to the format string expected by the API ("wav" or "mp3")
+              let format: String? = switch mimeType {
+                case "audio/wav", "audio/x-wav", "audio/wave": "wav"
+                case "audio/mpeg", "audio/mp3": "mp3"
+                default: nil
+              }
+              if let format {
+                multimodalContent.append([
+                  "type": "input_audio",
+                  "input_audio": [
+                    "data": data.base64EncodedString(),
+                    "format": format,
+                  ] as [String: any Sendable],
+                ])
+              } else {
+                openAILogger.warning("Audio format '\(mimeType)' is not supported by ChatCompletions (only wav and mp3). Attachment will be omitted.")
+              }
+            case .video:
+              openAILogger.warning("Video attachments are not supported by ChatCompletions and will be omitted.")
             case let .document(data, mimeType):
               // The API expects a data URL (e.g. "data:application/pdf;base64,...") for file_data,
               // despite the OpenAI TS SDK describing it as "base64-encoded data".
