@@ -69,8 +69,9 @@ public func generateText(
   switch model {
     case let .anthropic(modelId):
       let client = AnthropicClient()
+      let enableThinking = reasoning && AnthropicClient.supportsThinking(modelId)
       let configuration = AnthropicClient.Configuration(
-        maxThinkingTokens: reasoning ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
+        maxThinkingTokens: enableThinking ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
         webSearch: webSearch,
       )
       return try await client.generateText(
@@ -172,8 +173,9 @@ public func streamText(
   switch model {
     case let .anthropic(modelId):
       let client = AnthropicClient()
+      let enableThinking = reasoning && AnthropicClient.supportsThinking(modelId)
       let configuration = AnthropicClient.Configuration(
-        maxThinkingTokens: reasoning ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
+        maxThinkingTokens: enableThinking ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
         webSearch: webSearch,
       )
       return client.streamText(

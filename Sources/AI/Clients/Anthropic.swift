@@ -2302,10 +2302,10 @@ public extension AnthropicClient {
 
 // Model defaults
 
-extension AnthropicClient {
+public extension AnthropicClient {
   /// Returns the default max_tokens for a given model ID.
   /// Newer models default to 64000; older models use their documented limits.
-  static func defaultMaxTokens(for modelId: String) -> Int {
+  internal static func defaultMaxTokens(for modelId: String) -> Int {
     if modelId.contains("claude-3-5-haiku") {
       8192
     } else if modelId.contains("claude-3-haiku") {
@@ -2317,9 +2317,19 @@ extension AnthropicClient {
     }
   }
 
+  /// Whether the given model supports extended thinking.
+  /// Thinking was introduced with Claude 3.7 Sonnet; older models reject thinking parameters.
+  static func supportsThinking(_ modelId: String) -> Bool {
+    // Claude 3.x (non-3.7) models don't support thinking
+    if modelId.contains("claude-3-haiku") || modelId.contains("claude-3-opus") || modelId.contains("claude-3-5-") {
+      return false
+    }
+    return true
+  }
+
   /// Returns the maximum thinking budget for a given model ID.
   /// Thinking budget must be less than max_tokens.
-  public static func maxThinkingBudget(for modelId: String) -> Int {
+  static func maxThinkingBudget(for modelId: String) -> Int {
     defaultMaxTokens(for: modelId) - 1
   }
 }
