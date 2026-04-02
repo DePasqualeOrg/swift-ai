@@ -432,7 +432,7 @@ extension AnthropicClient {
     private var ended = false
     private var errored = false
     private var aborted = false
-    private nonisolated(unsafe) var processingTask: Task<Void, Never>?
+    private var processingTask: Task<Void, Never>?
 
     init() {}
 
@@ -471,11 +471,11 @@ extension AnthropicClient {
       params: MessageCreateParams,
       apiKey: String,
       session: URLSession,
-    ) -> MessageStream {
+    ) async -> MessageStream {
       let stream = MessageStream()
 
       // Start the stream processing in a detached task to avoid running on @MainActor
-      stream.processingTask = Task.detached {
+      let task = Task.detached {
         do {
           for message in params.messages {
             await stream.addMessageParam(message)
@@ -487,7 +487,12 @@ extension AnthropicClient {
           await stream.handleError(error)
         }
       }
+      await stream.setProcessingTask(task)
       return stream
+    }
+
+    private func setProcessingTask(_ task: Task<Void, Never>) {
+      processingTask = task
     }
 
     func addMessageParam(_ message: MessageParam) {
@@ -1585,8 +1590,8 @@ public final class AnthropicClient: APIClient, Sendable {
     return request
   }
 
-  func createMessageStream(params: MessageCreateParams, apiKey: String) -> MessageStream {
-    MessageStream.createMessage(client: self, params: params, apiKey: apiKey, session: session)
+  func createMessageStream(params: MessageCreateParams, apiKey: String) async -> MessageStream {
+    await MessageStream.createMessage(client: self, params: params, apiKey: apiKey, session: session)
   }
 
   private func mapRole(_ role: Message.Role) -> AnthropicClient.Role {
@@ -2190,7 +2195,7 @@ public extension AnthropicClient {
         params.toolChoice = .auto
       }
       // Create message stream using the provided API key
-      let stream = createMessageStream(params: params, apiKey: apiKey)
+      let stream = await createMessageStream(params: params, apiKey: apiKey)
       // Use AsyncStream for events
       let events = await stream.events()
       do {
