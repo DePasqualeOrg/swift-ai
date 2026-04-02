@@ -651,6 +651,7 @@ public final class ResponsesClient: APIClient, Sendable {
     let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
     let task = Task {
       do {
+        let didYield = OSAllocatedUnfairLock(initialState: false)
         let finalResponse = try await _generate(
           modelId: modelId,
           tools: tools,
@@ -662,11 +663,14 @@ public final class ResponsesClient: APIClient, Sendable {
           stream: true,
           configuration: configuration,
           update: { response in
+            didYield.withLock { $0 = true }
             continuation.yield(response)
           },
         )
-        // Yield the final response with metadata
-        continuation.yield(finalResponse)
+        // Only yield the final response if no updates were emitted (e.g. early cancellation)
+        if !didYield.withLock({ $0 }) {
+          continuation.yield(finalResponse)
+        }
         continuation.finish()
       } catch {
         continuation.finish(throwing: error)

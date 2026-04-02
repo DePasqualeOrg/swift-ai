@@ -856,7 +856,9 @@ public final class GeminiClient: APIClient, Sendable {
             continuation.yield(response)
           },
         )
-        // Yield the final response with metadata
+        // Gemini's SSE parser yields text, usage metadata, and finish reason as separate
+        // stream events, so the final response may carry metadata not present in the
+        // last streamed update.
         continuation.yield(finalResponse)
         continuation.finish()
       } catch {
@@ -957,6 +959,27 @@ public final class GeminiClient: APIClient, Sendable {
           tools: tools,
         )
 
+        func buildMetadata() -> GenerationResponse.Metadata {
+          let generationFinishReason: GenerationResponse.FinishReason? = if let reason = finishReason {
+            switch reason {
+              case .stop: .stop
+              case .maxTokens: .maxTokens
+              case .safety, .recitation: .contentFilter
+              case .other: .other
+            }
+          } else {
+            nil
+          }
+          return GenerationResponse.Metadata(
+            finishReason: generationFinishReason,
+            inputTokens: usageMetadata?.promptTokenCount,
+            outputTokens: usageMetadata?.candidatesTokenCount,
+            totalTokens: usageMetadata?.totalTokenCount,
+            cacheReadInputTokens: usageMetadata?.cachedContentTokenCount,
+            reasoningTokens: usageMetadata?.thoughtsTokenCount,
+          )
+        }
+
         let sendUpdate = {
           let blocks = Self.assistantContent(
             reasoningText: fullReasoningText,
@@ -964,13 +987,22 @@ public final class GeminiClient: APIClient, Sendable {
             notesText: notesText,
             toolCalls: toolCalls,
           )
+          let metadata = buildMetadata()
           await MainActor.run {
-            update(.init(content: blocks))
+            update(.init(content: blocks, metadata: metadata))
           }
         }
 
         for try await chunk in stream {
           try Task.checkCancellation()
+
+          if let metadata = chunk.usageMetadata {
+            usageMetadata = metadata
+          }
+
+          if let reason = chunk.finishReason {
+            finishReason = reason
+          }
 
           // Handle text chunks
           if let text = chunk.text {
@@ -995,38 +1027,9 @@ public final class GeminiClient: APIClient, Sendable {
               await sendUpdate()
             }
           }
-
-          if let metadata = chunk.usageMetadata {
-            usageMetadata = metadata // Store the latest (should be the final one)
-          }
-
-          if let reason = chunk.finishReason {
-            finishReason = reason
-          }
         }
 
-        // Build metadata
-        let generationFinishReason: GenerationResponse.FinishReason? = if let reason = finishReason {
-          switch reason {
-            case .stop: .stop
-            case .maxTokens: .maxTokens
-            case .safety, .recitation: .contentFilter
-            case .other: .other
-          }
-        } else {
-          nil
-        }
-
-        let metadata = GenerationResponse.Metadata(
-          finishReason: generationFinishReason,
-          inputTokens: usageMetadata?.promptTokenCount,
-          outputTokens: usageMetadata?.candidatesTokenCount,
-          totalTokens: usageMetadata?.totalTokenCount,
-          cacheReadInputTokens: usageMetadata?.cachedContentTokenCount,
-          reasoningTokens: usageMetadata?.thoughtsTokenCount,
-        )
-
-        // Return texts
+        // Return the final state
         return .init(
           content: Self.assistantContent(
             reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
@@ -1034,7 +1037,7 @@ public final class GeminiClient: APIClient, Sendable {
             notesText: notesText,
             toolCalls: toolCalls,
           ),
-          metadata: metadata,
+          metadata: buildMetadata(),
         )
       } catch let error as GeminiError {
         // Check if the task was cancelled

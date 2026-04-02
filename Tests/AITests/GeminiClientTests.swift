@@ -687,4 +687,39 @@ struct GeminiClientTests {
     #expect(!roles.contains("developer"))
     #expect(roles.contains("user"))
   }
+
+  @Test
+  func `Terminal yield carries complete metadata that intermediate updates lack`() async throws {
+    // The basic fixture has two SSE chunks:
+    //   1. "Hello" with candidatesTokenCount: 1, no finishReason
+    //   2. " there!" with candidatesTokenCount: 2, finishReason: STOP
+    // Gemini's parser yields text, usage, and finish reason as separate stream events,
+    // so intermediate sendUpdate() calls only include metadata accumulated so far.
+    // The terminal yield from streamText is the only one guaranteed to have complete metadata.
+    let fixture = try loadFixture("gemini_basic_response.txt")
+    let (client, cleanup) = makeTestClient(sseData: fixture)
+    defer { cleanup() }
+
+    let collector = UpdateCollector()
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-2.0-flash",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Say hello")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ), collecting: collector)
+
+    let updates = collector.updates
+    #expect(updates.count >= 2, "Should have at least two updates (intermediate + terminal)")
+
+    // The last pre-terminal update should lack the final finish reason,
+    // since finishReason arrives as a separate stream event after the text
+    let preTerminal = updates[updates.count - 2]
+    #expect(preTerminal.metadata?.finishReason != .stop)
+
+    // The terminal yield should have the complete metadata
+    #expect(response.metadata?.finishReason == .stop)
+    #expect(response.metadata?.inputTokens == 8)
+    #expect(response.metadata?.outputTokens == 2)
+  }
 }
