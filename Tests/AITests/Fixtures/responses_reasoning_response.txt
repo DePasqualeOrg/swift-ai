@@ -1,14 +1,23 @@
 event: response.created
 data: {"type":"response.created","response":{"id":"resp_think123","status":"in_progress","model":"o3-mini"}}
 
-event: response.reasoning.delta
-data: {"type":"response.reasoning.delta","delta":"Let me think about this question..."}
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","summary":[{"type":"text","text":""}]}}
 
-event: response.reasoning.delta
-data: {"type":"response.reasoning.delta","delta":" The answer requires careful analysis."}
+event: response.content_part.added
+data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"reasoning_text","text":""}}
+
+event: response.reasoning_text.delta
+data: {"type":"response.reasoning_text.delta","output_index":0,"content_index":0,"delta":"Let me think about this question..."}
+
+event: response.reasoning_text.delta
+data: {"type":"response.reasoning_text.delta","output_index":0,"content_index":0,"delta":" The answer requires careful analysis."}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","role":"assistant","content":[]}}
 
 event: response.output_text.delta
-data: {"type":"response.output_text.delta","delta":"The answer is 42."}
+data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"The answer is 42."}
 
 event: response.completed
 data: {"type":"response.completed","response":{"id":"resp_think123","status":"completed","model":"o3-mini","created_at":1700000000,"output":[{"type":"reasoning","summary":[{"type":"text","text":"Let me think about this question... The answer requires careful analysis."}]},{"type":"message","content":[{"type":"output_text","text":"The answer is 42."}]}],"usage":{"input_tokens":20,"output_tokens":30,"total_tokens":50}}}

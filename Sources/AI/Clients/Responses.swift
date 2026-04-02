@@ -388,9 +388,11 @@ public final class ResponsesClient: APIClient, Sendable {
 
   private enum StreamEventType {
     static let outputTextDelta = "response.output_text.delta"
-    static let reasoningDelta = "response.reasoning.delta"
+    static let reasoningTextDelta = "response.reasoning_text.delta"
+    static let reasoningDelta = "response.reasoning.delta" // Deprecated, kept for older API versions
     static let reasoningSummaryDelta = "response.reasoning_summary_text.delta"
     static let outputItemAdded = "response.output_item.added"
+    static let contentPartAdded = "response.content_part.added"
     static let functionCallArgumentsDelta = "response.function_call_arguments.delta"
     static let functionCallArgumentsDone = "response.function_call_arguments.done"
     static let completed = "response.completed"
@@ -873,11 +875,14 @@ public final class ResponsesClient: APIClient, Sendable {
           yieldCurrentState()
         }
 
-      case StreamEventType.reasoningDelta, StreamEventType.reasoningSummaryDelta:
+      case StreamEventType.reasoningTextDelta, StreamEventType.reasoningDelta, StreamEventType.reasoningSummaryDelta:
         if let delta = event.delta {
           streamingState.appendReasoningDelta(delta, outputIndex: event.outputIndex)
           yieldCurrentState()
         }
+
+      case StreamEventType.contentPartAdded:
+        break // Content parts are initialized via output_item.added; deltas arrive via reasoning_text.delta
 
       case StreamEventType.outputItemAdded:
         if let item = event.item, let itemType = item.type {
