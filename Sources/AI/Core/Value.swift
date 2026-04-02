@@ -254,7 +254,7 @@ public enum Value: Hashable, Sendable {
         } else {
           result[key] = value.toAny()
         }
-      } else if key == "allOf" {
+      } else if key == "allOf" || key == "oneOf" {
         if case let .array(variants) = value {
           result[key] = variants.map { variant -> any Sendable in
             if case let .object(variantDict) = variant {
@@ -263,6 +263,20 @@ public enum Value: Hashable, Sendable {
               variant.toAny()
             }
           }
+        } else {
+          result[key] = value.toAny()
+        }
+      } else if key == "$defs" || key == "definitions" {
+        if case let .object(defs) = value {
+          var convertedDefs: [String: any Sendable] = [:]
+          for (defName, defSchema) in defs {
+            if case let .object(defSchemaDict) = defSchema {
+              convertedDefs[defName] = schemaForStrictMode(defSchemaDict)
+            } else {
+              convertedDefs[defName] = defSchema.toAny()
+            }
+          }
+          result[key] = convertedDefs
         } else {
           result[key] = value.toAny()
         }
