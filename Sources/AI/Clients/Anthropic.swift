@@ -1147,7 +1147,7 @@ public final class AnthropicClient: APIClient, Sendable {
               isError: toolResult.isError,
             )))
           }
-        case .serverToolUse, .codeExecutionToolResult:
+        case .serverToolUse:
           // Store as opaque block for round-tripping; the structured data is needed
           // on subsequent turns so the model can reference its own tool invocations.
           if let jsonData = try? JSONEncoder().encode(contentBlock),
@@ -1158,6 +1158,26 @@ public final class AnthropicClient: APIClient, Sendable {
               type: contentBlock.type.rawValue,
               data: jsonString,
             )))
+          }
+          // Also produce display text (e.g., formatted code for code_execution)
+          if let serverToolUse = contentBlock.serverToolUse,
+             let textBlock = textBlock(from: serverToolUse)
+          {
+            blocks.append(textBlock)
+          }
+        case .codeExecutionToolResult:
+          if let jsonData = try? JSONEncoder().encode(contentBlock),
+             let jsonString = String(data: jsonData, encoding: .utf8)
+          {
+            blocks.append(.providerOpaque(OpaqueBlock(
+              provider: "anthropic",
+              type: contentBlock.type.rawValue,
+              data: jsonString,
+            )))
+          }
+          // Also produce display text (formatted stdout/stderr)
+          if let codeExecutionToolResult = contentBlock.codeExecutionToolResult {
+            blocks.append(contentsOf: textBlocks(from: codeExecutionToolResult))
           }
         case .webSearchToolResult:
           if let jsonData = try? JSONEncoder().encode(contentBlock),
@@ -1187,10 +1207,13 @@ public final class AnthropicClient: APIClient, Sendable {
               data: jsonString,
             )))
           }
-          // Also extract citation URLs for endnotes
+          // Also extract citation URLs for endnotes and produce display text
           if let webFetchToolResult = contentBlock.webFetchToolResult {
             if case let .result(result) = webFetchToolResult.content {
               appendCitationURL(result.url)
+              if result.content.source.type == "text", !result.content.source.data.isEmpty {
+                blocks.append(.text(result.content.source.data))
+              }
             }
           }
         case .image, .document:
