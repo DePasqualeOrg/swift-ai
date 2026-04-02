@@ -1147,13 +1147,29 @@ public final class AnthropicClient: APIClient, Sendable {
               isError: toolResult.isError,
             )))
           }
-        case .serverToolUse:
-          if let serverToolUse = contentBlock.serverToolUse,
-             let textBlock = textBlock(from: serverToolUse)
+        case .serverToolUse, .codeExecutionToolResult:
+          // Store as opaque block for round-tripping; the structured data is needed
+          // on subsequent turns so the model can reference its own tool invocations.
+          if let jsonData = try? JSONEncoder().encode(contentBlock),
+             let jsonString = String(data: jsonData, encoding: .utf8)
           {
-            blocks.append(textBlock)
+            blocks.append(.providerOpaque(OpaqueBlock(
+              provider: "anthropic",
+              type: contentBlock.type.rawValue,
+              data: jsonString,
+            )))
           }
         case .webSearchToolResult:
+          if let jsonData = try? JSONEncoder().encode(contentBlock),
+             let jsonString = String(data: jsonData, encoding: .utf8)
+          {
+            blocks.append(.providerOpaque(OpaqueBlock(
+              provider: "anthropic",
+              type: contentBlock.type.rawValue,
+              data: jsonString,
+            )))
+          }
+          // Also extract citation URLs for endnotes
           if let webSearchToolResult = contentBlock.webSearchToolResult,
              case let .results(items) = webSearchToolResult.content
           {
@@ -1162,20 +1178,20 @@ public final class AnthropicClient: APIClient, Sendable {
             }
           }
         case .webFetchToolResult:
-          if let webFetchToolResult = contentBlock.webFetchToolResult {
-            switch webFetchToolResult.content {
-              case let .result(result):
-                appendCitationURL(result.url)
-                if result.content.source.type == "text", !result.content.source.data.isEmpty {
-                  blocks.append(.text(result.content.source.data))
-                }
-              case .error:
-                break
-            }
+          if let jsonData = try? JSONEncoder().encode(contentBlock),
+             let jsonString = String(data: jsonData, encoding: .utf8)
+          {
+            blocks.append(.providerOpaque(OpaqueBlock(
+              provider: "anthropic",
+              type: contentBlock.type.rawValue,
+              data: jsonString,
+            )))
           }
-        case .codeExecutionToolResult:
-          if let codeExecutionToolResult = contentBlock.codeExecutionToolResult {
-            blocks.append(contentsOf: textBlocks(from: codeExecutionToolResult))
+          // Also extract citation URLs for endnotes
+          if let webFetchToolResult = contentBlock.webFetchToolResult {
+            if case let .result(result) = webFetchToolResult.content {
+              appendCitationURL(result.url)
+            }
           }
         case .image, .document:
           break
@@ -1245,6 +1261,20 @@ public final class AnthropicClient: APIClient, Sendable {
               ))
             case ("anthropic", "redacted_thinking"):
               contentBlocks.append(.init(type: .redactedThinking, data: opaqueBlock.data))
+            case let ("anthropic", blockType) where
+            blockType == "server_tool_use" || blockType == "web_search_tool_result"
+            || blockType == "web_fetch_tool_result" || blockType == "code_execution_tool_result":
+              // Decode the stored JSON back to a Value for verbatim round-tripping
+              if let jsonString = opaqueBlock.data,
+                 let jsonData = jsonString.data(using: .utf8),
+                 let jsonObject = try? JSONSerialization.jsonObject(with: jsonData) as? [String: any Sendable],
+                 let rawValue = try? Value.fromAny(jsonObject)
+              {
+                contentBlocks.append(.init(
+                  type: ContentBlockType(rawValue: blockType) ?? .serverToolUse,
+                  rawValue: rawValue,
+                ))
+              }
             default:
               break
           }
@@ -1449,6 +1479,10 @@ public final class AnthropicClient: APIClient, Sendable {
       } else if let contentBlocks = message.contentBlocks {
         // Handle content blocks
         messageDict["content"] = .array(contentBlocks.map { block -> Value in
+          // Server tool blocks are round-tripped verbatim from their stored JSON
+          if let rawValue = block.rawValue {
+            return rawValue
+          }
           var blockDict: [String: Value] = [
             "type": .string(block.type.rawValue),
           ]
@@ -1724,11 +1758,18 @@ extension AnthropicClient {
     let thinking: String?
     let signature: String?
     let data: String?
+    /// Pre-built JSON value for server tool blocks that must be round-tripped verbatim.
+    var rawValue: Value? = nil
+
+    enum CodingKeys: String, CodingKey {
+      case type, text, source, toolUse, toolResult, codeExecutionToolResult, thinking, signature, data
+    }
 
     init(type: ContentBlockType, text: String? = nil, source: ContentBlockSource? = nil,
          toolUse: ToolUseBlockParam? = nil, toolResult: ToolResultBlockParam? = nil,
          codeExecutionToolResult: CodeExecutionToolResultBlockParam? = nil,
-         thinking: String? = nil, signature: String? = nil, data: String? = nil)
+         thinking: String? = nil, signature: String? = nil, data: String? = nil,
+         rawValue: Value? = nil)
     {
       self.type = type
       self.text = text
@@ -1739,6 +1780,7 @@ extension AnthropicClient {
       self.thinking = thinking
       self.signature = signature
       self.data = data
+      self.rawValue = rawValue
     }
   }
 
