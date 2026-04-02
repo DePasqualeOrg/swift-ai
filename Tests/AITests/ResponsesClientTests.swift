@@ -753,4 +753,134 @@ struct ResponsesClientTests {
       // Other errors may occur depending on timing
     }
   }
+
+  @Test
+  func `Document attachment encodes file_data as data URL`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Done"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Done"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let pdfData = Data("fake-pdf-content".utf8)
+    let attachment = Attachment(kind: .document(data: pdfData, mimeType: "application/pdf"), filename: "test.pdf")
+    let message = Message(role: .user, content: [.attachment(attachment)])
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [message],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let firstInput = try #require(input.first)
+    let content = try #require(firstInput["content"] as? [[String: Any]])
+    let fileContent = try #require(content.first(where: { $0["type"] as? String == "input_file" }))
+    let fileData = try #require(fileContent["file_data"] as? String)
+
+    let expectedBase64 = pdfData.base64EncodedString()
+    #expect(fileData == "data:application/pdf;base64,\(expectedBase64)")
+    #expect(fileContent["filename"] as? String == "test.pdf")
+  }
+
+  @Test
+  func `Stop sends authenticated cancel for background response`() async throws {
+    var cancelRequest: URLRequest?
+    let streamGate = AsyncStream<Data>.makeStream()
+
+    // Use the global stream handler for controlled timing
+    MockURLProtocol.streamHandler = { request in
+      let url = request.url!
+
+      // Handle cancel request
+      if url.path.contains("/cancel") {
+        cancelRequest = request
+        let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
+        return (response, AsyncStream { $0.yield(Data("{}".utf8)); $0.finish() })
+      }
+
+      // Return a background response with controlled timing
+      let response = HTTPURLResponse(
+        url: url,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+
+      // Send the response.created event immediately, then hold the stream open
+      let createdEvent = """
+      data: {"type":"response.created","response":{"id":"resp_bg_123","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Working"}
+
+
+      """
+      streamGate.continuation.yield(Data(createdEvent.utf8))
+
+      return (response, streamGate.stream)
+    }
+    defer { MockURLProtocol.streamHandler = nil }
+
+    let testEndpoint = try #require(URL(string: "https://mock.test/bg-cancel-test"))
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+
+    // Start a background stream
+    let task = Task {
+      try await consumeStream(client.streamText(
+        modelId: "gpt-4o",
+        messages: [Message(role: .user, content: "Hello")],
+        maxTokens: 1024,
+        apiKey: "secret-api-key",
+        configuration: .init(backgroundMode: true),
+      ))
+    }
+
+    // Wait for the background response ID to be set
+    for _ in 0 ..< 20 {
+      try await Task.sleep(for: .milliseconds(25))
+      if await client.activeBackgroundResponseId != nil { break }
+    }
+
+    // Verify the background response ID was captured
+    let backgroundId = await client.activeBackgroundResponseId
+    #expect(backgroundId == "resp_bg_123")
+
+    // Call stop, which should send an authenticated cancel
+    await client.stop()
+
+    // Wait for the cancel request to be sent
+    try await Task.sleep(for: .milliseconds(100))
+
+    // Finish the stream so the task can clean up
+    streamGate.continuation.finish()
+    task.cancel()
+    _ = try? await task.value
+
+    // Verify the cancel request included the API key
+    let authHeader = try #require(cancelRequest).value(forHTTPHeaderField: "Authorization")
+    #expect(authHeader == "Bearer secret-api-key")
+  }
 }

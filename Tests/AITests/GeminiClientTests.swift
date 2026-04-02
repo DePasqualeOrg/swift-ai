@@ -632,4 +632,59 @@ struct GeminiClientTests {
       // Other errors may occur depending on timing
     }
   }
+
+  @Test
+  func `System and developer messages in history are routed to system instruction`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1,"totalTokenCount":11}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let messages = [
+      Message(role: .system, content: "You are helpful"),
+      Message(role: .developer, content: "Be concise"),
+      Message(role: .user, content: "Hello"),
+    ]
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.0-flash",
+      systemPrompt: "Base instructions",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+
+    // Verify system_instruction contains the systemPrompt and extracted system/developer messages
+    let systemInstruction = try #require(body?["system_instruction"] as? [String: Any])
+    let parts = try #require(systemInstruction["parts"] as? [[String: Any]])
+    let texts = parts.compactMap { $0["text"] as? String }
+    #expect(texts.contains("Base instructions"))
+    #expect(texts.contains("You are helpful"))
+    #expect(texts.contains("Be concise"))
+
+    // Verify contents only has user messages, not system or developer
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    let roles = contents.compactMap { $0["role"] as? String }
+    #expect(!roles.contains("system"))
+    #expect(!roles.contains("developer"))
+    #expect(roles.contains("user"))
+  }
 }
