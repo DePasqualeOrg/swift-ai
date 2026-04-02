@@ -105,7 +105,12 @@ public func generateText(
 
     case let .chatCompletions(modelId, endpoint):
       let client = ChatCompletionsClient(endpoint: endpoint)
-      let configuration = ChatCompletionsClient.Configuration()
+      let extraParameters: [String: any Sendable]? = if reasoning {
+        ["reasoning_effort": "high"]
+      } else {
+        nil
+      }
+      let configuration = ChatCompletionsClient.Configuration(extraParameters: extraParameters)
       return try await client.generateText(
         modelId: modelId,
         tools: tools,
