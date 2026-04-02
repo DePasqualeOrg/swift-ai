@@ -422,6 +422,7 @@ public final class ResponsesClient: APIClient, Sendable {
     static let reasoningSummaryDelta = "response.reasoning_summary_text.delta"
     static let outputItemAdded = "response.output_item.added"
     static let contentPartAdded = "response.content_part.added"
+    static let refusalDelta = "response.refusal.delta"
     static let functionCallArgumentsDelta = "response.function_call_arguments.delta"
     static let functionCallArgumentsDone = "response.function_call_arguments.done"
     static let completed = "response.completed"
@@ -437,6 +438,7 @@ public final class ResponsesClient: APIClient, Sendable {
     static let webSearchCall = "web_search_call"
     static let message = "message"
     static let outputText = "output_text"
+    static let refusal = "refusal"
   }
 
   private let enableStrictModeForTools = true
@@ -899,6 +901,12 @@ public final class ResponsesClient: APIClient, Sendable {
 
     switch eventType {
       case StreamEventType.outputTextDelta:
+        if let delta = event.delta {
+          streamingState.appendTextDelta(delta, outputIndex: event.outputIndex)
+          yieldCurrentState()
+        }
+
+      case StreamEventType.refusalDelta:
         if let delta = event.delta {
           streamingState.appendTextDelta(delta, outputIndex: event.outputIndex)
           yieldCurrentState()
@@ -1803,6 +1811,7 @@ extension ResponsesClient {
     /// Converts the response object to a GenerationResponse
     func toGenerationResponse() -> GenerationResponse {
       var content: [Message.Content] = []
+      var hasRefusal = false
 
       if let outputArray = output, !outputArray.isEmpty {
         for item in outputArray {
@@ -1811,9 +1820,12 @@ extension ResponsesClient {
           switch itemType {
             case OutputItemType.message:
               if let contentArray = item.content {
-                for contentItem in contentArray where contentItem.type == OutputItemType.outputText {
-                  if let text = contentItem.text, !text.isEmpty {
+                for contentItem in contentArray {
+                  if contentItem.type == OutputItemType.outputText, let text = contentItem.text, !text.isEmpty {
                     content.append(.text(text))
+                  } else if contentItem.type == OutputItemType.refusal, let refusal = contentItem.refusal, !refusal.isEmpty {
+                    content.append(.text(refusal))
+                    hasRefusal = true
                   }
                 }
               }
@@ -1884,8 +1896,9 @@ extension ResponsesClient {
       let finishReason: GenerationResponse.FinishReason? = if let status {
         switch status {
           case "completed":
-            // If there are function calls, the finish reason is tool use
-            toolCallCount == 0 ? .stop : .toolUse
+            if hasRefusal { .refusal }
+            else if toolCallCount > 0 { .toolUse }
+            else { .stop }
           case "incomplete":
             // Check the reason for incomplete status
             switch incompleteDetails?.reason {
@@ -1942,6 +1955,7 @@ extension ResponsesClient {
   struct ContentItem: Decodable {
     let type: String?
     let text: String?
+    let refusal: String?
     let annotations: [AnnotationItem]?
   }
 
