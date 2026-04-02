@@ -387,7 +387,7 @@ public final class GeminiClient: APIClient, Sendable {
           let parts = try await requestParts(for: message, apiKey: apiKey)
           let role = switch message.role {
             case .assistant: "model"
-            case .tool: "function"
+            case .tool: "user"
             default: message.role.rawValue
           }
           processedMessages.append([
