@@ -1138,9 +1138,13 @@ public final class GeminiClient: APIClient, Sendable {
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     let metadata = ["file": ["displayName": displayName]]
     request.httpBody = try JSONSerialization.data(withJSONObject: metadata)
-    let (_, response) = try await session.data(for: request)
+    let (responseData, response) = try await session.data(for: request)
     guard let httpResponse = response as? HTTPURLResponse else {
       throw AIError.network(underlying: URLError(.badServerResponse))
+    }
+    if !(200 ... 299).contains(httpResponse.statusCode) {
+      let errorMessage = String(data: responseData, encoding: .utf8) ?? "Unknown error"
+      throw AIError.fromHTTPStatusCode(httpResponse.statusCode, message: errorMessage)
     }
     guard let uploadUrl = httpResponse.value(forHTTPHeaderField: "X-Goog-Upload-URL") else {
       throw AIError.parsing(message: "Failed to get upload URL from response headers")
@@ -1155,7 +1159,11 @@ public final class GeminiClient: APIClient, Sendable {
     uploadRequest.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
     uploadRequest.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
     uploadRequest.httpBody = data
-    let (responseData, _) = try await session.data(for: uploadRequest)
+    let (uploadResponseData, uploadResponse) = try await session.data(for: uploadRequest)
+    if let uploadHttpResponse = uploadResponse as? HTTPURLResponse, !(200 ... 299).contains(uploadHttpResponse.statusCode) {
+      let errorMessage = String(data: uploadResponseData, encoding: .utf8) ?? "Unknown error"
+      throw AIError.fromHTTPStatusCode(uploadHttpResponse.statusCode, message: errorMessage)
+    }
     do {
       // Response structure for the upload
       struct FileResponse: Codable {
@@ -1180,7 +1188,7 @@ public final class GeminiClient: APIClient, Sendable {
         let error: ErrorInfo?
       }
 
-      var fileResponse = try JSONDecoder().decode(FileResponse.self, from: responseData)
+      var fileResponse = try JSONDecoder().decode(FileResponse.self, from: uploadResponseData)
       let fileUri = fileResponse.file.uri
       // Wait for video processing to complete
       while fileResponse.file.state == "PROCESSING" {
