@@ -374,7 +374,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               // Check if choices array exists and is not empty
               if let choices = chunk.choices, !choices.isEmpty, let delta = choices.first?.delta {
                 let reasoningText = delta.reasoningContent
-                let responseText = delta.content
+                let responseText = delta.content ?? delta.refusal
 
                 // Handle tool calls
                 if let deltaToolCalls = delta.toolCalls {
@@ -466,7 +466,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               throw AIError.parsing(message: "Failed to parse JSON from non-streamed response")
             }
             let reasoningText = message.reasoningContent
-            let responseText = message.content
+            let responseText = message.content ?? message.refusal
             var toolCalls: [AI.ToolCall] = []
 
             // Get tool calls if available
@@ -862,11 +862,13 @@ public final class ChatCompletionsClient: APIClient, Sendable {
 
   struct Delta: Decodable {
     let content: String?
+    let refusal: String?
     let reasoningContent: String?
     let toolCalls: [ToolCallDelta]?
 
     enum CodingKeys: String, CodingKey {
       case content
+      case refusal
       case reasoningContent = "reasoning_content"
       case toolCalls = "tool_calls"
     }
@@ -905,11 +907,13 @@ public final class ChatCompletionsClient: APIClient, Sendable {
 
   struct APIResponseMessage: Decodable {
     let content: String?
+    let refusal: String?
     let reasoningContent: String?
     let toolCalls: [ToolCall]?
 
     enum CodingKeys: String, CodingKey {
       case content
+      case refusal
       case reasoningContent = "reasoning_content"
       case toolCalls = "tool_calls"
     }
