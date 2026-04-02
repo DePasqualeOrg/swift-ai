@@ -2132,11 +2132,19 @@ public extension AnthropicClient {
       } else {
         patchedMessages
       }
-      // Convert Message to AnthropicClient.MessageParam
+      // Anthropic does not accept system/developer roles in messages; extract their text
+      // and merge it into the top-level system parameter (same approach as GeminiClient).
+      var additionalSystemTexts: [String] = []
       var messageParams: [AnthropicClient.MessageParam] = []
       for message in processedMessages {
         if message.role == .system || message.role == .developer {
-          anthropicLogger.warning("System/developer message found in messages array; ignoring, use systemPrompt parameter instead")
+          let text = message.content.compactMap { block -> String? in
+            if case let .text(text) = block { return text }
+            return nil
+          }.joined(separator: "\n")
+          if !text.isEmpty {
+            additionalSystemTexts.append(text)
+          }
           continue
         }
         let contentBlocks = try await anthropicContentBlocks(for: message)
@@ -2147,6 +2155,15 @@ public extension AnthropicClient {
           attachments: nil,
         ))
       }
+      // Combine the explicit systemPrompt with any system/developer messages from history
+      let combinedSystemPrompt: String? = {
+        var parts: [String] = []
+        if let systemPrompt, !systemPrompt.isEmpty {
+          parts.append(systemPrompt)
+        }
+        parts.append(contentsOf: additionalSystemTexts)
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+      }()
       // Temperature must be set to 1 when thinking is enabled.
       let adjustedTemperature = effectiveThinking != nil ? 1.0 : temperature
 
@@ -2155,7 +2172,7 @@ public extension AnthropicClient {
         model: modelId,
         messages: messageParams,
         maxTokens: maxTokens,
-        system: systemPrompt,
+        system: combinedSystemPrompt,
         temperature: adjustedTemperature,
         thinking: effectiveThinking,
         effort: configuration.effort,
