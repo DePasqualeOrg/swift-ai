@@ -1812,6 +1812,7 @@ extension ResponsesClient {
     func toGenerationResponse() -> GenerationResponse {
       var content: [Message.Content] = []
       var hasRefusal = false
+      var citationURLs: [(url: String, title: String?)] = []
 
       if let outputArray = output, !outputArray.isEmpty {
         for item in outputArray {
@@ -1823,6 +1824,14 @@ extension ResponsesClient {
                 for contentItem in contentArray {
                   if contentItem.type == OutputItemType.outputText, let text = contentItem.text, !text.isEmpty {
                     content.append(.text(text))
+                    // Collect URL citations from annotations
+                    if let annotations = contentItem.annotations {
+                      for annotation in annotations where annotation.type == "url_citation" {
+                        if let url = annotation.url {
+                          citationURLs.append((url: url, title: annotation.title))
+                        }
+                      }
+                    }
                   } else if contentItem.type == OutputItemType.refusal, let refusal = contentItem.refusal, !refusal.isEmpty {
                     content.append(.text(refusal))
                     hasRefusal = true
@@ -1885,6 +1894,20 @@ extension ResponsesClient {
         }
       } else if let outputText, !outputText.isEmpty {
         content.append(.text(outputText))
+      }
+
+      // Format URL citations as endnotes
+      if !citationURLs.isEmpty {
+        let uniqueURLs = citationURLs.reduce(into: [(url: String, title: String?)]()) { result, citation in
+          if !result.contains(where: { $0.url == citation.url }) {
+            result.append(citation)
+          }
+        }
+        let endnotes = uniqueURLs.map { citation in
+          let label = citation.title ?? citation.url
+          return "- [\(label)](\(citation.url))"
+        }.joined(separator: "\n") + "\n"
+        content.append(.endnotes(endnotes))
       }
 
       // Build metadata from response
