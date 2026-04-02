@@ -358,8 +358,21 @@ public final class ResponsesClient: APIClient, Sendable {
         }
 
       case .system, .developer:
-        openAIResponsesLogger.warning("System/Developer message found in input array for ResponsesClient. Ignoring, use 'instructions' parameter instead.")
-        return []
+        var contentItems: [[String: any Sendable]] = []
+        for block in message.content {
+          if case let .text(text) = block, !text.isEmpty {
+            contentItems.append([
+              "type": ContentType.inputText,
+              "text": text,
+            ])
+          }
+        }
+        guard !contentItems.isEmpty else { return [] }
+        return [[
+          "type": ContentType.message,
+          "role": message.role.rawValue,
+          "content": contentItems,
+        ]]
     }
   }
 
