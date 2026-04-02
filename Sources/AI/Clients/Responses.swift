@@ -1812,7 +1812,7 @@ extension ResponsesClient {
     func toGenerationResponse() -> GenerationResponse {
       var content: [Message.Content] = []
       var hasRefusal = false
-      var citations: [(label: String, url: String?)] = []
+      var citations: [(label: String, url: String?, fileId: String?)] = []
 
       if let outputArray = output, !outputArray.isEmpty {
         for item in outputArray {
@@ -1830,11 +1830,11 @@ extension ResponsesClient {
                         switch annotation.type {
                           case "url_citation":
                             if let url = annotation.url {
-                              citations.append((label: annotation.title ?? url, url: url))
+                              citations.append((label: annotation.title ?? url, url: url, fileId: nil))
                             }
                           case "file_citation", "container_file_citation":
                             if let filename = annotation.filename {
-                              citations.append((label: filename, url: nil))
+                              citations.append((label: filename, url: nil, fileId: annotation.fileId))
                             }
                           default:
                             break
@@ -1907,9 +1907,9 @@ extension ResponsesClient {
 
       // Format citations as endnotes
       if !citations.isEmpty {
-        let uniqueCitations = citations.reduce(into: [(label: String, url: String?)]()) { result, citation in
-          let key = citation.url ?? citation.label
-          if !result.contains(where: { ($0.url ?? $0.label) == key }) {
+        let uniqueCitations = citations.reduce(into: [(label: String, url: String?, fileId: String?)]()) { result, citation in
+          let key = citation.url ?? citation.fileId ?? citation.label
+          if !result.contains(where: { ($0.url ?? $0.fileId ?? $0.label) == key }) {
             result.append(citation)
           }
         }
