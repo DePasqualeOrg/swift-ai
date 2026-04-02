@@ -184,11 +184,18 @@ public struct GenerationResponse: Sendable, Hashable {
     return text.isEmpty ? nil : text
   }
 
-  /// The joined reasoning text from all `.thinking` content items, or `nil` if there are none.
+  /// The joined reasoning text from all `.thinking` content items and any opaque blocks
+  /// containing thinking content (e.g., Gemini signed thinking), or `nil` if there are none.
   public var reasoningText: String? {
     let text = content.compactMap { item -> String? in
-      guard case let .thinking(text, _) = item else { return nil }
-      return text
+      switch item {
+        case let .thinking(text, _):
+          return text
+        case let .providerOpaque(opaque) where opaque.type == "thinking":
+          return opaque.content
+        default:
+          return nil
+      }
     }.joined()
     return text.isEmpty ? nil : text
   }
