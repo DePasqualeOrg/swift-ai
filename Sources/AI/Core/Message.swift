@@ -160,7 +160,7 @@ public extension Message {
         case let .endnotes(endnotes): endnotes
         default: nil
       }
-    }.joined()
+    }.joined(separator: "\n\n")
     for item in content {
       guard case let .toolCall(toolCall) = item else { continue }
       let paramsJSON: String = if let data = toolCall.parametersToData(),
@@ -194,7 +194,7 @@ public extension Message {
         case let .endnotes(endnotes): endnotes
         default: nil
       }
-    }.joined()
+    }.joined(separator: "\n\n")
 
     for item in content {
       guard case let .toolResult(toolResult) = item else { continue }
