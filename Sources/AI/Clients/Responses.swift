@@ -118,38 +118,60 @@ public final class ResponsesClient: APIClient, Sendable {
       toolCallArgumentBuffers[outputIndex] = ""
     }
 
-    mutating func appendToolCallArgumentsDelta(_ delta: String, outputIndex: Int) {
-      let existingArgsString = toolCallArgumentBuffers[outputIndex] ?? ""
+    mutating func appendToolCallArgumentsDelta(_ delta: String, outputIndex: Int?) {
+      // Use a sentinel key for fallback tool calls without an output index
+      let key = outputIndex ?? -1
+      let existingArgsString = toolCallArgumentBuffers[key] ?? ""
       let newArgsString = existingArgsString + delta
-      toolCallArgumentBuffers[outputIndex] = newArgsString
+      toolCallArgumentBuffers[key] = newArgsString
 
-      guard case let .toolCall(currentToolCall)? = indexedContent[outputIndex] else { return }
-      guard let argsData = newArgsString.data(using: .utf8),
-            let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
-      else {
-        return
+      if let outputIndex, case let .toolCall(currentToolCall)? = indexedContent[outputIndex] {
+        guard let argsData = newArgsString.data(using: .utf8),
+              let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
+        else { return }
+        var updatedToolCall = currentToolCall
+        updatedToolCall.parameters = partialArgs
+        indexedContent[outputIndex] = .toolCall(updatedToolCall)
+      } else if outputIndex == nil, let lastIndex = fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } }) {
+        guard let argsData = newArgsString.data(using: .utf8),
+              let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
+        else { return }
+        if case let .toolCall(currentToolCall) = fallbackContent[lastIndex] {
+          var updatedToolCall = currentToolCall
+          updatedToolCall.parameters = partialArgs
+          fallbackContent[lastIndex] = .toolCall(updatedToolCall)
+        }
       }
-
-      var updatedToolCall = currentToolCall
-      updatedToolCall.parameters = partialArgs
-      indexedContent[outputIndex] = .toolCall(updatedToolCall)
     }
 
-    mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int) {
-      toolCallArgumentBuffers.removeValue(forKey: outputIndex)
-      guard case let .toolCall(currentToolCall)? = indexedContent[outputIndex] else { return }
+    mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int?) {
+      let key = outputIndex ?? -1
+      toolCallArgumentBuffers.removeValue(forKey: key)
 
-      var updatedToolCall = currentToolCall
+      var updatedToolCall: ToolCall?
+      if let outputIndex, case let .toolCall(currentToolCall)? = indexedContent[outputIndex] {
+        updatedToolCall = currentToolCall
+      } else if outputIndex == nil, let lastIndex = fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } }) {
+        if case let .toolCall(currentToolCall) = fallbackContent[lastIndex] {
+          updatedToolCall = currentToolCall
+        }
+      }
+
+      guard var toolCall = updatedToolCall else { return }
       if let argumentsData = argumentsString.data(using: .utf8),
          let parsedArguments = try? JSONDecoder().decode([String: Value].self, from: argumentsData)
       {
-        updatedToolCall.parameters = parsedArguments
+        toolCall.parameters = parsedArguments
       } else {
-        openAIResponsesLogger.error("Failed to parse final function call arguments for output index \(outputIndex): \(argumentsString)")
-        updatedToolCall.parameters = ["_parseError": .string("Failed to parse arguments JSON")]
+        openAIResponsesLogger.error("Failed to parse final function call arguments: \(argumentsString)")
+        toolCall.parameters = ["_parseError": .string("Failed to parse arguments JSON")]
       }
 
-      indexedContent[outputIndex] = .toolCall(updatedToolCall)
+      if let outputIndex {
+        indexedContent[outputIndex] = .toolCall(toolCall)
+      } else if let lastIndex = fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } }) {
+        fallbackContent[lastIndex] = .toolCall(toolCall)
+      }
     }
 
     private mutating func append(
@@ -957,18 +979,14 @@ public final class ResponsesClient: APIClient, Sendable {
         }
 
       case StreamEventType.functionCallArgumentsDelta:
-        if let delta = event.delta,
-           let outputIndex = event.outputIndex
-        {
-          streamingState.appendToolCallArgumentsDelta(delta, outputIndex: outputIndex)
+        if let delta = event.delta {
+          streamingState.appendToolCallArgumentsDelta(delta, outputIndex: event.outputIndex)
           yieldCurrentState()
         }
 
       case StreamEventType.functionCallArgumentsDone:
-        if let argumentsString = event.arguments,
-           let outputIndex = event.outputIndex
-        {
-          streamingState.completeToolCallArguments(argumentsString, outputIndex: outputIndex)
+        if let argumentsString = event.arguments {
+          streamingState.completeToolCallArguments(argumentsString, outputIndex: event.outputIndex)
           yieldCurrentState()
         }
 
