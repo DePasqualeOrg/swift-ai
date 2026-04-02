@@ -787,7 +787,7 @@ extension AnthropicClient {
                       snapshot.content[index].toolUse = toolUse
                     }
                   }
-                } else if snapshot.content[index].type == .serverToolUse, var serverToolUse = snapshot.content[index].serverToolUse, serverToolUse.name == "code_execution" {
+                } else if snapshot.content[index].type == .serverToolUse, var serverToolUse = snapshot.content[index].serverToolUse {
                   let existingJsonBuf: String = if case let .object(currentInputDict) = serverToolUse.input,
                                                    case let .string(buf) = currentInputDict[Value.jsonBufKey]
                   {
@@ -797,20 +797,30 @@ extension AnthropicClient {
                   }
                   let jsonBuf = existingJsonBuf + partialJson
                   if let jsonData = jsonBuf.data(using: .utf8) {
-                    struct TempServerToolInput: Decodable { let code: String }
-                    // Try to parse the complete {"code": "..."} structure
-                    let newInputValue: Value = if let tempInput = try? JSONDecoder().decode(TempServerToolInput.self, from: jsonData) {
-                      // Successfully parsed the full JSON for code input
-                      .object([
-                        "code": .string(tempInput.code),
-                        Value.jsonBufKey: .string(jsonBuf), // Keep buffer for potential further (though unlikely) deltas
-                      ])
-                    } else {
-                      // Parsing failed (likely incomplete JSON string), just store the buffer
-                      .object([Value.jsonBufKey: .string(jsonBuf)])
+                    do {
+                      if let parsedJson = try? JSONSerialization.jsonObject(with: jsonData) as? [String: any Sendable] {
+                        let jsonValue = try Value.fromAny(parsedJson)
+                        if case var .object(dict) = jsonValue {
+                          dict[Value.jsonBufKey] = .string(jsonBuf)
+                          serverToolUse.input = .object(dict)
+                        } else {
+                          var dict: [String: Value] = [:]
+                          dict["value"] = jsonValue
+                          dict[Value.jsonBufKey] = .string(jsonBuf)
+                          serverToolUse.input = .object(dict)
+                        }
+                      } else {
+                        var dict: [String: Value] = [:]
+                        dict[Value.jsonBufKey] = .string(jsonBuf)
+                        serverToolUse.input = .object(dict)
+                      }
+                      snapshot.content[index].serverToolUse = serverToolUse
+                    } catch {
+                      var dict: [String: Value] = [:]
+                      dict[Value.jsonBufKey] = .string(jsonBuf)
+                      serverToolUse.input = .object(dict)
+                      snapshot.content[index].serverToolUse = serverToolUse
                     }
-                    serverToolUse.input = newInputValue
-                    snapshot.content[index].serverToolUse = serverToolUse
                   }
                 }
               case .signatureDelta:
