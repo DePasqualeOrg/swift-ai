@@ -99,23 +99,19 @@ public enum Value: Hashable, Sendable {
   public var stringRepresentation: String {
     switch self {
       case .null:
-        return "null"
+        "null"
       case let .bool(value):
-        return value ? "true" : "false"
+        value ? "true" : "false"
       case let .int(value):
-        return String(value)
+        String(value)
       case let .double(value):
-        return String(value)
+        String(value)
       case let .string(value):
-        return value
+        value
       case let .array(value):
-        let elements = value.map { $0.stringRepresentation }.joined(separator: ", ")
-        return "[\(elements)]"
+        "[\(value.map { $0.stringRepresentation }.joined(separator: ", "))]"
       case let .object(value):
-        let pairs = value.map { key, val in
-          "\"\(key)\": \(val.stringRepresentation)"
-        }.joined(separator: ", ")
-        return "{\(pairs)}"
+        "{\(value.map { "\"\($0.key)\": \($0.value.stringRepresentation)" }.joined(separator: ", "))}"
     }
   }
 
