@@ -1804,10 +1804,18 @@ extension ResponsesClient {
                 }
               }
             case OutputItemType.reasoning:
-              let reasoningText = item.summary?
+              // Prefer reasoning text from content array (reasoning_text items),
+              // fall back to summary text
+              let reasoningContentText = item.content?
+                .filter { $0.type == "reasoning_text" }
                 .compactMap(\.text)
                 .joined(separator: "\n")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+              let summaryText = item.summary?
+                .compactMap(\.text)
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+              let reasoningText = (reasoningContentText?.isEmpty == false) ? reasoningContentText : summaryText
               if let reasoningText, !reasoningText.isEmpty {
                 content.append(.thinking(text: reasoningText, signature: nil))
               }
@@ -1816,7 +1824,7 @@ extension ResponsesClient {
                 content.append(.providerOpaque(OpaqueBlock(
                   provider: "openai-responses",
                   type: "reasoning",
-                  content: reasoningText,
+                  content: summaryText,
                   signature: itemId,
                   data: item.encryptedContent,
                 )))
