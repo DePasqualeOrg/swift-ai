@@ -743,14 +743,6 @@ public final class ResponsesClient: APIClient, Sendable {
     }
 
     let task = Task<GenerationResponse, Error> {
-      defer {
-        Task { @MainActor in
-          isGenerating = false
-          currentTask = nil
-          activeBackgroundResponseId = nil
-        }
-      }
-
       var finalContent: [Message.Content] = []
       var finalMetadata: GenerationResponse.Metadata?
 
@@ -806,8 +798,16 @@ public final class ResponsesClient: APIClient, Sendable {
     await MainActor.run {
       currentTask = task
     }
+    let result = await task.result
+    await cleanUpGeneration()
+    return try result.get()
+  }
 
-    return try await task.value
+  @MainActor
+  private func cleanUpGeneration() {
+    isGenerating = false
+    currentTask = nil
+    activeBackgroundResponseId = nil
   }
 
   /// Cancels any ongoing generation task and active background response.
@@ -1423,14 +1423,6 @@ public final class ResponsesClient: APIClient, Sendable {
     }
 
     let task = Task<GenerationResponse, Error> {
-      defer {
-        Task { @MainActor in
-          isGenerating = false
-          currentTask = nil
-          activeBackgroundResponseId = nil
-        }
-      }
-
       var finalContent: [Message.Content] = []
       var finalMetadata: GenerationResponse.Metadata?
 
@@ -1469,8 +1461,9 @@ public final class ResponsesClient: APIClient, Sendable {
     await MainActor.run {
       currentTask = task
     }
-
-    return try await task.value
+    let result = await task.result
+    await cleanUpGeneration()
+    return try result.get()
   }
 }
 

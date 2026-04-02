@@ -2089,12 +2089,6 @@ public extension AnthropicClient {
     await MainActor.run { isGenerating = true }
     // Create a task that can be canceled and returns a result even when cancelled
     let task = Task<(GenerationResponse, Bool), Error> {
-      defer {
-        Task { @MainActor in
-          isGenerating = false
-          currentTask = nil
-        }
-      }
       var wasCancelled = false
       var latestSnapshot: APIMessage?
       var finalMessage: APIMessage?
@@ -2255,24 +2249,26 @@ public extension AnthropicClient {
     await MainActor.run {
       currentTask = task
     }
-    do {
-      let (result, wasCancelled) = try await task.value
-      // If the task was cancelled, we don't throw an error but just return the partial results
-      if wasCancelled {
+    let taskResult = await task.result
+    await cleanUpGeneration()
+    switch taskResult {
+      case let .success((result, _)):
         return result
-      }
-      return result
-    } catch {
-      // For non-cancellation errors, propagate them
-      if let aiError = error as? AIError {
-        throw aiError
-      } else if error is CancellationError {
-        // This should be rare since we handle cancellation in the task
-        return .init(content: [])
-      } else {
-        throw AIError.network(underlying: error)
-      }
+      case let .failure(error):
+        if let aiError = error as? AIError {
+          throw aiError
+        } else if error is CancellationError {
+          return .init(content: [])
+        } else {
+          throw AIError.network(underlying: error)
+        }
     }
+  }
+
+  @MainActor
+  private func cleanUpGeneration() {
+    isGenerating = false
+    currentTask = nil
   }
 
   private static func formatEndnotesList(urlStrings: [String]) -> String? {

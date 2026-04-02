@@ -675,12 +675,6 @@ public final class ChatCompletionsClient: APIClient, Sendable {
   ) async throws -> GenerationResponse {
     await MainActor.run { isGenerating = true }
     let task = Task<GenerationResponse, Error> {
-      defer {
-        Task { @MainActor in
-          isGenerating = false
-          currentTask = nil
-        }
-      }
       var fullReasoningText = ""
       var fullResponseText = ""
       var notesText: String?
@@ -761,7 +755,15 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     await MainActor.run {
       currentTask = task
     }
-    return try await task.value
+    let result = await task.result
+    await cleanUpGeneration()
+    return try result.get()
+  }
+
+  @MainActor
+  private func cleanUpGeneration() {
+    isGenerating = false
+    currentTask = nil
   }
 
   /// Cancels any ongoing generation task.
