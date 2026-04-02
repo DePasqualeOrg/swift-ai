@@ -631,7 +631,7 @@ struct ChatCompletionsClientTests {
 
     // Verify model and other parameters
     #expect(body?["model"] as? String == "gpt-4")
-    #expect(body?["max_tokens"] as? Int == 1024)
+    #expect(body?["max_completion_tokens"] as? Int == 1024)
     #expect(body?["stream"] as? Bool == true)
 
     // Use approximate comparison for floating-point

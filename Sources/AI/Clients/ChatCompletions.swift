@@ -281,7 +281,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       "stream": stream,
     ]
     if let maxTokens {
-      body["max_tokens"] = maxTokens
+      body["max_completion_tokens"] = maxTokens
     }
     if let temperature {
       body["temperature"] = temperature
