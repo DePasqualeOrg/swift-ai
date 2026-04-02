@@ -126,19 +126,22 @@ enum MediaProcessor {
     "data:\(mimeType);base64,\(data.base64EncodedString())"
   }
 
-  /// Image MIME types supported by Anthropic's API.
-  static let anthropicSupportedImageTypes: Set<String> = [
-    "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp",
+  /// Image MIME types accepted by Anthropic's API.
+  private static let anthropicSupportedImageTypes: Set<String> = [
+    "image/jpeg", "image/png", "image/gif", "image/webp",
   ]
 
   /// Converts an image to a format supported by Anthropic if needed.
   /// Unsupported formats (e.g., HEIC) are converted to JPEG.
+  /// Also canonicalizes MIME type aliases (e.g., `image/jpg` → `image/jpeg`).
   static func normalizeImageForAnthropic(
     _ imageData: Data,
     mimeType: String,
   ) async throws -> (data: Data, mimeType: String) {
-    if anthropicSupportedImageTypes.contains(mimeType.lowercased()) {
-      return (imageData, mimeType)
+    // Canonicalize common alias
+    let canonicalMime = mimeType.lowercased() == "image/jpg" ? "image/jpeg" : mimeType
+    if anthropicSupportedImageTypes.contains(canonicalMime.lowercased()) {
+      return (imageData, canonicalMime)
     }
     // Convert unsupported format to JPEG
     guard let source = CGImageSourceCreateWithData(imageData as CFData, nil),
