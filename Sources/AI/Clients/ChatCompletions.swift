@@ -308,7 +308,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           // Transform schema for strict mode compliance if enabled
           = if enableStrictModeForTools
         {
-          Value.schemaForStrictMode(tool.rawInputSchema)
+          try Value.schemaForStrictMode(tool.rawInputSchema)
         } else {
           Value.toSendable(tool.rawInputSchema)
         }

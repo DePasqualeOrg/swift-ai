@@ -194,8 +194,14 @@ public enum Value: Hashable, Sendable {
   /// Converts a JSON schema dictionary for OpenAI strict mode compliance.
   /// Ensures "additionalProperties": false is set on all object types
   /// and all properties are included in the "required" array.
-  /// Non-nullable optional properties are automatically made nullable.
-  static func schemaForStrictMode(_ schema: [String: Value]) -> [String: any Sendable] {
+  ///
+  /// Throws if any property is optional (not in `required`) and not nullable, since strict mode
+  /// requires all properties to be in `required`. The OpenAI TS SDK handles this the same way:
+  /// it throws rather than silently rewriting, because auto-fixing creates a mismatch between
+  /// the wire schema (where the field is required+nullable) and the original schema used for
+  /// local validation in `Tools.call()`. Optional properties must be declared as nullable in
+  /// the original schema to be compatible with strict mode.
+  static func schemaForStrictMode(_ schema: [String: Value], path: [String] = []) throws -> [String: any Sendable] {
     var result: [String: any Sendable] = [:]
 
     let isObjectType = if case let .string(typeStr) = schema["type"] {
@@ -219,18 +225,21 @@ public enum Value: Hashable, Sendable {
           var convertedProps: [String: any Sendable] = [:]
           for (propName, propSchema) in props {
             propertyNames.append(propName)
-            // Recurse first so nested objects get strict constraints while still recognized as object type
-            var converted: any Sendable = if case let .object(propSchemaDict) = propSchema {
-              schemaForStrictMode(propSchemaDict)
+            // Strict mode requires all fields in "required". Reject optional fields that
+            // are not nullable, since the model could return null and local validation
+            // would then fail against the original schema.
+            if !originalRequired.contains(propName), !isNullableSchema(propSchema) {
+              let fieldPath = (path + ["properties", propName]).joined(separator: "/")
+              throw AIError.invalidRequest(
+                message: "Strict mode requires all properties to be required. Property '\(fieldPath)' is optional but not nullable. "
+                  + "Either add it to the 'required' array, make it nullable (e.g. type: [\"string\", \"null\"]), or disable enableStrictModeForTools.",
+              )
+            }
+            convertedProps[propName] = if case let .object(propSchemaDict) = propSchema {
+              try schemaForStrictMode(propSchemaDict, path: path + ["properties", propName])
             } else {
               propSchema.toAny()
             }
-            // Strict mode requires all fields in "required".
-            // Auto-fix non-nullable optional properties by making them nullable.
-            if !originalRequired.contains(propName), !isNullableSchema(propSchema) {
-              converted = makeNullableSendable(converted)
-            }
-            convertedProps[propName] = converted
           }
           result[key] = convertedProps
         } else {
@@ -238,15 +247,15 @@ public enum Value: Hashable, Sendable {
         }
       } else if key == "items" {
         if case let .object(itemSchema) = value {
-          result[key] = schemaForStrictMode(itemSchema)
+          result[key] = try schemaForStrictMode(itemSchema, path: path + ["items"])
         } else {
           result[key] = value.toAny()
         }
       } else if key == "anyOf" {
         if case let .array(variants) = value {
-          result[key] = variants.map { variant -> any Sendable in
+          result[key] = try variants.enumerated().map { i, variant -> any Sendable in
             if case let .object(variantDict) = variant {
-              schemaForStrictMode(variantDict)
+              try schemaForStrictMode(variantDict, path: path + ["anyOf", String(i)])
             } else {
               variant.toAny()
             }
@@ -256,9 +265,9 @@ public enum Value: Hashable, Sendable {
         }
       } else if key == "allOf" || key == "oneOf" {
         if case let .array(variants) = value {
-          result[key] = variants.map { variant -> any Sendable in
+          result[key] = try variants.enumerated().map { i, variant -> any Sendable in
             if case let .object(variantDict) = variant {
-              schemaForStrictMode(variantDict)
+              try schemaForStrictMode(variantDict, path: path + [key, String(i)])
             } else {
               variant.toAny()
             }
@@ -271,7 +280,7 @@ public enum Value: Hashable, Sendable {
           var convertedDefs: [String: any Sendable] = [:]
           for (defName, defSchema) in defs {
             if case let .object(defSchemaDict) = defSchema {
-              convertedDefs[defName] = schemaForStrictMode(defSchemaDict)
+              convertedDefs[defName] = try schemaForStrictMode(defSchemaDict, path: path + [key, defName])
             } else {
               convertedDefs[defName] = defSchema.toAny()
             }
@@ -283,7 +292,7 @@ public enum Value: Hashable, Sendable {
       } else if key == "additionalProperties" {
         // Preserve existing additionalProperties (may be a schema for map types)
         if case let .object(apSchema) = value {
-          result[key] = schemaForStrictMode(apSchema)
+          result[key] = try schemaForStrictMode(apSchema, path: path + ["additionalProperties"])
         } else {
           result[key] = value.toAny()
         }
@@ -304,29 +313,6 @@ public enum Value: Hashable, Sendable {
     }
 
     return result
-  }
-
-  /// Makes a converted schema (Sendable) nullable by adding "null" to its type,
-  /// or wrapping in anyOf if no type field is present.
-  private static func makeNullableSendable(_ schema: any Sendable) -> any Sendable {
-    guard var dict = schema as? [String: any Sendable] else { return schema }
-    if let type = dict["type"] {
-      if let typeStr = type as? String {
-        // "string" → ["string", "null"]
-        dict["type"] = [typeStr, "null"] as [String]
-        return dict
-      }
-      if var types = type as? [String] {
-        // ["string", "integer"] → ["string", "integer", "null"]
-        if !types.contains("null") {
-          types.append("null")
-          dict["type"] = types
-        }
-        return dict
-      }
-    }
-    // No type field ($ref, enum, const, etc.) — wrap in anyOf with null variant
-    return ["anyOf": [dict, ["type": "null"]]] as [String: any Sendable]
   }
 
   /// Checks whether a JSON schema value is nullable (accepts null).
