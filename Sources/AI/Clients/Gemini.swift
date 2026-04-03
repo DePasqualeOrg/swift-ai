@@ -443,25 +443,25 @@ public final class GeminiClient: APIClient, Sendable {
           }
         case .assistant, .user, .tool:
           let parts = try await requestParts(for: message, apiKey: apiKey)
+          guard !parts.isEmpty else { continue }
           let role = switch message.role {
             case .assistant: "model"
             case .tool: "user"
             default: message.role.rawValue
           }
-          if parts.isEmpty {
-            // When a model turn has no serializable parts, also remove the preceding
-            // user turn to maintain Gemini's required user/model alternation.
-            if role == "model",
-               processedMessages.last?["role"] as? String == "user"
-            {
-              processedMessages.removeLast()
-            }
-            continue
+          // Merge consecutive same-role turns to maintain Gemini's required
+          // user/model alternation (can happen when an empty model turn is skipped).
+          if let lastRole = processedMessages.last?["role"] as? String, lastRole == role,
+             var lastParts = processedMessages.last?["parts"] as? [[String: any Sendable]]
+          {
+            lastParts.append(contentsOf: parts)
+            processedMessages[processedMessages.count - 1]["parts"] = lastParts
+          } else {
+            processedMessages.append([
+              "role": role,
+              "parts": parts,
+            ])
           }
-          processedMessages.append([
-            "role": role,
-            "parts": parts,
-          ])
       }
     }
 
@@ -1460,11 +1460,7 @@ extension GeminiClient {
       } else if key == "items" {
         // Recursively convert array item schema
         if case let .object(itemSchema) = value {
-          var convertedItems = convertSchemaForGemini(itemSchema)
-          // Ensure items has a type (default to STRING if missing)
-          if convertedItems["type"] == nil {
-            convertedItems["type"] = "STRING"
-          }
+          let convertedItems = convertSchemaForGemini(itemSchema)
           result[key] = convertedItems
         } else {
           result[key] = value.toAny()
