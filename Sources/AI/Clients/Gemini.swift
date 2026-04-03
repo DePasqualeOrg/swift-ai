@@ -477,10 +477,12 @@ public final class GeminiClient: APIClient, Sendable {
       generationConfig["temperature"] = nil
     } else if let thinkingBudget {
       // Gemini 2.5 models: use thinkingBudget
-      generationConfig["thinkingConfig"] = [
-        "thinkingBudget": thinkingBudget,
-        "includeThoughts": true,
-      ] as [String: any Sendable]
+      // A negative value (sentinel from thinkingConfig) means "enable thinking with server default budget"
+      var thinkingConfig: [String: any Sendable] = ["includeThoughts": true]
+      if thinkingBudget >= 0 {
+        thinkingConfig["thinkingBudget"] = thinkingBudget
+      }
+      generationConfig["thinkingConfig"] = thinkingConfig
       // Don't set temperature for thinking models, since it can interfere with reasoning
       generationConfig["temperature"] = nil
     }
