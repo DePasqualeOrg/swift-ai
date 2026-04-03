@@ -1384,28 +1384,29 @@ public final class ResponsesClient: APIClient, Sendable {
       }
     }
 
-    // If the stream ended without a response.completed event, finalize from
-    // the accumulated state and the response.created snapshot, matching how the
-    // OpenAI TS SDK calls endRequest() with its accumulated snapshot on EOF.
+    // Best-effort EOF fallback: if the stream ended without a response.completed
+    // event, yield a terminal chunk from the accumulated streaming state and the
+    // response.created snapshot. This does not fully match the OpenAI TS SDK's
+    // accumulated snapshot, which also mutates on output_item.added and
+    // content_part.added events — output items we only log or ignore (e.g.,
+    // web_search_call, code_interpreter_call) are not captured here, and message
+    // annotations/endnotes from the completed response are absent.
     if !receivedCompletedEvent {
-      let content = streamingState.content
-      if !content.isEmpty {
-        var createdAtDate: Date?
-        if let createdAt = responseSnapshot?.createdAt {
-          createdAtDate = Date(timeIntervalSince1970: TimeInterval(createdAt))
-        }
-        let metadata = GenerationResponse.Metadata(
-          responseId: responseSnapshot?.id,
-          model: responseSnapshot?.model,
-          createdAt: createdAtDate,
-          inputTokens: responseSnapshot?.usage?.inputTokens,
-          outputTokens: responseSnapshot?.usage?.outputTokens,
-          totalTokens: responseSnapshot?.usage?.totalTokens,
-          cacheReadInputTokens: responseSnapshot?.usage?.inputTokensDetails?.cachedTokens,
-          reasoningTokens: responseSnapshot?.usage?.outputTokensDetails?.reasoningTokens,
-        )
-        continuation.yield(GenerationResponse(content: content, metadata: metadata))
+      var createdAtDate: Date?
+      if let createdAt = responseSnapshot?.createdAt {
+        createdAtDate = Date(timeIntervalSince1970: TimeInterval(createdAt))
       }
+      let metadata = GenerationResponse.Metadata(
+        responseId: responseSnapshot?.id,
+        model: responseSnapshot?.model,
+        createdAt: createdAtDate,
+        inputTokens: responseSnapshot?.usage?.inputTokens,
+        outputTokens: responseSnapshot?.usage?.outputTokens,
+        totalTokens: responseSnapshot?.usage?.totalTokens,
+        cacheReadInputTokens: responseSnapshot?.usage?.inputTokensDetails?.cachedTokens,
+        reasoningTokens: responseSnapshot?.usage?.outputTokensDetails?.reasoningTokens,
+      )
+      continuation.yield(GenerationResponse(content: streamingState.content, metadata: metadata))
     }
   }
 
