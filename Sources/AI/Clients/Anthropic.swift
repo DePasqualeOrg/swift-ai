@@ -2032,7 +2032,7 @@ extension AnthropicClient {
       let webSearchContainer = try? decoder.container(keyedBy: WebSearchCodingKeys.self)
       if let name = try? webSearchContainer?.decode(String.self, forKey: .name),
          let type = try? webSearchContainer?.decode(String.self, forKey: .type),
-         name == "web_search", type == "web_search_20250305"
+         name == "web_search", type.hasPrefix("web_search_")
       {
         self = .webSearch
         return
@@ -2042,7 +2042,7 @@ extension AnthropicClient {
       let webFetchContainer = try? decoder.container(keyedBy: WebFetchCodingKeys.self)
       if let name = try? webFetchContainer?.decode(String.self, forKey: .name),
          let type = try? webFetchContainer?.decode(String.self, forKey: .type),
-         name == "web_fetch", type == "web_fetch_20250910"
+         name == "web_fetch", type.hasPrefix("web_fetch_")
       {
         self = .webFetch
         return
@@ -2052,7 +2052,7 @@ extension AnthropicClient {
       let codeExecutionContainer = try? decoder.container(keyedBy: CodeExecutionCodingKeys.self)
       if let name = try? codeExecutionContainer?.decode(String.self, forKey: .name),
          let type = try? codeExecutionContainer?.decode(String.self, forKey: .type),
-         name == "code_execution", type == "code_execution_20250522"
+         name == "code_execution", type.hasPrefix("code_execution_")
       {
         self = .codeExecution
         return

@@ -435,4 +435,45 @@ struct AnthropicClientTests {
       // Other errors may occur depending on timing
     }
   }
+
+  // MARK: - Server-Side Tool Decoder Tests
+
+  @Test
+  func `Decodes newer web_fetch version tag`() throws {
+    let json = """
+    {"name": "web_fetch", "type": "web_fetch_20260209"}
+    """
+    let tool = try JSONDecoder().decode(AnthropicClient.APITool.self, from: #require(json.data(using: .utf8)))
+    if case .webFetch = tool {
+      // Expected
+    } else {
+      Issue.record("Expected .webFetch but got \(tool)")
+    }
+  }
+
+  @Test
+  func `Decodes newer code_execution version tag`() throws {
+    let json = """
+    {"name": "code_execution", "type": "code_execution_20250825"}
+    """
+    let tool = try JSONDecoder().decode(AnthropicClient.APITool.self, from: #require(json.data(using: .utf8)))
+    if case .codeExecution = tool {
+      // Expected
+    } else {
+      Issue.record("Expected .codeExecution but got \(tool)")
+    }
+  }
+
+  @Test
+  func `Decodes newer web_search version tag`() throws {
+    let json = """
+    {"name": "web_search", "type": "web_search_20260401"}
+    """
+    let tool = try JSONDecoder().decode(AnthropicClient.APITool.self, from: #require(json.data(using: .utf8)))
+    if case .webSearch = tool {
+      // Expected
+    } else {
+      Issue.record("Expected .webSearch but got \(tool)")
+    }
+  }
 }
