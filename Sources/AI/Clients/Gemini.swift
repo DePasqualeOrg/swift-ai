@@ -395,13 +395,12 @@ public final class GeminiClient: APIClient, Sendable {
     return parts
   }
 
-  /// Sends a request to the Gemini streaming endpoint (`:streamGenerateContent?alt=sse`).
+  /// Sends a request to the Gemini API.
   ///
-  /// Both `generateText` and `streamText` use this method. The Gemini TS SDK splits
-  /// buffered calls onto `:generateContent` and reserves SSE for streaming, but using
-  /// the streaming endpoint for both avoids maintaining a separate transport and parsing
-  /// path. If a concrete API incompatibility arises (e.g., custom endpoints that only
-  /// implement `:generateContent`), this can be split into separate paths.
+  /// When `streaming` is true, uses `:streamGenerateContent?alt=sse` and returns
+  /// incremental SSE chunks. When false, uses `:generateContent` and returns the
+  /// complete response as a single-element stream, matching the Gemini TS SDK's
+  /// endpoint split.
   private func streamResponse(
     messages: [Message],
     systemPrompt: String?,
@@ -416,13 +415,17 @@ public final class GeminiClient: APIClient, Sendable {
     thinkingBudget: Int?, // For Gemini 2.5 models
     thinkingLevel: ThinkingLevel?, // For Gemini 3 models
     tools: [Tool] = [],
+    streaming: Bool = true,
   ) async throws -> AsyncThrowingStream<StreamResponse, Error> {
-    let url = modelsEndpoint.appending(path: "\(modelId):streamGenerateContent")
+    let action = streaming ? "streamGenerateContent" : "generateContent"
+    let url = modelsEndpoint.appending(path: "\(modelId):\(action)")
     guard var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
       throw AIError.invalidRequest(message: "Failed to construct URL components for model: \(modelId)")
     }
     urlComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-    urlComponents.queryItems?.append(URLQueryItem(name: "alt", value: "sse"))
+    if streaming {
+      urlComponents.queryItems?.append(URLQueryItem(name: "alt", value: "sse"))
+    }
     guard let requestURL = urlComponents.url else {
       throw AIError.invalidRequest(message: "Failed to construct request URL for model: \(modelId)")
     }
@@ -581,11 +584,181 @@ public final class GeminiClient: APIClient, Sendable {
       body["systemInstruction"] = ["parts": systemParts]
     }
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
-    let (result, response) = try await session.bytes(for: request)
-    return processStreamBytes(result: result, response: response)
+    if streaming {
+      let (result, response) = try await session.bytes(for: request)
+      return processStreamBytes(result: result, response: response)
+    } else {
+      let (data, response) = try await session.data(for: request)
+      return processBufferedResponse(data: data, response: response)
+    }
   }
 
-  /// Process the raw bytes into a stream of responses
+  /// Parse a single Gemini response JSON object and yield `StreamResponse` items.
+  ///
+  /// Returns `true` if parsing terminated the stream (e.g., a blocking error),
+  /// meaning the caller should not continue processing further chunks.
+  private func processResponseChunk(
+    _ jsonObject: [String: any Sendable]?,
+    continuation: AsyncThrowingStream<StreamResponse, Error>.Continuation,
+  ) throws -> Bool {
+    // Check for promptFeedback (indicates a blocked prompt)
+    if let promptFeedback = jsonObject?["promptFeedback"] as? [String: any Sendable],
+       let blockReason = promptFeedback["blockReason"] as? String
+    {
+      let blockMessage = (promptFeedback["blockReasonMessage"] as? String) ?? "Content was blocked."
+      geminiLogger.warning("Prompt blocked: \(blockReason) - \(blockMessage)")
+
+      let errorResponse = GenerateContentResponse(
+        candidates: nil,
+        promptFeedback: PromptFeedback(),
+        usageMetadata: nil,
+      )
+
+      continuation.finish(throwing: GeminiError(
+        message: "Your request was blocked: \(blockMessage)",
+        response: errorResponse,
+      ))
+      return true
+    }
+
+    // Check for safety ratings in candidates
+    if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
+       let firstCandidate = candidates.first
+    {
+      if let finishReason = firstCandidate["finishReason"] as? String {
+        let contentBlockingReasons: Set = [
+          "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT",
+          "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION",
+        ]
+        if contentBlockingReasons.contains(finishReason) {
+          let finishMessage = (firstCandidate["finishMessage"] as? String) ?? "Content was blocked due to finish reason \"\(finishReason.lowercased())\"."
+          let candidate = Candidate(
+            content: nil,
+            finishReason: FinishReason(rawValue: finishReason) ?? .safety,
+            safetyRatings: nil,
+            citationMetadata: nil,
+            tokenCount: nil,
+            avgLogprobs: nil,
+            index: 0,
+            groundingMetadata: nil,
+          )
+          let errorResponse = GenerateContentResponse(
+            candidates: [candidate],
+            promptFeedback: nil,
+            usageMetadata: nil,
+          )
+          continuation.finish(throwing: GeminiError(
+            message: "\(finishMessage)",
+            response: errorResponse,
+          ))
+          return true
+        }
+      }
+    }
+
+    // Extract text chunks
+    if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
+       let firstCandidate = candidates.first,
+       let content = firstCandidate["content"] as? [String: any Sendable],
+       let parts = content["parts"] as? [[String: any Sendable]]
+    {
+      for part in parts {
+        if let text = part["text"] as? String {
+          let isThinkingText =
+            if let thought = part["thought"] as? Bool { thought }
+            else if let thought = part["thought"] as? Int { thought == 1 }
+            else { false }
+          let signature = isThinkingText ? part["thoughtSignature"] as? String : nil
+          continuation.yield(StreamResponse(text: text, thought: isThinkingText, thoughtSignature: signature, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
+        } else if let functionCall = part["functionCall"] as? [String: any Sendable],
+                  let name = functionCall["name"] as? String,
+                  let args = functionCall["args"] as? [String: any Sendable]
+        {
+          let parameters = try args.mapValues { try Value.fromAny($0) }
+          var providerMetadata: [String: String]?
+          if let thoughtSignature = part["thoughtSignature"] as? String {
+            providerMetadata = ["thoughtSignature": thoughtSignature]
+          }
+          let toolCallId = functionCall["id"] as? String ?? generateShortId()
+          let toolCallResponse = ToolCall(
+            name: name,
+            id: toolCallId,
+            parameters: parameters,
+            providerMetadata: providerMetadata,
+          )
+          continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: toolCallResponse, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
+        } else if let executableCodeDict = part["executableCode"] as? [String: any Sendable] {
+          do {
+            let jsonData = try JSONSerialization.data(withJSONObject: executableCodeDict)
+            let executableCode = try JSONDecoder().decode(ExecutableCode.self, from: jsonData)
+            let languageTag = (executableCode.language ?? "").lowercased()
+            let displayText = executableCode.code.map { "\n\n```\(languageTag)\n\($0)\n```\n\n" }
+            let rawJson = String(data: jsonData, encoding: .utf8)
+            let block = OpaqueBlock(
+              provider: "gemini", type: "executableCode",
+              content: displayText, data: rawJson,
+              isResponseContent: displayText != nil,
+            )
+            continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+          } catch {
+            geminiLogger.error("Failed to decode ExecutableCode: \(error.localizedDescription)")
+          }
+        } else if let codeExecutionResultDict = part["codeExecutionResult"] as? [String: any Sendable] {
+          do {
+            let jsonData = try JSONSerialization.data(withJSONObject: codeExecutionResultDict)
+            let executionResult = try JSONDecoder().decode(CodeExecutionResult.self, from: jsonData)
+            let displayText = executionResult.output.map { "\n\n```\n\($0)\($0.last == "\n" ? "" : "\n")```\n\n" }
+            let rawJson = String(data: jsonData, encoding: .utf8)
+            let block = OpaqueBlock(
+              provider: "gemini", type: "codeExecutionResult",
+              content: displayText, data: rawJson,
+              isResponseContent: displayText != nil,
+            )
+            continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+          } catch {
+            geminiLogger.error("Failed to decode CodeExecutionResult: \(error.localizedDescription)")
+          }
+        } else if let thoughtSignature = part["thoughtSignature"] as? String {
+          // Standalone thoughtSignature part (no text or functionCall)
+          continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: thoughtSignature, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
+        }
+      }
+    }
+
+    // Extract grounding metadata
+    if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
+       let firstCandidate = candidates.first,
+       let groundingMetadataDict = firstCandidate["groundingMetadata"] as? [String: any Sendable]
+    {
+      let metadataData = try JSONSerialization.data(withJSONObject: groundingMetadataDict)
+      let groundingMetadata = try JSONDecoder().decode(GroundingMetadata.self, from: metadataData)
+      continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: groundingMetadata, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
+    }
+
+    // Parse usage metadata
+    if let usageMetadataDict = jsonObject?["usageMetadata"] as? [String: any Sendable] {
+      do {
+        let metadataData = try JSONSerialization.data(withJSONObject: usageMetadataDict)
+        let decodedUsageMetadata = try JSONDecoder().decode(UsageMetadata.self, from: metadataData)
+        continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: decodedUsageMetadata, finishReason: nil))
+      } catch {
+        geminiLogger.error("Failed to decode usageMetadata: \(error.localizedDescription)")
+      }
+    }
+
+    // Check for finish reason and yield it
+    if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
+       let firstCandidate = candidates.first,
+       let finishReasonString = firstCandidate["finishReason"] as? String
+    {
+      let finishReason = FinishReason(rawValue: finishReasonString) ?? .other
+      continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: finishReason))
+    }
+
+    return false
+  }
+
+  /// Process SSE bytes into a stream of responses.
   private func processStreamBytes(result: URLSession.AsyncBytes, response: URLResponse) -> AsyncThrowingStream<StreamResponse, Error> {
     let (stream, continuation) = AsyncThrowingStream<StreamResponse, Error>.makeStream()
     let task = Task {
@@ -595,7 +768,6 @@ public final class GeminiClient: APIClient, Sendable {
         }
 
         if !(200 ... 299).contains(httpResponse.statusCode) {
-          // Parse the error message from the response body
           var errorMessage: String?
           do {
             var errorData = Data()
@@ -603,24 +775,7 @@ public final class GeminiClient: APIClient, Sendable {
               try Task.checkCancellation()
               errorData.append(byte)
             }
-
-            struct GeminiErrorResponse: Codable {
-              struct ErrorDetail: Codable {
-                let message: String
-                let status: String
-                let code: Int
-              }
-
-              let error: ErrorDetail
-            }
-
-            if let errorResponse = try? JSONDecoder().decode(GeminiErrorResponse.self, from: errorData) {
-              errorMessage = errorResponse.error.message
-            } else if let errorArray = try? JSONDecoder().decode([GeminiErrorResponse].self, from: errorData),
-                      let firstError = errorArray.first
-            {
-              errorMessage = firstError.error.message
-            }
+            errorMessage = Self.parseGeminiErrorMessage(from: errorData)
           } catch {
             geminiLogger.error("Failed to read error response: \(error)")
           }
@@ -639,174 +794,13 @@ public final class GeminiClient: APIClient, Sendable {
             }
             let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: any Sendable]
 
-            // Check for promptFeedback (indicates a blocked prompt)
-            if let promptFeedback = jsonObject?["promptFeedback"] as? [String: any Sendable],
-               let blockReason = promptFeedback["blockReason"] as? String
-            {
-              let blockMessage = (promptFeedback["blockReasonMessage"] as? String) ?? "Content was blocked."
-              geminiLogger.warning("Prompt blocked: \(blockReason) - \(blockMessage)")
-
-              // Create a GenerateContentResponse to include in the error
-              let errorResponse = GenerateContentResponse(
-                candidates: nil,
-                promptFeedback: PromptFeedback(),
-                usageMetadata: nil,
-              )
-
-              continuation.finish(throwing: GeminiError(
-                message: "Your request was blocked: \(blockMessage)",
-                response: errorResponse,
-              ))
+            if try processResponseChunk(jsonObject, continuation: continuation) {
               return
             }
-
-            // Check for safety ratings in candidates
-            if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
-               let firstCandidate = candidates.first
-            {
-              // Check for finish reason first
-              if let finishReason = firstCandidate["finishReason"] as? String {
-                let contentBlockingReasons: Set = [
-                  "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT",
-                  "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION",
-                ]
-                if contentBlockingReasons.contains(finishReason) {
-                  let finishMessage = (firstCandidate["finishMessage"] as? String) ?? "Content was blocked due to finish reason \"\(finishReason.lowercased())\"."
-                  let candidate = Candidate(
-                    content: nil,
-                    finishReason: FinishReason(rawValue: finishReason) ?? .safety,
-                    safetyRatings: nil,
-                    citationMetadata: nil,
-                    tokenCount: nil,
-                    avgLogprobs: nil,
-                    index: 0,
-                    groundingMetadata: nil,
-                  )
-                  let errorResponse = GenerateContentResponse(
-                    candidates: [candidate],
-                    promptFeedback: nil,
-                    usageMetadata: nil,
-                  )
-                  continuation.finish(throwing: GeminiError(
-                    message: "\(finishMessage)",
-                    response: errorResponse,
-                  ))
-                  return
-                }
-                // All other finish reasons (STOP, MAX_TOKENS, MALFORMED_FUNCTION_CALL,
-                // UNEXPECTED_TOOL_CALL, LANGUAGE, NO_IMAGE, OTHER, etc.) continue
-                // parsing so text/metadata in the chunk is not lost.
-              }
-            }
-
-            // Extract text chunks
-            if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
-               let firstCandidate = candidates.first,
-               let content = firstCandidate["content"] as? [String: any Sendable],
-               let parts = content["parts"] as? [[String: any Sendable]]
-            {
-              for part in parts {
-                if let text = part["text"] as? String {
-                  let isThinkingText =
-                    if let thought = part["thought"] as? Bool { thought }
-                    else if let thought = part["thought"] as? Int { thought == 1 }
-                    else { false }
-                  let signature = isThinkingText ? part["thoughtSignature"] as? String : nil
-                  continuation.yield(StreamResponse(text: text, thought: isThinkingText, thoughtSignature: signature, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
-                } else if let functionCall = part["functionCall"] as? [String: any Sendable],
-                          let name = functionCall["name"] as? String,
-                          let args = functionCall["args"] as? [String: any Sendable]
-                {
-                  // Handle function call
-                  let parameters = try args.mapValues { try Value.fromAny($0) }
-                  // Extract thoughtSignature if present (required for Gemini tool use)
-                  var providerMetadata: [String: String]?
-                  if let thoughtSignature = part["thoughtSignature"] as? String {
-                    providerMetadata = ["thoughtSignature": thoughtSignature]
-                  }
-                  let toolCallId = functionCall["id"] as? String ?? generateShortId()
-                  let toolCallResponse = ToolCall(
-                    name: name,
-                    id: toolCallId,
-                    parameters: parameters,
-                    providerMetadata: providerMetadata,
-                  )
-                  continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: toolCallResponse, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
-                } else if let executableCodeDict = part["executableCode"] as? [String: any Sendable] {
-                  do {
-                    let jsonData = try JSONSerialization.data(withJSONObject: executableCodeDict)
-                    let executableCode = try JSONDecoder().decode(ExecutableCode.self, from: jsonData)
-                    let languageTag = (executableCode.language ?? "").lowercased()
-                    let displayText = executableCode.code.map { "\n\n```\(languageTag)\n\($0)\n```\n\n" }
-                    let rawJson = String(data: jsonData, encoding: .utf8)
-                    let block = OpaqueBlock(
-                      provider: "gemini", type: "executableCode",
-                      content: displayText, data: rawJson,
-                      isResponseContent: displayText != nil,
-                    )
-                    continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
-                  } catch {
-                    geminiLogger.error("Failed to decode ExecutableCode: \(error.localizedDescription)")
-                  }
-                } else if let codeExecutionResultDict = part["codeExecutionResult"] as? [String: any Sendable] {
-                  do {
-                    let jsonData = try JSONSerialization.data(withJSONObject: codeExecutionResultDict)
-                    let executionResult = try JSONDecoder().decode(CodeExecutionResult.self, from: jsonData)
-                    let displayText = executionResult.output.map { "\n\n```\n\($0)\($0.last == "\n" ? "" : "\n")```\n\n" }
-                    let rawJson = String(data: jsonData, encoding: .utf8)
-                    let block = OpaqueBlock(
-                      provider: "gemini", type: "codeExecutionResult",
-                      content: displayText, data: rawJson,
-                      isResponseContent: displayText != nil,
-                    )
-                    continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
-                  } catch {
-                    geminiLogger.error("Failed to decode CodeExecutionResult: \(error.localizedDescription)")
-                  }
-                } else if let thoughtSignature = part["thoughtSignature"] as? String {
-                  // Standalone thoughtSignature part (no text or functionCall)
-                  continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: thoughtSignature, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
-                }
-              }
-            }
-
-            // Extract grounding metadata
-            if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
-               let firstCandidate = candidates.first,
-               let groundingMetadataDict = firstCandidate["groundingMetadata"] as? [String: any Sendable]
-            {
-              let metadataData = try JSONSerialization.data(withJSONObject: groundingMetadataDict)
-              let groundingMetadata = try JSONDecoder().decode(GroundingMetadata.self, from: metadataData)
-              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: groundingMetadata, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
-            }
-
-            // Parse usage metadata
-            if let usageMetadataDict = jsonObject?["usageMetadata"] as? [String: any Sendable] {
-              do {
-                let metadataData = try JSONSerialization.data(withJSONObject: usageMetadataDict)
-                let decodedUsageMetadata = try JSONDecoder().decode(UsageMetadata.self, from: metadataData)
-                // Yield a StreamResponse that only contains usageMetadata
-                continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: decodedUsageMetadata, finishReason: nil))
-              } catch {
-                geminiLogger.error("Failed to decode usageMetadata: \(error.localizedDescription)")
-              }
-            }
-
-            // Check for finish reason and yield it
-            if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
-               let firstCandidate = candidates.first,
-               let finishReasonString = firstCandidate["finishReason"] as? String
-            {
-              let finishReason = FinishReason(rawValue: finishReasonString) ?? .other
-              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: finishReason))
-            }
-
           } catch {
             geminiLogger.error("Error parsing JSON response: \(error.localizedDescription)")
-            // Continue processing rather than failing the whole stream
           }
         }
-        // If we've reached the end without a finish reason, finish the stream
         continuation.finish()
       } catch {
         geminiLogger.error("Stream processing error: \(error.localizedDescription)")
@@ -817,6 +811,56 @@ public final class GeminiClient: APIClient, Sendable {
       task.cancel()
     }
     return stream
+  }
+
+  /// Process a buffered (non-streaming) Gemini response into a stream of responses.
+  private func processBufferedResponse(data: Data, response: URLResponse) -> AsyncThrowingStream<StreamResponse, Error> {
+    let (stream, continuation) = AsyncThrowingStream<StreamResponse, Error>.makeStream()
+    let task = Task {
+      do {
+        guard let httpResponse = response as? HTTPURLResponse else {
+          throw AIError.network(underlying: URLError(.badServerResponse))
+        }
+
+        if !(200 ... 299).contains(httpResponse.statusCode) {
+          let errorMessage = Self.parseGeminiErrorMessage(from: data)
+          throw Self.geminiHTTPError(statusCode: httpResponse.statusCode, message: errorMessage)
+        }
+
+        let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: any Sendable]
+        _ = try processResponseChunk(jsonObject, continuation: continuation)
+        continuation.finish()
+      } catch {
+        geminiLogger.error("Buffered response processing error: \(error.localizedDescription)")
+        continuation.finish(throwing: error)
+      }
+    }
+    continuation.onTermination = { @Sendable _ in
+      task.cancel()
+    }
+    return stream
+  }
+
+  /// Parse an error message from a Gemini error response body.
+  private static func parseGeminiErrorMessage(from data: Data) -> String? {
+    struct GeminiErrorResponse: Codable {
+      struct ErrorDetail: Codable {
+        let message: String
+        let status: String
+        let code: Int
+      }
+
+      let error: ErrorDetail
+    }
+
+    if let errorResponse = try? JSONDecoder().decode(GeminiErrorResponse.self, from: data) {
+      return errorResponse.error.message
+    } else if let errorArray = try? JSONDecoder().decode([GeminiErrorResponse].self, from: data),
+              let firstError = errorArray.first
+    {
+      return firstError.error.message
+    }
+    return nil
   }
 
   /// Extract grounding information from metadata
@@ -933,6 +977,7 @@ public final class GeminiClient: APIClient, Sendable {
           temperature: temperature,
           apiKey: apiKey,
           configuration: configuration,
+          streaming: true,
           update: { response in
             didYield.withLock { $0 = true }
             continuation.yield(response)
@@ -1008,6 +1053,7 @@ public final class GeminiClient: APIClient, Sendable {
     temperature: Float?,
     apiKey: String?,
     configuration: Configuration,
+    streaming: Bool = false,
     update: @Sendable @escaping (GenerationResponse) -> Void,
   ) async throws -> GenerationResponse {
     guard let apiKey else {
@@ -1041,6 +1087,7 @@ public final class GeminiClient: APIClient, Sendable {
           thinkingBudget: configuration.thinkingBudget,
           thinkingLevel: configuration.thinkingLevel,
           tools: tools,
+          streaming: streaming,
         )
 
         func buildMetadata() -> GenerationResponse.Metadata {
