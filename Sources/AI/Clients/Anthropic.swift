@@ -2204,8 +2204,11 @@ public extension AnthropicClient {
       var finalMessage: APIMessage?
       // Patch orphaned tool calls (e.g., from canceled or timed-out generation)
       let patchedMessages = Message.patchingOrphanedToolCalls(messages)
-      // Compute the effective thinking config, accounting for maxTokens and budget minimum
-      let effectiveThinking = configuration.effectiveThinkingConfig(maxTokens: maxTokens)
+      // Compute the effective thinking config, accounting for maxTokens and budget minimum.
+      // Use the model default when the caller doesn't specify maxTokens, since
+      // buildMessagesRequest will inject it and budget_tokens must be less than max_tokens.
+      let effectiveMaxTokens = maxTokens ?? Self.defaultMaxTokens(for: modelId)
+      let effectiveThinking = configuration.effectiveThinkingConfig(maxTokens: effectiveMaxTokens)
       // When thinking is enabled, preprocess messages to handle missing opaque blocks.
       // Assistant messages with tool calls that lack Anthropic thinking blocks are collapsed to text,
       // along with their following tool result messages, to avoid the
