@@ -1141,7 +1141,7 @@ public final class AnthropicClient: APIClient, Sendable {
         case .toolResult:
           if let toolResult = contentBlock.toolResult {
             blocks.append(.toolResult(.init(
-              name: toolResult.toolUseId,
+              name: "",
               id: toolResult.toolUseId,
               content: [.text(toolResult.content)],
               isError: toolResult.isError,
