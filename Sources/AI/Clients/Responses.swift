@@ -880,19 +880,27 @@ public final class ResponsesClient: APIClient, Sendable {
               ])
             case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "reasoning":
               flushContentItems()
-              var reasoningItem: [String: any Sendable] = [
-                "type": OutputItemType.reasoning,
-              ]
-              if let id = block.signature {
-                reasoningItem["id"] = id
+              if let jsonString = block.data,
+                 let jsonData = jsonString.data(using: .utf8),
+                 let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: any Sendable]
+              {
+                items.append(parsed)
+              } else {
+                // Fallback for opaque blocks created before full raw storage
+                var reasoningItem: [String: any Sendable] = [
+                  "type": OutputItemType.reasoning,
+                ]
+                if let id = block.signature {
+                  reasoningItem["id"] = id
+                }
+                if let summaryText = block.content {
+                  reasoningItem["summary"] = [["type": "summary_text", "text": summaryText]]
+                }
+                if let encryptedContent = block.data {
+                  reasoningItem["encrypted_content"] = encryptedContent
+                }
+                items.append(reasoningItem)
               }
-              if let summaryText = block.content {
-                reasoningItem["summary"] = [["type": "summary_text", "text": summaryText]]
-              }
-              if let encryptedContent = block.data {
-                reasoningItem["encrypted_content"] = encryptedContent
-              }
-              items.append(reasoningItem)
             case let .providerOpaque(block) where block.provider == "openai-responses":
               // Round-trip preserved server-side tool items (web_search_call, code_interpreter_call, etc.)
               flushContentItems()
@@ -911,7 +919,7 @@ public final class ResponsesClient: APIClient, Sendable {
         return items
 
       case .tool:
-        return message.content.compactMap { block -> [String: any Sendable]? in
+        return try message.content.compactMap { block -> [String: any Sendable]? in
           guard case let .toolResult(toolResult) = block else { return nil }
 
           let resultOutput: any Sendable
@@ -920,7 +928,9 @@ public final class ResponsesClient: APIClient, Sendable {
               if case let .text(text) = content { return text }
               return nil
             }.joined(separator: "\n")
-            resultOutput = "{\"error\": \"\((errorText.isEmpty ? "Unknown error" : errorText).replacingOccurrences(of: "\"", with: "\\\""))\"}"
+            let errorPayload: [String: String] = ["error": errorText.isEmpty ? "Unknown error" : errorText]
+            let errorData = try JSONSerialization.data(withJSONObject: errorPayload, options: [])
+            resultOutput = String(data: errorData, encoding: .utf8) ?? "{\"error\":\"Unknown error\"}"
           } else {
             var outputItems: [[String: any Sendable]] = []
             var hasNonTextContent = false
@@ -2652,13 +2662,16 @@ extension ResponsesClient {
                 content.append(.thinking(text: reasoningText, signature: nil))
               }
               // Preserve the full reasoning item for round-tripping via the Responses API
-              if let itemId = item.id {
+              if let itemId = item.id,
+                 let rawItemData = try? JSONEncoder().encode(item.raw),
+                 let rawItemJson = String(data: rawItemData, encoding: .utf8)
+              {
                 content.append(.providerOpaque(OpaqueBlock(
                   provider: "openai-responses",
                   type: "reasoning",
                   content: summaryText,
                   signature: itemId,
-                  data: item.encryptedContent,
+                  data: rawItemJson,
                 )))
               }
             case OutputItemType.functionCall:
