@@ -2276,10 +2276,13 @@ public extension AnthropicClient {
           continue
         }
         let contentBlocks = try await anthropicContentBlocks(for: message)
+        // Skip messages whose content was entirely unsupported (e.g. audio-only).
+        // Sending a message with no content violates Anthropic's required content field.
+        guard !contentBlocks.isEmpty else { continue }
         messageParams.append(AnthropicClient.MessageParam(
           role: mapRole(message.role),
           text: nil,
-          contentBlocks: contentBlocks.isEmpty ? nil : contentBlocks,
+          contentBlocks: contentBlocks,
           attachments: nil,
         ))
       }
