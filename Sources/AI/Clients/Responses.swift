@@ -137,6 +137,9 @@ public final class ResponsesClient: APIClient, Sendable {
         if let itemId {
           itemIdToFallbackIndex[itemId] = index
         }
+        // Also map by call_id (toolCall.id) since subsequent function_call_arguments.* events
+        // use item_id which may correspond to call_id rather than the output item's id.
+        itemIdToFallbackIndex[toolCall.id] = index
         return
       }
       indexedContent[outputIndex] = .toolCall(toolCall)
