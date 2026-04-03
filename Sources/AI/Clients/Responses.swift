@@ -1391,20 +1391,20 @@ public final class ResponsesClient: APIClient, Sendable {
     // content_part.added events — output items we only log or ignore (e.g.,
     // web_search_call, code_interpreter_call) are not captured here, and message
     // annotations/endnotes from the completed response are absent.
-    if !receivedCompletedEvent {
+    if !receivedCompletedEvent, let snapshot = responseSnapshot {
       var createdAtDate: Date?
-      if let createdAt = responseSnapshot?.createdAt {
+      if let createdAt = snapshot.createdAt {
         createdAtDate = Date(timeIntervalSince1970: TimeInterval(createdAt))
       }
       let metadata = GenerationResponse.Metadata(
-        responseId: responseSnapshot?.id,
-        model: responseSnapshot?.model,
+        responseId: snapshot.id,
+        model: snapshot.model,
         createdAt: createdAtDate,
-        inputTokens: responseSnapshot?.usage?.inputTokens,
-        outputTokens: responseSnapshot?.usage?.outputTokens,
-        totalTokens: responseSnapshot?.usage?.totalTokens,
-        cacheReadInputTokens: responseSnapshot?.usage?.inputTokensDetails?.cachedTokens,
-        reasoningTokens: responseSnapshot?.usage?.outputTokensDetails?.reasoningTokens,
+        inputTokens: snapshot.usage?.inputTokens,
+        outputTokens: snapshot.usage?.outputTokens,
+        totalTokens: snapshot.usage?.totalTokens,
+        cacheReadInputTokens: snapshot.usage?.inputTokensDetails?.cachedTokens,
+        reasoningTokens: snapshot.usage?.outputTokensDetails?.reasoningTokens,
       )
       continuation.yield(GenerationResponse(content: streamingState.content, metadata: metadata))
     }
