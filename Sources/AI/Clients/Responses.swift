@@ -90,7 +90,9 @@ public final class ResponsesClient: APIClient, Sendable {
   private struct StreamingResponseState {
     var indexedContent: [Int: Message.Content] = [:]
     var fallbackContent: [Message.Content] = []
-    var toolCallArgumentBuffers: [Int: String] = [:]
+    var toolCallArgumentBuffers: [String: String] = [:]
+    /// Maps item IDs to fallback content indices for tool calls without output_index.
+    var itemIdToFallbackIndex: [String: Int] = [:]
     /// Separate buffer for reasoning summary deltas, keyed by output index.
     /// Used as a fallback when no full reasoning text is available at that index.
     var summaryContent: [Int: String] = [:]
@@ -128,18 +130,21 @@ public final class ResponsesClient: APIClient, Sendable {
       summaryContent[outputIndex, default: ""] += delta
     }
 
-    mutating func setToolCall(_ toolCall: ToolCall, outputIndex: Int?) {
+    mutating func setToolCall(_ toolCall: ToolCall, outputIndex: Int?, itemId: String? = nil) {
       guard let outputIndex else {
+        let index = fallbackContent.count
         appendFallback(.toolCall(toolCall))
+        if let itemId {
+          itemIdToFallbackIndex[itemId] = index
+        }
         return
       }
       indexedContent[outputIndex] = .toolCall(toolCall)
-      toolCallArgumentBuffers[outputIndex] = ""
+      toolCallArgumentBuffers[String(outputIndex)] = ""
     }
 
-    mutating func appendToolCallArgumentsDelta(_ delta: String, outputIndex: Int?) {
-      // Use a sentinel key for fallback tool calls without an output index
-      let key = outputIndex ?? -1
+    mutating func appendToolCallArgumentsDelta(_ delta: String, outputIndex: Int?, itemId: String?) {
+      let key = outputIndex.map(String.init) ?? itemId ?? "_fallback"
       let existingArgsString = toolCallArgumentBuffers[key] ?? ""
       let newArgsString = existingArgsString + delta
       toolCallArgumentBuffers[key] = newArgsString
@@ -151,28 +156,35 @@ public final class ResponsesClient: APIClient, Sendable {
         var updatedToolCall = currentToolCall
         updatedToolCall.parameters = partialArgs
         indexedContent[outputIndex] = .toolCall(updatedToolCall)
-      } else if outputIndex == nil, let lastIndex = fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } }) {
-        guard let argsData = newArgsString.data(using: .utf8),
+      } else if outputIndex == nil {
+        let matchIndex = itemId.flatMap { itemIdToFallbackIndex[$0] }
+          ?? fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } })
+        guard let matchIndex,
+              let argsData = newArgsString.data(using: .utf8),
               let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
         else { return }
-        if case let .toolCall(currentToolCall) = fallbackContent[lastIndex] {
+        if case let .toolCall(currentToolCall) = fallbackContent[matchIndex] {
           var updatedToolCall = currentToolCall
           updatedToolCall.parameters = partialArgs
-          fallbackContent[lastIndex] = .toolCall(updatedToolCall)
+          fallbackContent[matchIndex] = .toolCall(updatedToolCall)
         }
       }
     }
 
-    mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int?) {
-      let key = outputIndex ?? -1
+    mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int?, itemId: String?) {
+      let key = outputIndex.map(String.init) ?? itemId ?? "_fallback"
       toolCallArgumentBuffers.removeValue(forKey: key)
 
       var updatedToolCall: ToolCall?
+      var matchedFallbackIndex: Int?
       if let outputIndex, case let .toolCall(currentToolCall)? = indexedContent[outputIndex] {
         updatedToolCall = currentToolCall
-      } else if outputIndex == nil, let lastIndex = fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } }) {
-        if case let .toolCall(currentToolCall) = fallbackContent[lastIndex] {
+      } else if outputIndex == nil {
+        let idx = itemId.flatMap { itemIdToFallbackIndex[$0] }
+          ?? fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } })
+        if let idx, case let .toolCall(currentToolCall) = fallbackContent[idx] {
           updatedToolCall = currentToolCall
+          matchedFallbackIndex = idx
         }
       }
 
@@ -188,8 +200,8 @@ public final class ResponsesClient: APIClient, Sendable {
 
       if let outputIndex {
         indexedContent[outputIndex] = .toolCall(toolCall)
-      } else if let lastIndex = fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } }) {
-        fallbackContent[lastIndex] = .toolCall(toolCall)
+      } else if let idx = matchedFallbackIndex {
+        fallbackContent[idx] = .toolCall(toolCall)
       }
     }
 
@@ -1025,7 +1037,7 @@ public final class ResponsesClient: APIClient, Sendable {
                   name: name,
                   id: callId,
                   parameters: [:],
-                ), outputIndex: event.outputIndex)
+                ), outputIndex: event.outputIndex, itemId: item.id)
                 yieldCurrentState()
               }
             case OutputItemType.reasoning:
@@ -1045,13 +1057,13 @@ public final class ResponsesClient: APIClient, Sendable {
 
       case StreamEventType.functionCallArgumentsDelta:
         if let delta = event.delta {
-          streamingState.appendToolCallArgumentsDelta(delta, outputIndex: event.outputIndex)
+          streamingState.appendToolCallArgumentsDelta(delta, outputIndex: event.outputIndex, itemId: event.itemId)
           yieldCurrentState()
         }
 
       case StreamEventType.functionCallArgumentsDone:
         if let argumentsString = event.arguments {
-          streamingState.completeToolCallArguments(argumentsString, outputIndex: event.outputIndex)
+          streamingState.completeToolCallArguments(argumentsString, outputIndex: event.outputIndex, itemId: event.itemId)
           yieldCurrentState()
         }
 
@@ -1824,13 +1836,14 @@ extension ResponsesClient {
   }
 
   struct OutputItem: Decodable {
+    let id: String?
     let type: String?
     let name: String?
     let callId: String?
     let summary: [SummaryItem]?
 
     enum CodingKeys: String, CodingKey {
-      case type, name, summary
+      case id, type, name, summary
       case callId = "call_id"
     }
   }
