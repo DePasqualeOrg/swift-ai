@@ -603,8 +603,8 @@ public final class ResponsesClient: APIClient, Sendable {
       body["reasoning"] = [
         "effort": reasoningEffortLevel.rawValue,
         "summary": "auto",
-        "encrypted_content": "auto",
       ]
+      body["include"] = ["reasoning.encrypted_content"]
     }
 
     // Build text configuration (format and/or verbosity)
