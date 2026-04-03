@@ -1501,13 +1501,6 @@ extension GeminiClient {
       }
     }
 
-    // Ensure schema has a type if it's missing and no composable keyword is present
-    if result["type"] == nil, result["anyOf"] == nil, result["oneOf"] == nil,
-       result["$ref"] == nil, !schema.isEmpty
-    {
-      result["type"] = "STRING"
-    }
-
     return result
   }
 
