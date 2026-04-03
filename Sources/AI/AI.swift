@@ -118,7 +118,9 @@ public func generateText(
 
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
-      let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil
+      // reasoning: true → let the provider use its default level (don't override)
+      // reasoning: false → explicitly disable reasoning with .none
+      let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = if !reasoning, ResponsesClient.supportsReasoning(modelId) { .none } else { nil }
       let configuration = ResponsesClient.Configuration(
         reasoningEffortLevel: reasoningLevel,
         serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
@@ -215,7 +217,7 @@ public func streamText(
 
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
-      let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = reasoning && ResponsesClient.supportsReasoning(modelId) ? .high : nil
+      let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = if !reasoning, ResponsesClient.supportsReasoning(modelId) { .none } else { nil }
       let configuration = ResponsesClient.Configuration(
         reasoningEffortLevel: reasoningLevel,
         serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
