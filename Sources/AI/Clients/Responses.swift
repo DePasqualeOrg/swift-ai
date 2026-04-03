@@ -603,6 +603,7 @@ public final class ResponsesClient: APIClient, Sendable {
       body["reasoning"] = [
         "effort": reasoningEffortLevel.rawValue,
         "summary": "auto",
+        "encrypted_content": "auto",
       ]
     }
 
