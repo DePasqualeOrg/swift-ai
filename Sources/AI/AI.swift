@@ -71,7 +71,7 @@ public func generateText(
       let client = AnthropicClient()
       let enableThinking = reasoning && AnthropicClient.supportsThinking(modelId)
       let configuration = AnthropicClient.Configuration(
-        maxThinkingTokens: enableThinking ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
+        effort: enableThinking ? .high : nil,
         webSearch: webSearch,
       )
       return try await client.generateText(
@@ -168,7 +168,7 @@ public func streamText(
       let client = AnthropicClient()
       let enableThinking = reasoning && AnthropicClient.supportsThinking(modelId)
       let configuration = AnthropicClient.Configuration(
-        maxThinkingTokens: enableThinking ? AnthropicClient.maxThinkingBudget(for: modelId) : nil,
+        effort: enableThinking ? .high : nil,
         webSearch: webSearch,
       )
       return client.streamText(
