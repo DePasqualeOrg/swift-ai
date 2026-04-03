@@ -726,6 +726,15 @@ extension AnthropicClient {
           }
           if let usage = event.usage {
             snapshot.usage.outputTokens = usage.outputTokens
+            if let inputTokens = usage.inputTokens {
+              snapshot.usage.inputTokens = inputTokens
+            }
+            if let cacheCreationInputTokens = usage.cacheCreationInputTokens {
+              snapshot.usage.cacheCreationInputTokens = cacheCreationInputTokens
+            }
+            if let cacheReadInputTokens = usage.cacheReadInputTokens {
+              snapshot.usage.cacheReadInputTokens = cacheReadInputTokens
+            }
           }
         case .contentBlockStart:
           if let contentBlock = event.contentBlock {
