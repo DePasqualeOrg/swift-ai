@@ -542,8 +542,6 @@ public final class ResponsesClient: APIClient, Sendable {
     static let refusal = "refusal"
   }
 
-  private let enableStrictModeForTools = true
-
   private func streamResponse(
     input: [Message],
     systemPrompt: String?,
@@ -558,6 +556,7 @@ public final class ResponsesClient: APIClient, Sendable {
     backgroundMode: Bool,
     textFormat: ResponseFormat? = nil,
     tools: [Tool] = [],
+    enableStrictModeForTools: Bool = true,
   ) async throws -> AsyncThrowingStream<GenerationResponse, Error> {
     var request = URLRequest(url: endpoint)
     request.httpMethod = "POST"
@@ -918,6 +917,7 @@ public final class ResponsesClient: APIClient, Sendable {
           serverSideTools: configuration.serverSideTools,
           backgroundMode: configuration.backgroundMode,
           tools: tools,
+          enableStrictModeForTools: configuration.enableStrictModeForTools,
         )
 
         for try await chunk in stream {
@@ -1773,6 +1773,13 @@ extension ResponsesClient {
     /// Enable background mode for long-running requests.
     public var backgroundMode: Bool
 
+    /// When true, tool schemas are rewritten for OpenAI strict mode compliance and sent
+    /// with `strict: true`. This ensures the model's output exactly matches the schema,
+    /// but requires all properties to be in `required` and optional properties to be nullable.
+    /// Defaults to true. Disable for tools with optional non-nullable parameters or for
+    /// compatible endpoints that don't support strict mode.
+    public var enableStrictModeForTools: Bool
+
     /// Creates a new configuration with the specified options.
     ///
     /// - Parameters:
@@ -1780,16 +1787,19 @@ extension ResponsesClient {
     ///   - verbosityLevel: Response verbosity level.
     ///   - serverSideTools: Server-side tools to enable.
     ///   - backgroundMode: Enable background mode for long requests.
+    ///   - enableStrictModeForTools: Rewrite tool schemas for strict mode compliance.
     public init(
       reasoningEffortLevel: ResponsesClient.ReasoningEffortLevel? = nil,
       verbosityLevel: ResponsesClient.VerbosityLevel? = nil,
       serverSideTools: [ServerSideTool] = [],
       backgroundMode: Bool = false,
+      enableStrictModeForTools: Bool = true,
     ) {
       self.reasoningEffortLevel = reasoningEffortLevel
       self.verbosityLevel = verbosityLevel
       self.serverSideTools = serverSideTools
       self.backgroundMode = backgroundMode
+      self.enableStrictModeForTools = enableStrictModeForTools
     }
   }
 

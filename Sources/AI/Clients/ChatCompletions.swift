@@ -18,18 +18,28 @@ public extension ChatCompletionsClient {
     /// Defaults to false, which sends `max_completion_tokens`.
     public var useLegacyMaxTokensField: Bool
 
+    /// When true, tool schemas are rewritten for OpenAI strict mode compliance and sent
+    /// with `strict: true`. This ensures the model's output exactly matches the schema,
+    /// but requires all properties to be in `required` and optional properties to be nullable.
+    /// Defaults to true. Disable for tools with optional non-nullable parameters or for
+    /// compatible endpoints that don't support strict mode.
+    public var enableStrictModeForTools: Bool
+
     /// Creates a new configuration with optional extra parameters.
     ///
     /// - Parameters:
     ///   - extraParameters: Additional parameters for the API request.
     ///   - useLegacyMaxTokensField: Send `max_tokens` instead of `max_completion_tokens` for
     ///     compatibility with endpoints that don't support the newer field.
+    ///   - enableStrictModeForTools: Rewrite tool schemas for strict mode compliance.
     public init(
       extraParameters: [String: any Sendable]? = nil,
       useLegacyMaxTokensField: Bool = false,
+      enableStrictModeForTools: Bool = true,
     ) {
       self.extraParameters = extraParameters
       self.useLegacyMaxTokensField = useLegacyMaxTokensField
+      self.enableStrictModeForTools = enableStrictModeForTools
     }
   }
 }
@@ -69,8 +79,6 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       }
     }
   }
-
-  private let enableStrictModeForTools = true
 
   /// The API endpoint URL used by this client.
   public let endpoint: URL
@@ -270,6 +278,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     tools: [Tool] = [],
     extraParameters: [String: any Sendable]?,
     useLegacyMaxTokensField: Bool = false,
+    enableStrictModeForTools: Bool = true,
     endpoint: URL,
   ) async throws -> AsyncThrowingStream<GenerationResponse, Error> {
     var request = URLRequest(url: endpoint)
@@ -732,6 +741,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           tools: tools,
           extraParameters: configuration.extraParameters,
           useLegacyMaxTokensField: configuration.useLegacyMaxTokensField,
+          enableStrictModeForTools: configuration.enableStrictModeForTools,
           endpoint: endpoint,
         )
         for try await chunk in stream {
