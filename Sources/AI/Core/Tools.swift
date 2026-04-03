@@ -472,9 +472,22 @@ public struct Tools: Collection, Sendable {
       )
     }
 
-    // Validate input against schema
+    // Validate input against schema.
+    //
+    // When OpenAI strict mode is enabled, `schemaForStrictMode` rewrites optional (non-required)
+    // properties to be required and nullable in the wire schema sent to the model, so the model
+    // may return null for those fields. But we validate against the original schema where those
+    // fields are not nullable. To avoid rejecting valid model output, we strip null values for
+    // non-required fields before validation, treating them as absent (which the original schema
+    // accepts since the field is not required).
+    //
+    // Neither the OpenAI TS SDK nor the Vercel AI SDK faces this issue: the TS SDK throws for
+    // Zod schemas with optional+non-nullable fields rather than auto-fixing them, and the
+    // Vercel AI SDK passes schemas through untransformed. Our library auto-fixes to support
+    // external schemas (e.g. from MCP servers) that the developer doesn't control.
     do {
-      let inputValue = Value.object(toolCall.parameters)
+      let sanitizedParameters = Self.strippingNullsForOptionalFields(toolCall.parameters, schema: tool.rawInputSchema)
+      let inputValue = Value.object(sanitizedParameters)
       let schemaValue = Value.object(tool.rawInputSchema)
       try validator.validate(inputValue, against: schemaValue)
     } catch {
@@ -567,6 +580,46 @@ public struct Tools: Collection, Sendable {
     }
 
     return results.sorted { $0.0 < $1.0 }.map { $0.1 }
+  }
+
+  // MARK: - Validation Helpers
+
+  /// Removes null values for properties that are not listed in the schema's `required` array,
+  /// recursing into nested object properties.
+  ///
+  /// This handles the mismatch between the wire schema (where `schemaForStrictMode` makes
+  /// optional fields required+nullable) and the original schema (where they are optional and
+  /// non-nullable). Stripping a null value for a non-required field is equivalent to the field
+  /// being absent, which the original schema accepts.
+  private static func strippingNullsForOptionalFields(
+    _ input: [String: Value],
+    schema: [String: Value],
+  ) -> [String: Value] {
+    let requiredFields: Set<String> = if case let .array(requiredArray) = schema["required"] {
+      Set(requiredArray.compactMap { if case let .string(s) = $0 { s } else { nil } })
+    } else {
+      []
+    }
+
+    let propertySchemas: [String: [String: Value]] = if case let .object(props) = schema["properties"] {
+      props.reduce(into: [:]) { result, pair in
+        if case let .object(propSchema) = pair.value {
+          result[pair.key] = propSchema
+        }
+      }
+    } else {
+      [:]
+    }
+
+    var result = input
+    for (key, value) in input {
+      if !requiredFields.contains(key), case .null = value {
+        result.removeValue(forKey: key)
+      } else if case let .object(nestedInput) = value, let propSchema = propertySchemas[key] {
+        result[key] = .object(strippingNullsForOptionalFields(nestedInput, schema: propSchema))
+      }
+    }
+    return result
   }
 
   // MARK: - Collection Conformance
