@@ -1396,8 +1396,8 @@ public final class ResponsesClient: APIClient, Sendable {
         let status = BackgroundResponseStatus(rawValue: statusString)
 
         switch status {
-          case .completed:
-            openAIResponsesLogger.log("\(logPrefix): Response completed during disconnection. Parsing final response.")
+          case .completed, .incomplete:
+            openAIResponsesLogger.log("\(logPrefix): Response \(statusString) during disconnection. Parsing final response.")
             parseCompletedResponse(response, continuation: continuation)
             return true
           case .failed:
@@ -1463,7 +1463,7 @@ public final class ResponsesClient: APIClient, Sendable {
           try await Task.sleep(nanoseconds: 2_000_000_000) // Sleep for 2 seconds
           continue
 
-        case .completed:
+        case .completed, .incomplete:
           parseCompletedResponse(response, continuation: continuation)
           return
 
@@ -1507,8 +1507,8 @@ public final class ResponsesClient: APIClient, Sendable {
       throw AIError.parsing(message: "Failed to parse background response status")
     }
 
-    // Parse response if completed
-    let generationResponse: GenerationResponse? = if status == .completed {
+    // Parse response if terminal with usable payload
+    let generationResponse: GenerationResponse? = if status == .completed || status == .incomplete {
       response.toGenerationResponse()
     } else {
       nil
@@ -1798,6 +1798,8 @@ extension ResponsesClient {
     case in_progress
     /// Request completed successfully.
     case completed
+    /// Request ended early (e.g., max_output_tokens or content filtering) but the response payload is usable.
+    case incomplete
     /// Request failed with an error.
     case failed
     /// Request was cancelled.
