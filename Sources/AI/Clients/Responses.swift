@@ -283,8 +283,16 @@ public final class ResponsesClient: APIClient, Sendable {
       case .assistant:
         var items: [[String: any Sendable]] = []
         var contentItems: [[String: any Sendable]] = []
-        // Per-message metadata, updated when a message_metadata marker is encountered
-        var currentMetadata: [String: String] = [:]
+        // Per-message metadata from a prior API response. When present, the message
+        // is serialized as a ResponseOutputMessage (output_text, id, status). When
+        // absent, it's serialized as an EasyInputMessage (input_text).
+        var currentMetadata: [String: String]?
+
+        /// The content type for text parts: output_text when replaying prior API output,
+        /// input_text for manually constructed assistant messages.
+        var textContentType: String {
+          currentMetadata != nil ? ContentType.outputText : ContentType.inputText
+        }
 
         func flushContentItems() {
           guard !contentItems.isEmpty else { return }
@@ -293,9 +301,11 @@ public final class ResponsesClient: APIClient, Sendable {
             "role": "assistant",
             "content": contentItems,
           ]
-          if let id = currentMetadata["id"] { messageItem["id"] = id }
-          if let status = currentMetadata["status"] { messageItem["status"] = status }
-          if let phase = currentMetadata["phase"] { messageItem["phase"] = phase }
+          if let metadata = currentMetadata {
+            if let id = metadata["id"] { messageItem["id"] = id }
+            if let status = metadata["status"] { messageItem["status"] = status }
+            if let phase = metadata["phase"] { messageItem["phase"] = phase }
+          }
           items.append(messageItem)
           contentItems.removeAll(keepingCapacity: true)
         }
@@ -316,13 +326,13 @@ public final class ResponsesClient: APIClient, Sendable {
               }
             case let .text(text) where !text.isEmpty:
               contentItems.append([
-                "type": ContentType.outputText,
+                "type": textContentType,
                 "text": text,
               ])
             case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "annotated_output_text":
               if let text = block.content {
                 var item: [String: any Sendable] = [
-                  "type": ContentType.outputText,
+                  "type": textContentType,
                   "text": text,
                 ]
                 if let jsonString = block.data,

@@ -943,12 +943,12 @@ struct ResponsesClientTests {
     #expect(summary[0]["type"] as? String == "summary_text")
     #expect(summary[0]["text"] as? String == "Let me think step by step.")
 
-    // The assistant message should contain the text as output_text (not the thinking block)
+    // Manually constructed assistant messages (without message_metadata) use input_text
     let assistantMsg = try #require(input.first(where: {
       $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
     }))
     let content = try #require(assistantMsg["content"] as? [[String: Any]])
-    #expect(content.contains(where: { $0["type"] as? String == "output_text" && $0["text"] as? String == "The answer is 42." }))
+    #expect(content.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "The answer is 42." }))
   }
 
   @Test
