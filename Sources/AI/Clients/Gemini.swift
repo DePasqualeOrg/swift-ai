@@ -1177,7 +1177,7 @@ public final class GeminiClient: APIClient, Sendable {
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
               notesText: notesText,
               toolCalls: toolCalls,
-            ),
+            ) + opaqueBlocks.map(Message.Content.providerOpaque),
             metadata: partialMetadata,
           )
         } else {
