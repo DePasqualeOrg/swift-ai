@@ -340,6 +340,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           var functionCallArguments: [Int: String] = [:] // Accumulate arguments by index
           var metadata = GenerationResponse.Metadata()
           var lastFinishReason: String?
+          var hasRefusal = false
           for try await event in result.events {
             try Task.checkCancellation()
             let jsonString = event.data
@@ -375,6 +376,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               if let choices = chunk.choices, !choices.isEmpty, let delta = choices.first?.delta {
                 let reasoningText = delta.reasoningContent
                 let responseText = delta.content ?? delta.refusal
+                if delta.content == nil, delta.refusal != nil {
+                  hasRefusal = true
+                }
 
                 // Handle tool calls
                 if let deltaToolCalls = delta.toolCalls {
@@ -414,7 +418,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                 // Yield if we have content, function calls, or a finish reason (final chunk with metadata)
                 if reasoningText != nil || responseText != nil || notesText != nil || !toolCalls.isEmpty || lastFinishReason != nil {
                   var currentMetadata = metadata
-                  currentMetadata.finishReason = parseFinishReason(lastFinishReason)
+                  currentMetadata.finishReason = hasRefusal ? .refusal : parseFinishReason(lastFinishReason)
                   continuation.yield(GenerationResponse(
                     content: Self.assistantContent(
                       reasoningText: reasoningText,
@@ -432,7 +436,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                 let toolCalls = toolCallsById.keys.sorted().compactMap { toolCallsById[$0] }
                 if lastFinishReason != nil {
                   var currentMetadata = metadata
-                  currentMetadata.finishReason = parseFinishReason(lastFinishReason)
+                  currentMetadata.finishReason = hasRefusal ? .refusal : parseFinishReason(lastFinishReason)
                   continuation.yield(GenerationResponse(
                     content: Self.assistantContent(toolCalls: toolCalls),
                     metadata: currentMetadata,
@@ -467,6 +471,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             }
             let reasoningText = message.reasoningContent
             let responseText = message.content ?? message.refusal
+            let hasRefusal = message.content == nil && message.refusal != nil
             var toolCalls: [AI.ToolCall] = []
 
             // Get tool calls if available
@@ -499,7 +504,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               responseId: completionResponse.id,
               model: completionResponse.model,
               createdAt: completionResponse.created.map { Date(timeIntervalSince1970: TimeInterval($0)) },
-              finishReason: parseFinishReason(firstChoice.finishReason),
+              finishReason: hasRefusal ? .refusal : parseFinishReason(firstChoice.finishReason),
               inputTokens: completionResponse.usage?.promptTokens,
               outputTokens: completionResponse.usage?.completionTokens,
               totalTokens: completionResponse.usage?.totalTokens,
