@@ -130,6 +130,14 @@ public final class ResponsesClient: APIClient, Sendable {
       summaryContent[outputIndex, default: ""] += delta
     }
 
+    mutating func setSummaryText(_ text: String, outputIndex: Int?) {
+      guard let outputIndex else {
+        appendFallback(.thinking(text: text, signature: nil))
+        return
+      }
+      summaryContent[outputIndex] = text
+    }
+
     mutating func setToolCall(_ toolCall: ToolCall, outputIndex: Int?, itemId: String? = nil) {
       guard let outputIndex else {
         let index = fallbackContent.count
@@ -254,6 +262,490 @@ public final class ResponsesClient: APIClient, Sendable {
           fallbackContent[fallbackContent.count - 1] = .thinking(text: existing + delta, signature: existingSignature)
         default:
           fallbackContent.append(block)
+      }
+    }
+  }
+
+  private struct AccumulatedResponseSnapshot {
+    private var raw: [String: Value]
+    private var outputs: [[String: Value]]
+    private var outputIndexByItemID: [String: Int] = [:]
+    private var outputIndexByCallID: [String: Int] = [:]
+    private var implicitMessageOutputIndex: Int?
+    private var implicitReasoningOutputIndex: Int?
+
+    init(_ response: ResponseObject) {
+      raw = response.raw
+      outputs = response.output?.map(\.raw) ?? []
+      rebuildIndexes()
+    }
+
+    mutating func apply(_ event: StreamEvent) {
+      guard let eventType = event.type else { return }
+
+      switch eventType {
+        case StreamEventType.outputItemAdded:
+          if let item = event.item?.raw {
+            insertOutputItem(item, outputIndex: event.outputIndex)
+          }
+        case StreamEventType.contentPartAdded:
+          guard let part = event.part?.raw else { break }
+          let outputType = part["type"]?.stringValue == "reasoning_text" ? OutputItemType.reasoning : OutputItemType.message
+          let resolvedOutputIndex = resolveOutputIndex(explicitIndex: event.outputIndex, defaultType: outputType)
+          insertContentPart(part, atOutputIndex: resolvedOutputIndex, contentIndex: event.contentIndex)
+        case StreamEventType.outputTextDelta:
+          if let delta = event.delta {
+            appendDelta(
+              delta,
+              outputIndex: event.outputIndex,
+              contentIndex: event.contentIndex,
+              defaultOutputType: OutputItemType.message,
+              partType: OutputItemType.outputText,
+              fieldName: "text",
+            )
+          }
+        case StreamEventType.refusalDelta:
+          if let delta = event.delta {
+            appendDelta(
+              delta,
+              outputIndex: event.outputIndex,
+              contentIndex: event.contentIndex,
+              defaultOutputType: OutputItemType.message,
+              partType: OutputItemType.refusal,
+              fieldName: "refusal",
+            )
+          }
+        case StreamEventType.refusalDone:
+          if let refusal = event.refusal {
+            setContentField(
+              refusal,
+              outputIndex: event.outputIndex,
+              contentIndex: event.contentIndex,
+              defaultOutputType: OutputItemType.message,
+              partType: OutputItemType.refusal,
+              fieldName: "refusal",
+            )
+          }
+        case StreamEventType.reasoningTextDelta, StreamEventType.reasoningDelta:
+          if let delta = event.delta {
+            appendDelta(
+              delta,
+              outputIndex: event.outputIndex,
+              contentIndex: event.contentIndex,
+              defaultOutputType: OutputItemType.reasoning,
+              partType: "reasoning_text",
+              fieldName: "text",
+            )
+          }
+        case StreamEventType.reasoningSummaryDelta:
+          if let delta = event.delta {
+            appendSummaryDelta(delta, outputIndex: event.outputIndex, summaryIndex: event.summaryIndex)
+          }
+        case StreamEventType.reasoningSummaryDone:
+          if let text = event.text {
+            setSummaryText(text, outputIndex: event.outputIndex, summaryIndex: event.summaryIndex)
+          }
+        case StreamEventType.functionCallArgumentsDelta:
+          if let delta = event.delta {
+            appendFunctionCallArgumentsDelta(delta, outputIndex: event.outputIndex, itemID: event.itemId)
+          }
+        case StreamEventType.functionCallArgumentsDone:
+          if let arguments = event.arguments {
+            completeFunctionCallArguments(arguments, outputIndex: event.outputIndex, itemID: event.itemId)
+          }
+        case StreamEventType.completed:
+          if let response = event.response {
+            self = Self(response)
+          }
+        default:
+          break
+      }
+    }
+
+    func finalize() -> GenerationResponse {
+      var finalRaw = raw
+      if !outputs.isEmpty || raw["output"] != nil {
+        finalRaw["output"] = .array(outputs.map(Value.object))
+      }
+      return ResponseObject(raw: finalRaw).toGenerationResponse()
+    }
+
+    private mutating func rebuildIndexes() {
+      outputIndexByItemID = [:]
+      outputIndexByCallID = [:]
+      implicitMessageOutputIndex = nil
+      implicitReasoningOutputIndex = nil
+
+      for (index, item) in outputs.enumerated() {
+        if let itemID = item["id"]?.stringValue {
+          outputIndexByItemID[itemID] = index
+        }
+        if let callID = item["call_id"]?.stringValue {
+          outputIndexByCallID[callID] = index
+        }
+        switch item["type"]?.stringValue {
+          case OutputItemType.message where implicitMessageOutputIndex == nil:
+            implicitMessageOutputIndex = index
+          case OutputItemType.reasoning where implicitReasoningOutputIndex == nil:
+            implicitReasoningOutputIndex = index
+          default:
+            break
+        }
+      }
+    }
+
+    private mutating func insertOutputItem(_ item: [String: Value], outputIndex: Int?) {
+      if let outputIndex {
+        if outputIndex < outputs.count {
+          outputs[outputIndex] = Self.mergeOutputItem(existing: outputs[outputIndex], with: item)
+        } else {
+          while outputs.count < outputIndex {
+            outputs.append(Self.syntheticOutputItem(ofType: OutputItemType.message))
+          }
+          outputs.append(item)
+        }
+      } else if let existingIndex = existingOutputIndex(for: item) {
+        outputs[existingIndex] = Self.mergeOutputItem(existing: outputs[existingIndex], with: item)
+      } else {
+        outputs.append(item)
+      }
+
+      rebuildIndexes()
+    }
+
+    private func existingOutputIndex(for item: [String: Value]) -> Int? {
+      if let itemID = item["id"]?.stringValue, let existingIndex = outputIndexByItemID[itemID] {
+        return existingIndex
+      }
+      if let callID = item["call_id"]?.stringValue, let existingIndex = outputIndexByCallID[callID] {
+        return existingIndex
+      }
+      return nil
+    }
+
+    private mutating func resolveOutputIndex(explicitIndex: Int?, defaultType: String) -> Int {
+      if let explicitIndex {
+        ensureOutputItem(at: explicitIndex, type: defaultType)
+        return explicitIndex
+      }
+
+      switch defaultType {
+        case OutputItemType.reasoning:
+          if let existingIndex = implicitReasoningOutputIndex {
+            return existingIndex
+          }
+          let newIndex = appendOutputItem(Self.syntheticOutputItem(ofType: OutputItemType.reasoning))
+          implicitReasoningOutputIndex = newIndex
+          return newIndex
+        default:
+          if let existingIndex = implicitMessageOutputIndex {
+            return existingIndex
+          }
+          let newIndex = appendOutputItem(Self.syntheticOutputItem(ofType: OutputItemType.message))
+          implicitMessageOutputIndex = newIndex
+          return newIndex
+      }
+    }
+
+    private mutating func ensureOutputItem(at index: Int, type: String) {
+      if index < outputs.count {
+        if outputs[index]["type"] == nil {
+          outputs[index] = Self.mergeOutputItem(existing: outputs[index], with: Self.syntheticOutputItem(ofType: type))
+          rebuildIndexes()
+        }
+        return
+      }
+
+      while outputs.count <= index {
+        let placeholderType = outputs.count == index ? type : OutputItemType.message
+        outputs.append(Self.syntheticOutputItem(ofType: placeholderType))
+      }
+      rebuildIndexes()
+    }
+
+    @discardableResult
+    private mutating func appendOutputItem(_ item: [String: Value]) -> Int {
+      outputs.append(item)
+      let index = outputs.count - 1
+      rebuildIndexes()
+      return index
+    }
+
+    private mutating func insertContentPart(_ part: [String: Value], atOutputIndex outputIndex: Int, contentIndex: Int?) {
+      guard outputs.indices.contains(outputIndex) else { return }
+
+      var output = outputs[outputIndex]
+      var content = output["content"]?.arrayValue ?? []
+      let resolvedContentIndex = contentIndex ?? content.count
+
+      while content.count < resolvedContentIndex {
+        content.append(.object(Self.syntheticContentPart(ofType: part["type"]?.stringValue ?? OutputItemType.outputText)))
+      }
+
+      if resolvedContentIndex < content.count, let existingPart = content[resolvedContentIndex].objectValue {
+        content[resolvedContentIndex] = .object(Self.mergeContentPart(existing: existingPart, with: part))
+      } else {
+        content.append(.object(part))
+      }
+
+      output["content"] = .array(content)
+      outputs[outputIndex] = output
+    }
+
+    private mutating func appendDelta(
+      _ delta: String,
+      outputIndex: Int?,
+      contentIndex: Int?,
+      defaultOutputType: String,
+      partType: String,
+      fieldName: String,
+    ) {
+      guard !delta.isEmpty else { return }
+
+      let resolvedOutputIndex = resolveOutputIndex(explicitIndex: outputIndex, defaultType: defaultOutputType)
+      guard outputs.indices.contains(resolvedOutputIndex) else { return }
+
+      var output = outputs[resolvedOutputIndex]
+      var content = output["content"]?.arrayValue ?? []
+      let resolvedContentIndex = Self.resolveContentIndex(in: content, requested: contentIndex, preferredType: partType)
+
+      while content.count <= resolvedContentIndex {
+        content.append(.object(Self.syntheticContentPart(ofType: partType)))
+      }
+
+      var part = content[resolvedContentIndex].objectValue ?? Self.syntheticContentPart(ofType: partType)
+      if part["type"] == nil {
+        part["type"] = .string(partType)
+      }
+      let existingValue = part[fieldName]?.stringValue ?? ""
+      part[fieldName] = .string(existingValue + delta)
+
+      content[resolvedContentIndex] = .object(part)
+      output["content"] = .array(content)
+      outputs[resolvedOutputIndex] = output
+    }
+
+    private mutating func setContentField(
+      _ value: String,
+      outputIndex: Int?,
+      contentIndex: Int?,
+      defaultOutputType: String,
+      partType: String,
+      fieldName: String,
+    ) {
+      let resolvedOutputIndex = resolveOutputIndex(explicitIndex: outputIndex, defaultType: defaultOutputType)
+      guard outputs.indices.contains(resolvedOutputIndex) else { return }
+
+      var output = outputs[resolvedOutputIndex]
+      var content = output["content"]?.arrayValue ?? []
+      let resolvedContentIndex = Self.resolveContentIndex(in: content, requested: contentIndex, preferredType: partType)
+
+      while content.count <= resolvedContentIndex {
+        content.append(.object(Self.syntheticContentPart(ofType: partType)))
+      }
+
+      var part = content[resolvedContentIndex].objectValue ?? Self.syntheticContentPart(ofType: partType)
+      part["type"] = .string(partType)
+      part[fieldName] = .string(value)
+
+      content[resolvedContentIndex] = .object(part)
+      output["content"] = .array(content)
+      outputs[resolvedOutputIndex] = output
+    }
+
+    private mutating func appendSummaryDelta(_ delta: String, outputIndex: Int?, summaryIndex: Int?) {
+      guard !delta.isEmpty else { return }
+
+      let resolvedOutputIndex = resolveOutputIndex(explicitIndex: outputIndex, defaultType: OutputItemType.reasoning)
+      guard outputs.indices.contains(resolvedOutputIndex) else { return }
+
+      var output = outputs[resolvedOutputIndex]
+      var summary = output["summary"]?.arrayValue ?? []
+      let resolvedSummaryIndex = Self.resolveSummaryIndex(in: summary, requested: summaryIndex)
+      while summary.count <= resolvedSummaryIndex {
+        summary.append(.object(Self.syntheticSummaryItem()))
+      }
+
+      var item = summary[resolvedSummaryIndex].objectValue ?? Self.syntheticSummaryItem()
+      let existingText = item["text"]?.stringValue ?? ""
+      item["text"] = .string(existingText + delta)
+      summary[resolvedSummaryIndex] = .object(item)
+
+      output["summary"] = .array(summary)
+      outputs[resolvedOutputIndex] = output
+    }
+
+    private mutating func setSummaryText(_ text: String, outputIndex: Int?, summaryIndex: Int?) {
+      let resolvedOutputIndex = resolveOutputIndex(explicitIndex: outputIndex, defaultType: OutputItemType.reasoning)
+      guard outputs.indices.contains(resolvedOutputIndex) else { return }
+
+      var output = outputs[resolvedOutputIndex]
+      var summary = output["summary"]?.arrayValue ?? []
+      let resolvedSummaryIndex = Self.resolveSummaryIndex(in: summary, requested: summaryIndex)
+      while summary.count <= resolvedSummaryIndex {
+        summary.append(.object(Self.syntheticSummaryItem()))
+      }
+
+      var item = summary[resolvedSummaryIndex].objectValue ?? Self.syntheticSummaryItem()
+      item["text"] = .string(text)
+      summary[resolvedSummaryIndex] = .object(item)
+
+      output["summary"] = .array(summary)
+      outputs[resolvedOutputIndex] = output
+    }
+
+    private mutating func appendFunctionCallArgumentsDelta(_ delta: String, outputIndex: Int?, itemID: String?) {
+      guard !delta.isEmpty else { return }
+
+      let resolvedOutputIndex = resolveToolCallOutputIndex(explicitIndex: outputIndex, itemID: itemID)
+      guard outputs.indices.contains(resolvedOutputIndex) else { return }
+
+      var output = outputs[resolvedOutputIndex]
+      let existingArguments = output["arguments"]?.stringValue ?? ""
+      output["arguments"] = .string(existingArguments + delta)
+      if output["type"] == nil {
+        output["type"] = .string(OutputItemType.functionCall)
+      }
+      if let itemID, output["call_id"] == nil {
+        output["call_id"] = .string(itemID)
+      }
+
+      outputs[resolvedOutputIndex] = output
+    }
+
+    private mutating func completeFunctionCallArguments(_ arguments: String, outputIndex: Int?, itemID: String?) {
+      let resolvedOutputIndex = resolveToolCallOutputIndex(explicitIndex: outputIndex, itemID: itemID)
+      guard outputs.indices.contains(resolvedOutputIndex) else { return }
+
+      var output = outputs[resolvedOutputIndex]
+      output["type"] = .string(OutputItemType.functionCall)
+      output["arguments"] = .string(arguments)
+      if let itemID, output["call_id"] == nil {
+        output["call_id"] = .string(itemID)
+      }
+
+      outputs[resolvedOutputIndex] = output
+    }
+
+    private mutating func resolveToolCallOutputIndex(explicitIndex: Int?, itemID: String?) -> Int {
+      if let explicitIndex {
+        ensureOutputItem(at: explicitIndex, type: OutputItemType.functionCall)
+        return explicitIndex
+      }
+
+      if let itemID, let existingIndex = outputIndexByItemID[itemID] ?? outputIndexByCallID[itemID] {
+        return existingIndex
+      }
+
+      var item = Self.syntheticOutputItem(ofType: OutputItemType.functionCall)
+      if let itemID {
+        item["call_id"] = .string(itemID)
+      }
+      return appendOutputItem(item)
+    }
+
+    private static func resolveSummaryIndex(in summary: [Value], requested: Int?) -> Int {
+      if let requested {
+        return requested
+      }
+      if let existingIndex = summary.lastIndex(where: { $0.objectValue?["type"]?.stringValue == "text" }) {
+        return existingIndex
+      }
+      return summary.count
+    }
+
+    private static func resolveContentIndex(in content: [Value], requested: Int?, preferredType: String) -> Int {
+      if let requested {
+        return requested
+      }
+      if let existingIndex = content.lastIndex(where: { $0.objectValue?["type"]?.stringValue == preferredType }) {
+        return existingIndex
+      }
+      return content.count
+    }
+
+    private static func mergeOutputItem(existing: [String: Value], with incoming: [String: Value]) -> [String: Value] {
+      var merged = existing
+      for (key, value) in incoming {
+        merged[key] = value
+      }
+
+      if let existingContent = existing["content"],
+         incoming["content"] == nil || isEmptyArray(incoming["content"])
+      {
+        merged["content"] = existingContent
+      }
+      if let existingSummary = existing["summary"],
+         incoming["summary"] == nil || isEmptyArray(incoming["summary"])
+      {
+        merged["summary"] = existingSummary
+      }
+      if let existingArguments = existing["arguments"], incoming["arguments"] == nil {
+        merged["arguments"] = existingArguments
+      }
+
+      return merged
+    }
+
+    private static func mergeContentPart(existing: [String: Value], with incoming: [String: Value]) -> [String: Value] {
+      var merged = existing
+      for (key, value) in incoming {
+        merged[key] = value
+      }
+      return merged
+    }
+
+    private static func isEmptyArray(_ value: Value?) -> Bool {
+      guard case let .array(array)? = value else { return false }
+      return array.isEmpty
+    }
+
+    private static func syntheticSummaryItem() -> [String: Value] {
+      [
+        "type": .string("text"),
+        "text": .string(""),
+      ]
+    }
+
+    private static func syntheticOutputItem(ofType type: String) -> [String: Value] {
+      switch type {
+        case OutputItemType.reasoning:
+          [
+            "type": .string(OutputItemType.reasoning),
+            "summary": .array([.object(syntheticSummaryItem())]),
+            "content": .array([]),
+          ]
+        case OutputItemType.functionCall:
+          [
+            "type": .string(OutputItemType.functionCall),
+            "arguments": .string(""),
+          ]
+        default:
+          [
+            "type": .string(OutputItemType.message),
+            "role": .string("assistant"),
+            "content": .array([]),
+          ]
+      }
+    }
+
+    private static func syntheticContentPart(ofType type: String) -> [String: Value] {
+      switch type {
+        case "reasoning_text":
+          [
+            "type": .string("reasoning_text"),
+            "text": .string(""),
+          ]
+        case OutputItemType.refusal:
+          [
+            "type": .string(OutputItemType.refusal),
+            "refusal": .string(""),
+          ]
+        default:
+          [
+            "type": .string(OutputItemType.outputText),
+            "text": .string(""),
+          ]
       }
     }
   }
@@ -520,6 +1012,7 @@ public final class ResponsesClient: APIClient, Sendable {
     static let reasoningTextDelta = "response.reasoning_text.delta"
     static let reasoningDelta = "response.reasoning.delta" // Deprecated, kept for older API versions
     static let reasoningSummaryDelta = "response.reasoning_summary_text.delta"
+    static let reasoningSummaryDone = "response.reasoning_summary_text.done"
     static let outputItemAdded = "response.output_item.added"
     static let contentPartAdded = "response.content_part.added"
     static let refusalDelta = "response.refusal.delta"
@@ -1032,12 +1525,18 @@ public final class ResponsesClient: APIClient, Sendable {
           yieldCurrentState()
         }
 
+      case StreamEventType.reasoningSummaryDone:
+        if let text = event.text {
+          streamingState.setSummaryText(text, outputIndex: event.outputIndex)
+          yieldCurrentState()
+        }
+
       case StreamEventType.contentPartAdded:
         // The OpenAI Responses API tracks content parts per output item (output_index + content_index),
         // but this library flattens to one Message.Content per output_index. Deltas at the same
         // output_index are concatenated, which produces identical final text. Partial stream snapshots
-        // may collapse multiple content parts into fewer blocks, but completed responses are built
-        // from the full response payload.
+        // may collapse multiple content parts into fewer blocks, but terminal responses are built
+        // from the completed or accumulated response snapshot.
         break
 
       case StreamEventType.outputItemAdded:
@@ -1079,36 +1578,37 @@ public final class ResponsesClient: APIClient, Sendable {
           yieldCurrentState()
         }
 
-      case StreamEventType.completed:
-        // Build and yield final response with metadata
-        if let response = event.response {
-          let generationResponse = response.toGenerationResponse()
-          var finalContent = generationResponse.content
-
-          // Some Responses API streams omit output_index on intermediate
-          // function-call events. In that case, recover tool calls from the
-          // final completed response payload instead of dropping them.
-          var seenToolCallIDs = Set(finalContent.compactMap { block -> String? in
-            guard case let .toolCall(toolCall) = block else { return nil }
-            return toolCall.id
-          })
-          for toolCall in streamingState.content.compactMap({ block -> ToolCall? in
-            guard case let .toolCall(toolCall) = block else { return nil }
-            return toolCall
-          }) where !seenToolCallIDs.contains(toolCall.id) {
-            finalContent.append(.toolCall(toolCall))
-            seenToolCallIDs.insert(toolCall.id)
-          }
-
-          continuation.yield(GenerationResponse(
-            content: finalContent,
-            metadata: generationResponse.metadata,
-          ))
-        }
-
       default:
         break
     }
+  }
+
+  private func yieldFinalResponse(
+    _ generationResponse: GenerationResponse,
+    mergingToolCallsFrom streamingState: StreamingResponseState,
+    continuation: AsyncThrowingStream<GenerationResponse, Error>.Continuation,
+  ) {
+    var finalContent = generationResponse.content
+
+    // Some Responses API streams omit output_index on intermediate
+    // function-call events. In that case, recover tool calls from the
+    // incremental stream state instead of dropping them in the terminal chunk.
+    var seenToolCallIDs = Set(finalContent.compactMap { block -> String? in
+      guard case let .toolCall(toolCall) = block else { return nil }
+      return toolCall.id
+    })
+    for toolCall in streamingState.content.compactMap({ block -> ToolCall? in
+      guard case let .toolCall(toolCall) = block else { return nil }
+      return toolCall
+    }) where !seenToolCallIDs.contains(toolCall.id) {
+      finalContent.append(.toolCall(toolCall))
+      seenToolCallIDs.insert(toolCall.id)
+    }
+
+    continuation.yield(GenerationResponse(
+      content: finalContent,
+      metadata: generationResponse.metadata,
+    ))
   }
 
   // MARK: - Background Response Methods
@@ -1335,9 +1835,7 @@ public final class ResponsesClient: APIClient, Sendable {
 
     var streamingState = StreamingResponseState()
     var receivedCompletedEvent = false
-    // Accumulated response snapshot from response.created, used as fallback
-    // metadata source if the stream ends without a response.completed event.
-    var responseSnapshot: ResponseObject?
+    var accumulatedSnapshot: AccumulatedResponseSnapshot?
 
     for try await event in result.events {
       try Task.checkCancellation()
@@ -1354,11 +1852,20 @@ public final class ResponsesClient: APIClient, Sendable {
       do {
         let event = try JSONDecoder().decode(StreamEvent.self, from: jsonData)
 
-        // Extract response ID from first event (for background direct mode)
-        if event.type == StreamEventType.created, let response = event.response {
-          responseSnapshot = response
+        if event.type == StreamEventType.created {
+          guard let response = event.response else {
+            throw AIError.parsing(message: "Responses stream created event missing response payload")
+          }
+          accumulatedSnapshot = AccumulatedResponseSnapshot(response)
           if let id = response.id, let responseIdHandler {
             await responseIdHandler(id)
+          }
+        } else if event.type == StreamEventType.completed {
+          guard let response = event.response else {
+            throw AIError.parsing(message: "Responses stream completed event missing response payload")
+          }
+          if accumulatedSnapshot == nil {
+            accumulatedSnapshot = AccumulatedResponseSnapshot(response)
           }
         }
 
@@ -1367,8 +1874,22 @@ public final class ResponsesClient: APIClient, Sendable {
           sequenceHandler(sequenceNumber)
         }
 
+        if var snapshot = accumulatedSnapshot {
+          snapshot.apply(event)
+          accumulatedSnapshot = snapshot
+        }
+
         if event.type == StreamEventType.completed {
           receivedCompletedEvent = true
+          guard let snapshot = accumulatedSnapshot else {
+            throw AIError.parsing(message: "Responses stream completed without an accumulated response snapshot")
+          }
+          yieldFinalResponse(
+            snapshot.finalize(),
+            mergingToolCallsFrom: streamingState,
+            continuation: continuation,
+          )
+          continue
         }
 
         try processStreamingEvent(
@@ -1384,29 +1905,16 @@ public final class ResponsesClient: APIClient, Sendable {
       }
     }
 
-    // Best-effort EOF fallback: if the stream ended without a response.completed
-    // event, yield a terminal chunk from the accumulated streaming state and the
-    // response.created snapshot. This does not fully match the OpenAI TS SDK's
-    // accumulated snapshot, which also mutates on output_item.added and
-    // content_part.added events — output items we only log or ignore (e.g.,
-    // web_search_call, code_interpreter_call) are not captured here, and message
-    // annotations/endnotes from the completed response are absent.
-    if !receivedCompletedEvent, let snapshot = responseSnapshot {
-      var createdAtDate: Date?
-      if let createdAt = snapshot.createdAt {
-        createdAtDate = Date(timeIntervalSince1970: TimeInterval(createdAt))
+    if !receivedCompletedEvent {
+      guard let snapshot = accumulatedSnapshot else {
+        throw AIError.parsing(message: "Responses stream ended without producing a response snapshot")
       }
-      let metadata = GenerationResponse.Metadata(
-        responseId: snapshot.id,
-        model: snapshot.model,
-        createdAt: createdAtDate,
-        inputTokens: snapshot.usage?.inputTokens,
-        outputTokens: snapshot.usage?.outputTokens,
-        totalTokens: snapshot.usage?.totalTokens,
-        cacheReadInputTokens: snapshot.usage?.inputTokensDetails?.cachedTokens,
-        reasoningTokens: snapshot.usage?.outputTokensDetails?.reasoningTokens,
+
+      yieldFinalResponse(
+        snapshot.finalize(),
+        mergingToolCallsFrom: streamingState,
+        continuation: continuation,
       )
-      continuation.yield(GenerationResponse(content: streamingState.content, metadata: metadata))
     }
   }
 
@@ -1871,11 +2379,15 @@ extension ResponsesClient {
     let type: String?
     let sequenceNumber: Int?
     let delta: String?
+    let text: String?
     let refusal: String?
     let itemId: String?
     let outputIndex: Int?
+    let contentIndex: Int?
+    let summaryIndex: Int?
     let arguments: String?
-    let item: OutputItem?
+    let item: ResponseOutputItem?
+    let part: ContentItem?
     let response: ResponseObject?
     let error: ErrorObject?
 
@@ -1883,86 +2395,171 @@ extension ResponsesClient {
       case type
       case sequenceNumber = "sequence_number"
       case delta
+      case text
       case refusal
       case itemId = "item_id"
       case outputIndex = "output_index"
+      case contentIndex = "content_index"
+      case summaryIndex = "summary_index"
       case arguments
       case item
+      case part
       case response
       case error
     }
   }
 
-  struct OutputItem: Decodable {
-    let id: String?
-    let type: String?
-    let name: String?
-    let callId: String?
-    let summary: [SummaryItem]?
+  struct SummaryItem: Decodable {
+    let raw: [String: Value]
 
-    enum CodingKeys: String, CodingKey {
-      case id, type, name, summary
-      case callId = "call_id"
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var type: String? {
+      raw["type"]?.stringValue
+    }
+
+    var text: String? {
+      raw["text"]?.stringValue
     }
   }
 
-  struct SummaryItem: Decodable {
-    let type: String?
-    let text: String?
-  }
-
   struct Usage: Decodable {
-    let inputTokens: Int?
-    let outputTokens: Int?
-    let totalTokens: Int?
-    let inputTokensDetails: InputTokensDetails?
-    let outputTokensDetails: OutputTokensDetails?
+    let raw: [String: Value]
 
-    enum CodingKeys: String, CodingKey {
-      case inputTokens = "input_tokens"
-      case outputTokens = "output_tokens"
-      case totalTokens = "total_tokens"
-      case inputTokensDetails = "input_tokens_details"
-      case outputTokensDetails = "output_tokens_details"
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var inputTokens: Int? {
+      raw["input_tokens"]?.intValue
+    }
+
+    var outputTokens: Int? {
+      raw["output_tokens"]?.intValue
+    }
+
+    var totalTokens: Int? {
+      raw["total_tokens"]?.intValue
+    }
+
+    var inputTokensDetails: InputTokensDetails? {
+      raw["input_tokens_details"]?.objectValue.map(InputTokensDetails.init(raw:))
+    }
+
+    var outputTokensDetails: OutputTokensDetails? {
+      raw["output_tokens_details"]?.objectValue.map(OutputTokensDetails.init(raw:))
     }
   }
 
   struct InputTokensDetails: Decodable {
-    let cachedTokens: Int?
+    let raw: [String: Value]
 
-    enum CodingKeys: String, CodingKey {
-      case cachedTokens = "cached_tokens"
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var cachedTokens: Int? {
+      raw["cached_tokens"]?.intValue
     }
   }
 
   struct OutputTokensDetails: Decodable {
-    let reasoningTokens: Int?
+    let raw: [String: Value]
 
-    enum CodingKeys: String, CodingKey {
-      case reasoningTokens = "reasoning_tokens"
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var reasoningTokens: Int? {
+      raw["reasoning_tokens"]?.intValue
     }
   }
 
   struct IncompleteDetails: Decodable {
-    let reason: String?
+    let raw: [String: Value]
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var reason: String? {
+      raw["reason"]?.stringValue
+    }
   }
 
   struct ResponseObject: Decodable {
-    let id: String?
-    let status: String?
-    let model: String?
-    let createdAt: Int?
-    let output: [ResponseOutputItem]?
-    let outputText: String?
-    let usage: Usage?
-    let error: ErrorObject?
-    let incompleteDetails: IncompleteDetails?
+    let raw: [String: Value]
 
-    enum CodingKeys: String, CodingKey {
-      case id, status, model, output, usage, error
-      case createdAt = "created_at"
-      case outputText = "output_text"
-      case incompleteDetails = "incomplete_details"
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var id: String? {
+      raw["id"]?.stringValue
+    }
+
+    var status: String? {
+      raw["status"]?.stringValue
+    }
+
+    var model: String? {
+      raw["model"]?.stringValue
+    }
+
+    var createdAt: Int? {
+      raw["created_at"]?.intValue
+    }
+
+    var output: [ResponseOutputItem]? {
+      raw["output"]?.arrayValue?.compactMap(\.objectValue).map(ResponseOutputItem.init(raw:))
+    }
+
+    var outputText: String? {
+      raw["output_text"]?.stringValue
+    }
+
+    var usage: Usage? {
+      raw["usage"]?.objectValue.map(Usage.init(raw:))
+    }
+
+    var error: ErrorObject? {
+      raw["error"]?.objectValue.map(ErrorObject.init(raw:))
+    }
+
+    var incompleteDetails: IncompleteDetails? {
+      raw["incomplete_details"]?.objectValue.map(IncompleteDetails.init(raw:))
     }
 
     /// Converts the response object to a GenerationResponse
@@ -2176,6 +2773,10 @@ extension ResponsesClient {
       raw = try container.decode([String: Value].self)
     }
 
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
     var id: String? {
       raw["id"]?.stringValue
     }
@@ -2209,23 +2810,42 @@ extension ResponsesClient {
     }
 
     var content: [ContentItem]? {
-      guard let contentValue = raw["content"] else { return nil }
-      guard let data = try? JSONEncoder().encode(contentValue) else { return nil }
-      return try? JSONDecoder().decode([ContentItem].self, from: data)
+      raw["content"]?.arrayValue?.compactMap(\.objectValue).map(ContentItem.init(raw:))
     }
 
     var summary: [SummaryItem]? {
-      guard let summaryValue = raw["summary"] else { return nil }
-      guard let data = try? JSONEncoder().encode(summaryValue) else { return nil }
-      return try? JSONDecoder().decode([SummaryItem].self, from: data)
+      raw["summary"]?.arrayValue?.compactMap(\.objectValue).map(SummaryItem.init(raw:))
     }
   }
 
   struct ContentItem: Decodable {
-    let type: String?
-    let text: String?
-    let refusal: String?
-    let annotations: [AnnotationItem]?
+    /// Raw JSON for lossless round-tripping of all content part types.
+    let raw: [String: Value]
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var type: String? {
+      raw["type"]?.stringValue
+    }
+
+    var text: String? {
+      raw["text"]?.stringValue
+    }
+
+    var refusal: String? {
+      raw["refusal"]?.stringValue
+    }
+
+    var annotations: [AnnotationItem]? {
+      raw["annotations"]?.arrayValue?.compactMap(\.objectValue).map(AnnotationItem.init(raw:))
+    }
   }
 
   struct AnnotationItem: Decodable {
@@ -2235,6 +2855,10 @@ extension ResponsesClient {
     init(from decoder: Decoder) throws {
       let container = try decoder.singleValueContainer()
       raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
     }
 
     var type: String? {
@@ -2259,8 +2883,24 @@ extension ResponsesClient {
   }
 
   struct ErrorObject: Decodable {
-    let message: String?
-    let code: String?
+    let raw: [String: Value]
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var message: String? {
+      raw["message"]?.stringValue
+    }
+
+    var code: String? {
+      raw["code"]?.stringValue
+    }
   }
 
   /// Checks whether a model supports the reasoning effort parameter.

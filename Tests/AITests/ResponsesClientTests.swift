@@ -366,6 +366,231 @@ struct ResponsesClientTests {
     #expect(reasoningText.contains("think"), "Thinking content should contain 'think'")
   }
 
+  // MARK: - EOF Fallback Tests
+
+  @Test
+  func `Clean EOF finalizes text and tool calls without completed event`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_eof_func","status":"in_progress","model":"gpt-4o"}}
+
+    event: response.output_text.delta
+    data: {"type":"response.output_text.delta","delta":"I'll check the "}
+
+    event: response.output_text.delta
+    data: {"type":"response.output_text.delta","delta":"weather."}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","item":{"type":"function_call","name":"get_weather","call_id":"call_eof_weather"}}
+
+    event: response.function_call_arguments.delta
+    data: {"type":"response.function_call_arguments.delta","item_id":"call_eof_weather","delta":"{\\"location\\":"}
+
+    event: response.function_call_arguments.done
+    data: {"type":"response.function_call_arguments.done","item_id":"call_eof_weather","arguments":"{\\"location\\":\\"Paris\\"}"}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      messages: [Message(role: .user, content: "What's the weather in Paris?")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.responseText == "I'll check the weather.")
+    #expect(response.metadata?.responseId == "resp_eof_func")
+    #expect(response.metadata?.model == "gpt-4o")
+    #expect(response.toolCalls.count == 1)
+
+    let toolCall = try #require(response.toolCalls.first)
+    #expect(toolCall.name == "get_weather")
+    #expect(toolCall.id == "call_eof_weather")
+    if case let .string(location) = toolCall.parameters["location"] {
+      #expect(location == "Paris")
+    } else {
+      Issue.record("Expected location parameter to be a string")
+    }
+  }
+
+  @Test
+  func `Clean EOF finalizes reasoning without completed event`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_eof_reasoning","status":"in_progress","model":"o3-mini"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_123","type":"reasoning","summary":[{"type":"text","text":""}]}}
+
+    event: response.content_part.added
+    data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"reasoning_text","text":""}}
+
+    event: response.reasoning_text.delta
+    data: {"type":"response.reasoning_text.delta","output_index":0,"content_index":0,"delta":"Let me think about this carefully."}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","role":"assistant","content":[]}}
+
+    event: response.output_text.delta
+    data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"The answer is 42."}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "o3-mini",
+      messages: [Message(role: .user, content: "What is the meaning of life?")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+      configuration: .init(reasoningEffortLevel: .medium),
+    ))
+
+    #expect(response.reasoningText?.contains("think") == true)
+    #expect(response.responseText == "The answer is 42.")
+    #expect(response.metadata?.responseId == "resp_eof_reasoning")
+  }
+
+  @Test
+  func `Clean EOF preserves multiple reasoning summary items without completed event`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_eof_summary","status":"in_progress","model":"o3-mini"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_summary_123","type":"reasoning","summary":[]}}
+
+    event: response.reasoning_summary_text.done
+    data: {"type":"response.reasoning_summary_text.done","item_id":"rs_summary_123","output_index":0,"summary_index":0,"text":"First summary item."}
+
+    event: response.reasoning_summary_text.done
+    data: {"type":"response.reasoning_summary_text.done","item_id":"rs_summary_123","output_index":0,"summary_index":1,"text":"Second summary item."}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","role":"assistant","content":[]}}
+
+    event: response.output_text.delta
+    data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"Done."}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "o3-mini",
+      messages: [Message(role: .user, content: "Summarize your reasoning")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+      configuration: .init(reasoningEffortLevel: .medium),
+    ))
+
+    #expect(response.reasoningText?.contains("First summary item.") == true)
+    #expect(response.reasoningText?.contains("Second summary item.") == true)
+    #expect(response.responseText == "Done.")
+  }
+
+  @Test
+  func `Clean EOF preserves annotations and message metadata without completed event`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_eof_annotations","status":"in_progress","model":"gpt-4o"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_eof_123","type":"message","role":"assistant","status":"completed","content":[]}}
+
+    event: response.content_part.added
+    data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":"See docs","annotations":[{"type":"url_citation","url":"https://example.com/docs","title":"Example Docs"}]}}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [Message(role: .user, content: "Share the docs")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.responseText == "See docs")
+    #expect(response.endnotesText?.contains("Example Docs") == true)
+    #expect(response.endnotesText?.contains("https://example.com/docs") == true)
+    #expect(response.content.contains { content in
+      guard case let .providerOpaque(block) = content else { return false }
+      return block.provider == "openai-responses" && block.type == "message_metadata"
+    })
+  }
+
+  @Test
+  func `Clean EOF preserves empty valid response without completed event`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_eof_empty","status":"in_progress","model":"gpt-4o"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [Message(role: .user, content: "Hello")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.responseText == nil)
+    #expect(response.metadata?.responseId == "resp_eof_empty")
+    #expect(response.metadata?.model == "gpt-4o")
+  }
+
+  @Test
+  func `Clean EOF without any snapshot throws parsing error`() async throws {
+    let (testId, endpoint) = setupMockHandler(sseData: "data: [DONE]\n\n")
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    var sawChunk = false
+
+    do {
+      for try await _ in client.streamText(
+        modelId: "gpt-4o",
+        messages: [Message(role: .user, content: "Hello")],
+        maxTokens: 1024,
+        apiKey: "test-api-key",
+      ) {
+        sawChunk = true
+      }
+      Issue.record("Expected parsing error for stream without a response snapshot")
+    } catch let error as AIError {
+      if case .parsing = error {
+        #expect(sawChunk == false)
+      } else {
+        Issue.record("Expected parsing error, got: \(error)")
+      }
+    }
+  }
+
   // MARK: - Error Handling Tests
 
   @Test
