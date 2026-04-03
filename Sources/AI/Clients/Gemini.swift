@@ -799,11 +799,6 @@ public final class GeminiClient: APIClient, Sendable {
             {
               let finishReason = FinishReason(rawValue: finishReasonString) ?? .other
               continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: finishReason))
-              // Only finish the stream on terminal finish reasons
-              if finishReason == .stop || finishReason == .maxTokens {
-                continuation.finish()
-                return
-              }
             }
 
           } catch {
