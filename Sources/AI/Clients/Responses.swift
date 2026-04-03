@@ -87,8 +87,23 @@ public final class ResponsesClient: APIClient, Sendable {
     static let functionCallOutput = "function_call_output"
   }
 
+  /// Composite key for streaming content: (outputIndex, contentIndex).
+  /// Content parts within the same output item (e.g., text + refusal in one message)
+  /// have different contentIndex values and must not overwrite each other.
+  private struct ContentKey: Hashable, Comparable {
+    let outputIndex: Int
+    let contentIndex: Int
+
+    static func < (lhs: ContentKey, rhs: ContentKey) -> Bool {
+      if lhs.outputIndex != rhs.outputIndex {
+        return lhs.outputIndex < rhs.outputIndex
+      }
+      return lhs.contentIndex < rhs.contentIndex
+    }
+  }
+
   private struct StreamingResponseState {
-    var indexedContent: [Int: Message.Content] = [:]
+    var indexedContent: [ContentKey: Message.Content] = [:]
     var fallbackContent: [Message.Content] = []
     var toolCallArgumentBuffers: [String: String] = [:]
     /// Maps item IDs to fallback content indices for tool calls without output_index.
@@ -96,35 +111,52 @@ public final class ResponsesClient: APIClient, Sendable {
     /// Separate buffer for reasoning summary deltas, keyed by output index.
     /// Used as a fallback when no full reasoning text is available at that index.
     var summaryContent: [Int: String] = [:]
+    /// Tracks the next contentIndex to assign per outputIndex when events omit content_index.
+    private var nextContentIndex: [Int: Int] = [:]
+
+    /// Returns a ContentKey, using the provided contentIndex or auto-assigning from a counter.
+    private mutating func key(outputIndex: Int, contentIndex: Int?) -> ContentKey {
+      if let contentIndex {
+        // Update the counter so future auto-assignments don't collide
+        nextContentIndex[outputIndex] = max(nextContentIndex[outputIndex, default: 0], contentIndex + 1)
+        return ContentKey(outputIndex: outputIndex, contentIndex: contentIndex)
+      }
+      // For events without content_index (reasoning, tool calls), use 0
+      return ContentKey(outputIndex: outputIndex, contentIndex: 0)
+    }
 
     var content: [Message.Content] {
       // For output indices that have summary but no reasoning text, use the summary
       var merged = indexedContent
-      for (index, summary) in summaryContent where merged[index] == nil {
-        merged[index] = .thinking(text: summary, signature: nil)
+      for (index, summary) in summaryContent {
+        let key = ContentKey(outputIndex: index, contentIndex: 0)
+        if merged[key] == nil {
+          merged[key] = .thinking(text: summary, signature: nil)
+        }
       }
       return merged.keys.sorted().compactMap { merged[$0] } + fallbackContent
     }
 
-    mutating func appendTextDelta(_ delta: String, outputIndex: Int?) {
-      append(delta: delta, outputIndex: outputIndex, as: { .text($0) })
+    mutating func appendTextDelta(_ delta: String, outputIndex: Int?, contentIndex: Int?) {
+      append(delta: delta, outputIndex: outputIndex, contentIndex: contentIndex, as: { .text($0) })
     }
 
-    mutating func setFinalizedText(_ text: String, outputIndex: Int?) {
+    mutating func setFinalizedText(_ text: String, outputIndex: Int?, contentIndex: Int?) {
       guard let outputIndex else {
         appendFallback(.text(text))
         return
       }
-      indexedContent[outputIndex] = .text(text)
+      let k = key(outputIndex: outputIndex, contentIndex: contentIndex)
+      indexedContent[k] = .text(text)
     }
 
-    mutating func appendRefusalDelta(_ delta: String, outputIndex: Int?) {
-      append(delta: delta, outputIndex: outputIndex, as: {
+    mutating func appendRefusalDelta(_ delta: String, outputIndex: Int?, contentIndex: Int?) {
+      append(delta: delta, outputIndex: outputIndex, contentIndex: contentIndex, as: {
         .providerOpaque(OpaqueBlock(provider: "openai-responses", type: "refusal", content: $0, isResponseContent: true))
       })
     }
 
-    mutating func setFinalizedRefusal(_ text: String, outputIndex: Int?) {
+    mutating func setFinalizedRefusal(_ text: String, outputIndex: Int?, contentIndex: Int?) {
       let block = Message.Content.providerOpaque(OpaqueBlock(
         provider: "openai-responses", type: "refusal", content: text, isResponseContent: true,
       ))
@@ -132,11 +164,12 @@ public final class ResponsesClient: APIClient, Sendable {
         appendFallback(block)
         return
       }
-      indexedContent[outputIndex] = block
+      let k = key(outputIndex: outputIndex, contentIndex: contentIndex)
+      indexedContent[k] = block
     }
 
     mutating func appendReasoningDelta(_ delta: String, outputIndex: Int?) {
-      append(delta: delta, outputIndex: outputIndex, as: { .thinking(text: $0, signature: nil) })
+      append(delta: delta, outputIndex: outputIndex, contentIndex: nil, as: { .thinking(text: $0, signature: nil) })
     }
 
     mutating func appendSummaryDelta(_ delta: String, outputIndex: Int?) {
@@ -167,24 +200,28 @@ public final class ResponsesClient: APIClient, Sendable {
         itemIdToFallbackIndex[toolCall.id] = index
         return
       }
-      indexedContent[outputIndex] = .toolCall(toolCall)
+      let k = key(outputIndex: outputIndex, contentIndex: nil)
+      indexedContent[k] = .toolCall(toolCall)
       toolCallArgumentBuffers[String(outputIndex)] = ""
     }
 
     mutating func appendToolCallArgumentsDelta(_ delta: String, outputIndex: Int?, itemId: String?) {
-      let key = outputIndex.map(String.init) ?? itemId ?? "_fallback"
-      let existingArgsString = toolCallArgumentBuffers[key] ?? ""
+      let bufferKey = outputIndex.map(String.init) ?? itemId ?? "_fallback"
+      let existingArgsString = toolCallArgumentBuffers[bufferKey] ?? ""
       let newArgsString = existingArgsString + delta
-      toolCallArgumentBuffers[key] = newArgsString
+      toolCallArgumentBuffers[bufferKey] = newArgsString
 
-      if let outputIndex, case let .toolCall(currentToolCall)? = indexedContent[outputIndex] {
-        guard let argsData = newArgsString.data(using: .utf8),
-              let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
-        else { return }
-        var updatedToolCall = currentToolCall
-        updatedToolCall.parameters = partialArgs
-        indexedContent[outputIndex] = .toolCall(updatedToolCall)
-      } else if outputIndex == nil {
+      if let outputIndex {
+        let k = key(outputIndex: outputIndex, contentIndex: nil)
+        if case let .toolCall(currentToolCall)? = indexedContent[k] {
+          guard let argsData = newArgsString.data(using: .utf8),
+                let partialArgs = try? JSONDecoder().decode([String: Value].self, from: argsData)
+          else { return }
+          var updatedToolCall = currentToolCall
+          updatedToolCall.parameters = partialArgs
+          indexedContent[k] = .toolCall(updatedToolCall)
+        }
+      } else {
         let matchIndex = itemId.flatMap { itemIdToFallbackIndex[$0] }
           ?? fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } })
         guard let matchIndex,
@@ -200,14 +237,17 @@ public final class ResponsesClient: APIClient, Sendable {
     }
 
     mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int?, itemId: String?) {
-      let key = outputIndex.map(String.init) ?? itemId ?? "_fallback"
-      toolCallArgumentBuffers.removeValue(forKey: key)
+      let bufferKey = outputIndex.map(String.init) ?? itemId ?? "_fallback"
+      toolCallArgumentBuffers.removeValue(forKey: bufferKey)
 
       var updatedToolCall: ToolCall?
       var matchedFallbackIndex: Int?
-      if let outputIndex, case let .toolCall(currentToolCall)? = indexedContent[outputIndex] {
-        updatedToolCall = currentToolCall
-      } else if outputIndex == nil {
+      if let outputIndex {
+        let k = key(outputIndex: outputIndex, contentIndex: nil)
+        if case let .toolCall(currentToolCall)? = indexedContent[k] {
+          updatedToolCall = currentToolCall
+        }
+      } else {
         let idx = itemId.flatMap { itemIdToFallbackIndex[$0] }
           ?? fallbackContent.lastIndex(where: { if case .toolCall = $0 { true } else { false } })
         if let idx, case let .toolCall(currentToolCall) = fallbackContent[idx] {
@@ -227,7 +267,8 @@ public final class ResponsesClient: APIClient, Sendable {
       }
 
       if let outputIndex {
-        indexedContent[outputIndex] = .toolCall(toolCall)
+        let k = key(outputIndex: outputIndex, contentIndex: nil)
+        indexedContent[k] = .toolCall(toolCall)
       } else if let idx = matchedFallbackIndex {
         fallbackContent[idx] = .toolCall(toolCall)
       }
@@ -236,9 +277,10 @@ public final class ResponsesClient: APIClient, Sendable {
     private mutating func append(
       delta: String,
       outputIndex: Int?,
+      contentIndex: Int?,
       as createBlock: (String) -> Message.Content,
     ) {
-      append(delta: delta, outputIndex: outputIndex) { existing in
+      append(delta: delta, outputIndex: outputIndex, contentIndex: contentIndex) { existing in
         createBlock(existing + delta)
       } create: {
         createBlock(delta)
@@ -248,6 +290,7 @@ public final class ResponsesClient: APIClient, Sendable {
     private mutating func append(
       delta _: String,
       outputIndex: Int?,
+      contentIndex: Int?,
       update: (String) -> Message.Content,
       create: () -> Message.Content,
     ) {
@@ -256,16 +299,16 @@ public final class ResponsesClient: APIClient, Sendable {
         return
       }
 
-      switch indexedContent[outputIndex] {
+      let k = key(outputIndex: outputIndex, contentIndex: contentIndex)
+      switch indexedContent[k] {
         case let .text(existingText)?:
-          indexedContent[outputIndex] = update(existingText)
+          indexedContent[k] = update(existingText)
         case let .thinking(text: existingText, signature: nil)?:
-          indexedContent[outputIndex] = update(existingText)
+          indexedContent[k] = update(existingText)
         case let .providerOpaque(block)? where block.content != nil:
-          // Safe: guarded by `where block.content != nil` above
-          indexedContent[outputIndex] = update(block.content ?? "")
+          indexedContent[k] = update(block.content ?? "")
         default:
-          indexedContent[outputIndex] = create()
+          indexedContent[k] = create()
       }
     }
 
@@ -1527,19 +1570,19 @@ public final class ResponsesClient: APIClient, Sendable {
     switch eventType {
       case StreamEventType.outputTextDelta:
         if let delta = event.delta {
-          streamingState.appendTextDelta(delta, outputIndex: event.outputIndex)
+          streamingState.appendTextDelta(delta, outputIndex: event.outputIndex, contentIndex: event.contentIndex)
           yieldCurrentState()
         }
 
       case StreamEventType.refusalDelta:
         if let delta = event.delta {
-          streamingState.appendRefusalDelta(delta, outputIndex: event.outputIndex)
+          streamingState.appendRefusalDelta(delta, outputIndex: event.outputIndex, contentIndex: event.contentIndex)
           yieldCurrentState()
         }
 
       case StreamEventType.refusalDone:
         if let refusal = event.refusal {
-          streamingState.setFinalizedRefusal(refusal, outputIndex: event.outputIndex)
+          streamingState.setFinalizedRefusal(refusal, outputIndex: event.outputIndex, contentIndex: event.contentIndex)
           yieldCurrentState()
         }
 
@@ -1562,11 +1605,9 @@ public final class ResponsesClient: APIClient, Sendable {
         }
 
       case StreamEventType.contentPartAdded:
-        // The OpenAI Responses API tracks content parts per output item (output_index + content_index),
-        // but this library flattens to one Message.Content per output_index. Deltas at the same
-        // output_index are concatenated, which produces identical final text. Partial stream snapshots
-        // may collapse multiple content parts into fewer blocks, but terminal responses are built
-        // from the completed or accumulated response snapshot.
+        // Content parts are tracked by (output_index, content_index) in the streaming state,
+        // so multiple parts within the same output item (e.g., text + refusal) are preserved
+        // separately. Terminal responses are built from the completed or accumulated snapshot.
         break
 
       case StreamEventType.outputItemAdded:
