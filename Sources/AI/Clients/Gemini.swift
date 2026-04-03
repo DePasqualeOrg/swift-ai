@@ -443,6 +443,7 @@ public final class GeminiClient: APIClient, Sendable {
           }
         case .assistant, .user, .tool:
           let parts = try await requestParts(for: message, apiKey: apiKey)
+          guard !parts.isEmpty else { continue }
           let role = switch message.role {
             case .assistant: "model"
             case .tool: "user"
