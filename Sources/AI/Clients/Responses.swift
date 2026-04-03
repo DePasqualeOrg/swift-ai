@@ -1605,6 +1605,8 @@ extension ResponsesClient {
   /// Reasoning effort level for models that support extended thinking.
   /// Maps to the `effort` value in the API's `reasoning` object.
   public enum ReasoningEffortLevel: String, CaseIterable, Identifiable, Sendable {
+    /// No reasoning. Default for gpt-5.1.
+    case none
     /// Minimal reasoning effort for simple tasks.
     case minimal
     /// Low reasoning effort for straightforward tasks.
@@ -1613,6 +1615,8 @@ extension ResponsesClient {
     case medium
     /// High reasoning effort for complex tasks.
     case high
+    /// Maximum reasoning effort. Supported for models after gpt-5.1-codex-max.
+    case xhigh
 
     /// The raw value identifier.
     public var id: String {
