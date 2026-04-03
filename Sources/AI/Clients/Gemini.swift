@@ -443,11 +443,20 @@ public final class GeminiClient: APIClient, Sendable {
           }
         case .assistant, .user, .tool:
           let parts = try await requestParts(for: message, apiKey: apiKey)
-          guard !parts.isEmpty else { continue }
           let role = switch message.role {
             case .assistant: "model"
             case .tool: "user"
             default: message.role.rawValue
+          }
+          if parts.isEmpty {
+            // When a model turn has no serializable parts, also remove the preceding
+            // user turn to maintain Gemini's required user/model alternation.
+            if role == "model",
+               processedMessages.last?["role"] as? String == "user"
+            {
+              processedMessages.removeLast()
+            }
+            continue
           }
           processedMessages.append([
             "role": role,
