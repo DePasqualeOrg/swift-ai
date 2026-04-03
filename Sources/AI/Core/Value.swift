@@ -201,8 +201,19 @@ public enum Value: Hashable, Sendable {
   /// the wire schema (where the field is required+nullable) and the original schema used for
   /// local validation in `Tools.call()`. Optional properties must be declared as nullable in
   /// the original schema to be compatible with strict mode.
-  static func schemaForStrictMode(_ schema: [String: Value], path: [String] = []) throws -> [String: any Sendable] {
+  static func schemaForStrictMode(_ schema: [String: Value], path: [String] = [], root: [String: Value]? = nil) throws -> [String: any Sendable] {
+    // At the root level, enforce that the schema type is "object"
+    if path.isEmpty {
+      let rootType = schema["type"]?.stringValue
+      if rootType != "object" {
+        throw AIError.invalidRequest(
+          message: "Strict mode requires the root schema to have type: 'object' but got type: '\(rootType ?? "undefined")'",
+        )
+      }
+    }
+
     var result: [String: any Sendable] = [:]
+    let resolvedRoot = root ?? schema
 
     let isObjectType: Bool = switch schema["type"] {
       case let .string(typeStr): typeStr == "object"
@@ -219,7 +230,21 @@ public enum Value: Hashable, Sendable {
 
     var propertyNames: [String] = []
 
-    for (key, value) in schema {
+    // Resolve $ref with sibling keywords by inlining the referenced definition
+    var effectiveSchema = schema
+    if let ref = schema["$ref"]?.stringValue, schema.count > 1 {
+      let resolved = try resolveRef(ref, in: resolvedRoot)
+      // Sibling properties take priority over the resolved $ref
+      var merged = resolved
+      for (key, value) in schema where key != "$ref" {
+        merged[key] = value
+      }
+      effectiveSchema = merged
+      // Re-run strict normalization on the merged schema
+      return try schemaForStrictMode(effectiveSchema, path: path, root: resolvedRoot)
+    }
+
+    for (key, value) in effectiveSchema {
       if key == "properties" {
         if case let .object(props) = value {
           var convertedProps: [String: any Sendable] = [:]
@@ -236,7 +261,7 @@ public enum Value: Hashable, Sendable {
               )
             }
             convertedProps[propName] = if case let .object(propSchemaDict) = propSchema {
-              try schemaForStrictMode(propSchemaDict, path: path + ["properties", propName])
+              try schemaForStrictMode(propSchemaDict, path: path + ["properties", propName], root: resolvedRoot)
             } else {
               propSchema.toAny()
             }
@@ -247,7 +272,7 @@ public enum Value: Hashable, Sendable {
         }
       } else if key == "items" {
         if case let .object(itemSchema) = value {
-          result[key] = try schemaForStrictMode(itemSchema, path: path + ["items"])
+          result[key] = try schemaForStrictMode(itemSchema, path: path + ["items"], root: resolvedRoot)
         } else {
           result[key] = value.toAny()
         }
@@ -255,7 +280,7 @@ public enum Value: Hashable, Sendable {
         if case let .array(variants) = value {
           result[key] = try variants.enumerated().map { i, variant -> any Sendable in
             if case let .object(variantDict) = variant {
-              try schemaForStrictMode(variantDict, path: path + ["anyOf", String(i)])
+              try schemaForStrictMode(variantDict, path: path + ["anyOf", String(i)], root: resolvedRoot)
             } else {
               variant.toAny()
             }
@@ -267,7 +292,7 @@ public enum Value: Hashable, Sendable {
         if case let .array(variants) = value {
           result[key] = try variants.enumerated().map { i, variant -> any Sendable in
             if case let .object(variantDict) = variant {
-              try schemaForStrictMode(variantDict, path: path + [key, String(i)])
+              try schemaForStrictMode(variantDict, path: path + [key, String(i)], root: resolvedRoot)
             } else {
               variant.toAny()
             }
@@ -280,7 +305,7 @@ public enum Value: Hashable, Sendable {
           var convertedDefs: [String: any Sendable] = [:]
           for (defName, defSchema) in defs {
             if case let .object(defSchemaDict) = defSchema {
-              convertedDefs[defName] = try schemaForStrictMode(defSchemaDict, path: path + [key, defName])
+              convertedDefs[defName] = try schemaForStrictMode(defSchemaDict, path: path + [key, defName], root: resolvedRoot)
             } else {
               convertedDefs[defName] = defSchema.toAny()
             }
@@ -292,7 +317,7 @@ public enum Value: Hashable, Sendable {
       } else if key == "additionalProperties" {
         // Preserve existing additionalProperties (may be a schema for map types)
         if case let .object(apSchema) = value {
-          result[key] = try schemaForStrictMode(apSchema, path: path + ["additionalProperties"])
+          result[key] = try schemaForStrictMode(apSchema, path: path + ["additionalProperties"], root: resolvedRoot)
         } else {
           result[key] = value.toAny()
         }
@@ -315,6 +340,25 @@ public enum Value: Hashable, Sendable {
     }
 
     return result
+  }
+
+  /// Resolves a JSON Schema `$ref` pointer (e.g., `#/$defs/Address`) against the root schema.
+  private static func resolveRef(_ ref: String, in root: [String: Value]) throws -> [String: Value] {
+    guard ref.hasPrefix("#/") else {
+      throw AIError.invalidRequest(message: "Unexpected $ref format \"\(ref)\": does not start with #/")
+    }
+    let pathParts = ref.dropFirst(2).split(separator: "/").map(String.init)
+    var current: Value = .object(root)
+    for part in pathParts {
+      guard case let .object(dict) = current, let next = dict[part] else {
+        throw AIError.invalidRequest(message: "Key \"\(part)\" not found while resolving $ref \"\(ref)\"")
+      }
+      current = next
+    }
+    guard case let .object(resolved) = current else {
+      throw AIError.invalidRequest(message: "Expected $ref \"\(ref)\" to resolve to an object schema")
+    }
+    return resolved
   }
 
   /// Checks whether a JSON schema value is nullable (accepts null).
