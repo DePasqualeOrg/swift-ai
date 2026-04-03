@@ -118,6 +118,23 @@ public final class ResponsesClient: APIClient, Sendable {
       indexedContent[outputIndex] = .text(text)
     }
 
+    mutating func appendRefusalDelta(_ delta: String, outputIndex: Int?) {
+      append(delta: delta, outputIndex: outputIndex, as: {
+        .providerOpaque(OpaqueBlock(provider: "openai-responses", type: "refusal", content: $0, isResponseContent: true))
+      })
+    }
+
+    mutating func setFinalizedRefusal(_ text: String, outputIndex: Int?) {
+      let block = Message.Content.providerOpaque(OpaqueBlock(
+        provider: "openai-responses", type: "refusal", content: text, isResponseContent: true,
+      ))
+      guard let outputIndex else {
+        appendFallback(block)
+        return
+      }
+      indexedContent[outputIndex] = block
+    }
+
     mutating func appendReasoningDelta(_ delta: String, outputIndex: Int?) {
       append(delta: delta, outputIndex: outputIndex, as: { .thinking(text: $0, signature: nil) })
     }
@@ -244,6 +261,9 @@ public final class ResponsesClient: APIClient, Sendable {
           indexedContent[outputIndex] = update(existingText)
         case let .thinking(text: existingText, signature: nil)?:
           indexedContent[outputIndex] = update(existingText)
+        case let .providerOpaque(block)? where block.content != nil:
+          // Safe: guarded by `where block.content != nil` above
+          indexedContent[outputIndex] = update(block.content ?? "")
         default:
           indexedContent[outputIndex] = create()
       }
@@ -1513,13 +1533,13 @@ public final class ResponsesClient: APIClient, Sendable {
 
       case StreamEventType.refusalDelta:
         if let delta = event.delta {
-          streamingState.appendTextDelta(delta, outputIndex: event.outputIndex)
+          streamingState.appendRefusalDelta(delta, outputIndex: event.outputIndex)
           yieldCurrentState()
         }
 
       case StreamEventType.refusalDone:
         if let refusal = event.refusal {
-          streamingState.setFinalizedText(refusal, outputIndex: event.outputIndex)
+          streamingState.setFinalizedRefusal(refusal, outputIndex: event.outputIndex)
           yieldCurrentState()
         }
 
