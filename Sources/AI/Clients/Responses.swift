@@ -286,8 +286,8 @@ public final class ResponsesClient: APIClient, Sendable {
                     contentItem["filename"] = fileName
                   }
                   contentItems.append(contentItem)
-                case .video, .audio:
-                  break
+                case .audio, .video:
+                  openAIResponsesLogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported by Responses and will be omitted.")
               }
             default:
               break
