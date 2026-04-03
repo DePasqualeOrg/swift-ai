@@ -395,6 +395,13 @@ public final class GeminiClient: APIClient, Sendable {
     return parts
   }
 
+  /// Sends a request to the Gemini streaming endpoint (`:streamGenerateContent?alt=sse`).
+  ///
+  /// Both `generateText` and `streamText` use this method. The Gemini TS SDK splits
+  /// buffered calls onto `:generateContent` and reserves SSE for streaming, but using
+  /// the streaming endpoint for both avoids maintaining a separate transport and parsing
+  /// path. If a concrete API incompatibility arises (e.g., custom endpoints that only
+  /// implement `:generateContent`), this can be split into separate paths.
   private func streamResponse(
     messages: [Message],
     systemPrompt: String?,
