@@ -398,6 +398,15 @@ public final class ResponsesClient: APIClient, Sendable {
                 reasoningItem["encrypted_content"] = encryptedContent
               }
               items.append(reasoningItem)
+            case let .providerOpaque(block) where block.provider == "openai-responses":
+              // Round-trip preserved server-side tool items (web_search_call, code_interpreter_call, etc.)
+              flushContentItems()
+              if let jsonString = block.data,
+                 let jsonData = jsonString.data(using: .utf8),
+                 let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: any Sendable]
+              {
+                items.append(parsed)
+              }
             default:
               break
           }
@@ -2026,7 +2035,18 @@ extension ResponsesClient {
                 )))
               }
             default:
-              break
+              // Preserve unknown output item types (web_search_call, code_interpreter_call, etc.)
+              // as opaque blocks for multi-turn round-tripping
+              let sendable = Value.toSendable(item.raw)
+              if let jsonData = try? JSONSerialization.data(withJSONObject: sendable),
+                 let jsonString = String(data: jsonData, encoding: .utf8)
+              {
+                content.append(.providerOpaque(OpaqueBlock(
+                  provider: "openai-responses",
+                  type: itemType,
+                  data: jsonString,
+                )))
+              }
           }
         }
       } else if let outputText, !outputText.isEmpty {
@@ -2099,21 +2119,56 @@ extension ResponsesClient {
   }
 
   struct ResponseOutputItem: Decodable {
-    let id: String?
-    let type: String?
-    let status: String?
-    let content: [ContentItem]?
-    let name: String?
-    let callId: String?
-    let arguments: String?
-    let summary: [SummaryItem]?
-    let encryptedContent: String?
-    let phase: String?
+    /// Raw JSON for lossless round-tripping of all output item types.
+    let raw: [String: Value]
 
-    enum CodingKeys: String, CodingKey {
-      case id, type, status, content, name, arguments, summary, phase
-      case callId = "call_id"
-      case encryptedContent = "encrypted_content"
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    var id: String? {
+      raw["id"]?.stringValue
+    }
+
+    var type: String? {
+      raw["type"]?.stringValue
+    }
+
+    var status: String? {
+      raw["status"]?.stringValue
+    }
+
+    var name: String? {
+      raw["name"]?.stringValue
+    }
+
+    var callId: String? {
+      raw["call_id"]?.stringValue
+    }
+
+    var arguments: String? {
+      raw["arguments"]?.stringValue
+    }
+
+    var encryptedContent: String? {
+      raw["encrypted_content"]?.stringValue
+    }
+
+    var phase: String? {
+      raw["phase"]?.stringValue
+    }
+
+    var content: [ContentItem]? {
+      guard let contentValue = raw["content"] else { return nil }
+      guard let data = try? JSONEncoder().encode(contentValue) else { return nil }
+      return try? JSONDecoder().decode([ContentItem].self, from: data)
+    }
+
+    var summary: [SummaryItem]? {
+      guard let summaryValue = raw["summary"] else { return nil }
+      guard let data = try? JSONEncoder().encode(summaryValue) else { return nil }
+      return try? JSONDecoder().decode([SummaryItem].self, from: data)
     }
   }
 
