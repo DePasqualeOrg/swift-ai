@@ -108,6 +108,14 @@ public final class ResponsesClient: APIClient, Sendable {
       append(delta: delta, outputIndex: outputIndex, as: { .text($0) })
     }
 
+    mutating func setFinalizedText(_ text: String, outputIndex: Int?) {
+      guard let outputIndex else {
+        appendFallback(.text(text))
+        return
+      }
+      indexedContent[outputIndex] = .text(text)
+    }
+
     mutating func appendReasoningDelta(_ delta: String, outputIndex: Int?) {
       append(delta: delta, outputIndex: outputIndex, as: { .thinking(text: $0, signature: nil) })
     }
@@ -491,6 +499,7 @@ public final class ResponsesClient: APIClient, Sendable {
     static let outputItemAdded = "response.output_item.added"
     static let contentPartAdded = "response.content_part.added"
     static let refusalDelta = "response.refusal.delta"
+    static let refusalDone = "response.refusal.done"
     static let functionCallArgumentsDelta = "response.function_call_arguments.delta"
     static let functionCallArgumentsDone = "response.function_call_arguments.done"
     static let completed = "response.completed"
@@ -978,6 +987,12 @@ public final class ResponsesClient: APIClient, Sendable {
       case StreamEventType.refusalDelta:
         if let delta = event.delta {
           streamingState.appendTextDelta(delta, outputIndex: event.outputIndex)
+          yieldCurrentState()
+        }
+
+      case StreamEventType.refusalDone:
+        if let refusal = event.refusal {
+          streamingState.setFinalizedText(refusal, outputIndex: event.outputIndex)
           yieldCurrentState()
         }
 
@@ -1786,6 +1801,7 @@ extension ResponsesClient {
     let type: String?
     let sequenceNumber: Int?
     let delta: String?
+    let refusal: String?
     let itemId: String?
     let outputIndex: Int?
     let arguments: String?
@@ -1797,6 +1813,7 @@ extension ResponsesClient {
       case type
       case sequenceNumber = "sequence_number"
       case delta
+      case refusal
       case itemId = "item_id"
       case outputIndex = "output_index"
       case arguments
