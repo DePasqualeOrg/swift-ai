@@ -11,7 +11,7 @@ struct ProviderConfigurationTests {
   func `Anthropic model rejects Responses configuration`() async {
     await #expect(throws: AIError.self) {
       _ = try await generateText(
-        model: .anthropic("claude-sonnet-4-20250514"),
+        model: .anthropic("claude-haiku-4-5-20251001"),
         messages: [Message(role: .user, content: "test")],
         apiKey: "test-key",
         configuration: .responses(.init(reasoningEffortLevel: .medium)),
@@ -23,7 +23,7 @@ struct ProviderConfigurationTests {
   func `Gemini model rejects Anthropic configuration`() async {
     await #expect(throws: AIError.self) {
       _ = try await generateText(
-        model: .gemini("gemini-2.0-flash"),
+        model: .gemini("gemini-2.5-flash"),
         messages: [Message(role: .user, content: "test")],
         apiKey: "test-key",
         configuration: .anthropic(.init(effort: .high)),
@@ -47,7 +47,7 @@ struct ProviderConfigurationTests {
   func `Chat Completions model rejects Responses configuration`() async {
     await #expect(throws: AIError.self) {
       _ = try await generateText(
-        model: .chatCompletions("gpt-4o"),
+        model: .chatCompletions("gpt-4o-mini"),
         messages: [Message(role: .user, content: "test")],
         apiKey: "test-key",
         configuration: .responses(.init(reasoningEffortLevel: .high)),
@@ -60,7 +60,7 @@ struct ProviderConfigurationTests {
   @Test
   func `streamText with mismatched configuration fails`() async {
     let stream = streamText(
-      model: .anthropic("claude-sonnet-4-20250514"),
+      model: .anthropic("claude-haiku-4-5-20251001"),
       messages: [Message(role: .user, content: "test")],
       apiKey: "test-key",
       configuration: .responses(.init(reasoningEffortLevel: .medium)),
@@ -73,7 +73,7 @@ struct ProviderConfigurationTests {
   @Test
   func `streamText prompt overload with mismatched configuration fails`() async {
     let stream = streamText(
-      model: .gemini("gemini-2.0-flash"),
+      model: .gemini("gemini-2.5-flash"),
       prompt: "test",
       apiKey: "test-key",
       configuration: .anthropic(.init(effort: .high)),
@@ -92,7 +92,7 @@ struct ProviderConfigurationTests {
     // We verify the error is NOT an invalidRequest mismatch.
     do {
       _ = try await generateText(
-        model: .anthropic("claude-sonnet-4-20250514"),
+        model: .anthropic("claude-haiku-4-5-20251001"),
         messages: [Message(role: .user, content: "test")],
         apiKey: "test-key",
         configuration: nil,
