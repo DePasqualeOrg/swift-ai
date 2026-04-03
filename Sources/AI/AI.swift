@@ -53,7 +53,8 @@ public enum Model: Sendable {
 ///   - temperature: Sampling temperature. Pass nil to use model default.
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
-///   - reasoning: Enable reasoning mode if supported. Defaults to true.
+///   - reasoning: Enable reasoning mode if supported by the provider. Applies to Anthropic and Gemini.
+///     For OpenAI Responses models, use ``ResponsesClient/Configuration`` to control reasoning effort. Defaults to true.
 /// - Returns: The generation response.
 public func generateText(
   model: Model,
@@ -120,9 +121,7 @@ public func generateText(
       let client = ResponsesClient(endpoint: endpoint)
       // reasoning: true → let the provider use its default level (don't override)
       // reasoning: false → explicitly disable reasoning with .none
-      let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = if !reasoning, ResponsesClient.supportsReasoning(modelId) { .none } else { nil }
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoningLevel,
         serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
       )
       return try await client.generateText(
@@ -152,7 +151,8 @@ public func generateText(
 ///   - temperature: Sampling temperature. Pass nil to use model default.
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
-///   - reasoning: Enable reasoning mode if supported. Defaults to true.
+///   - reasoning: Enable reasoning mode if supported by the provider. Applies to Anthropic and Gemini.
+///     For OpenAI Responses models, use ``ResponsesClient/Configuration`` to control reasoning effort. Defaults to true.
 /// - Returns: An async stream of generation responses.
 public func streamText(
   model: Model,
@@ -217,9 +217,7 @@ public func streamText(
 
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
-      let reasoningLevel: ResponsesClient.ReasoningEffortLevel? = if !reasoning, ResponsesClient.supportsReasoning(modelId) { .none } else { nil }
       let configuration = ResponsesClient.Configuration(
-        reasoningEffortLevel: reasoningLevel,
         serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
       )
       return client.streamText(
@@ -261,7 +259,8 @@ public func streamText(
 ///   - temperature: Sampling temperature. Pass nil to use model default.
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
-///   - reasoning: Enable reasoning mode if supported. Defaults to true.
+///   - reasoning: Enable reasoning mode if supported by the provider. Applies to Anthropic and Gemini.
+///     For OpenAI Responses models, use ``ResponsesClient/Configuration`` to control reasoning effort. Defaults to true.
 /// - Returns: The generation response.
 public func generateText(
   model: Model,
@@ -301,7 +300,8 @@ public func generateText(
 ///   - temperature: Sampling temperature. Pass nil to use model default.
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
-///   - reasoning: Enable reasoning mode if supported. Defaults to true.
+///   - reasoning: Enable reasoning mode if supported by the provider. Applies to Anthropic and Gemini.
+///     For OpenAI Responses models, use ``ResponsesClient/Configuration`` to control reasoning effort. Defaults to true.
 /// - Returns: An async stream of generation responses.
 public func streamText(
   model: Model,
