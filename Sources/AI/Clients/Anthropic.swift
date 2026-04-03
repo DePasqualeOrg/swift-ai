@@ -1408,8 +1408,8 @@ public final class AnthropicClient: APIClient, Sendable {
         case let .attachment(attachment):
           switch attachment.kind {
             case let .image(data, mimeType):
-              let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
-              let (normalizedData, normalizedMime) = try await MediaProcessor.normalizeImageForAnthropic(processedImageData, mimeType: mimeType)
+              let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+              let (normalizedData, normalizedMime) = try await MediaProcessor.normalizeImageForAnthropic(processedImageData, mimeType: processedMimeType)
               contentBlocks.append(.init(
                 type: .image,
                 source: .init(
@@ -1487,13 +1487,14 @@ public final class AnthropicClient: APIClient, Sendable {
             case let .image(data, mimeType):
               do {
                 // Resize image if necessary before encoding
-                let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+                let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+                let (normalizedData, normalizedMime) = try await MediaProcessor.normalizeImageForAnthropic(processedImageData, mimeType: processedMimeType)
                 contentArray.append(.object([
                   "type": .string("image"),
                   "source": .object([
                     "type": .string("base64"),
-                    "media_type": .string(mimeType),
-                    "data": .string(processedImageData.base64EncodedString()),
+                    "media_type": .string(normalizedMime),
+                    "data": .string(normalizedData.base64EncodedString()),
                   ]),
                 ]))
               } catch {

@@ -764,11 +764,11 @@ public final class ResponsesClient: APIClient, Sendable {
             case let .attachment(attachment):
               switch attachment.kind {
                 case let .image(data, mimeType):
-                  let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+                  let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
                   contentItems.append([
                     "type": ContentType.inputImage,
                     "detail": "auto",
-                    "image_url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: mimeType),
+                    "image_url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: processedMimeType),
                   ])
                 case let .document(data, mimeType):
                   // The API expects a data URL (e.g. "data:application/pdf;base64,...") for file_data,

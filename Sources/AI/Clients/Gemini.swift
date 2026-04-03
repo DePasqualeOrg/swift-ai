@@ -285,9 +285,12 @@ public final class GeminiClient: APIClient, Sendable {
               }
             }
 
-            functionResponse["response"] = [
-              "output": textOutputs.joined(separator: "\n").isEmpty ? (inlineDataParts.isEmpty ? "" : "Content provided") : textOutputs.joined(separator: "\n"),
-            ] as [String: any Sendable]
+            let joinedText = textOutputs.joined(separator: "\n")
+            if !joinedText.isEmpty {
+              functionResponse["response"] = ["output": joinedText] as [String: any Sendable]
+            } else {
+              functionResponse["response"] = [:] as [String: any Sendable]
+            }
             if !inlineDataParts.isEmpty {
               functionResponse["parts"] = inlineDataParts
             }
@@ -298,10 +301,10 @@ public final class GeminiClient: APIClient, Sendable {
         case let .attachment(attachment):
           switch attachment.kind {
             case let .image(data, mimeType):
-              let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+              let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
               parts.append([
                 "inlineData": [
-                  "mimeType": mimeType,
+                  "mimeType": processedMimeType,
                   "data": processedImageData.base64EncodedString(),
                 ],
               ])
@@ -787,18 +790,13 @@ public final class GeminiClient: APIClient, Sendable {
           try Task.checkCancellation()
           let jsonString = event.data
 
-          do {
-            guard let data = jsonString.data(using: .utf8) else {
-              geminiLogger.error("Failed to convert SSE payload to UTF-8 data")
-              continue
-            }
-            let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: any Sendable]
+          guard let data = jsonString.data(using: .utf8) else {
+            throw AIError.parsing(message: "Failed to convert SSE payload to UTF-8 data")
+          }
+          let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: any Sendable]
 
-            if try processResponseChunk(jsonObject, continuation: continuation) {
-              return
-            }
-          } catch {
-            geminiLogger.error("Error parsing JSON response: \(error.localizedDescription)")
+          if try processResponseChunk(jsonObject, continuation: continuation) {
+            return
           }
         }
         continuation.finish()

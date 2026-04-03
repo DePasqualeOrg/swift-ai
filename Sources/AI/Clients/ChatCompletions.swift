@@ -201,11 +201,11 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           hasNonTextContent = true
           switch attachment.kind {
             case let .image(data, mimeType):
-              let processedImageData = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+              let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
               multimodalContent.append([
                 "type": "image_url",
                 "image_url": [
-                  "url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: mimeType),
+                  "url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: processedMimeType),
                 ],
               ])
             case let .audio(data, mimeType):

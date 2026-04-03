@@ -19,13 +19,13 @@ enum MediaProcessor {
   ///   - mimeType: The MIME type of the image (e.g., "image/jpeg", "image/png")
   ///   - maxDimension: Maximum width or height in pixels
   ///   - maxMegapixels: Maximum total megapixels
-  /// - Returns: Processed image data, or original if no processing needed
+  /// - Returns: Processed image data and actual output MIME type, or originals if no processing needed
   static func resizeImageIfNeeded(
     _ imageData: Data,
     mimeType: String,
     maxDimension: Double = defaultMaxDimension,
     maxMegapixels: Double = defaultMaxMegapixels,
-  ) async throws -> Data {
+  ) async throws -> (data: Data, mimeType: String) {
     guard let source = CGImageSourceCreateWithData(imageData as CFData, nil) else {
       throw AIError.parsing(message: "Unable to create image source")
     }
@@ -45,7 +45,7 @@ enum MediaProcessor {
     let needsResizing = width > maxDimension || height > maxDimension || megapixels > maxMegapixels
 
     if !needsResizing, !needsOrientationCorrection {
-      return imageData
+      return (imageData, mimeType)
     }
 
     // Calculate the maximum pixel size that satisfies all constraints
@@ -114,7 +114,8 @@ enum MediaProcessor {
       throw AIError.parsing(message: "Failed to finalize image destination")
     }
 
-    return mutableData as Data
+    let outputMimeType = outputUTType.preferredMIMEType ?? mimeType
+    return (mutableData as Data, outputMimeType)
   }
 
   /// Converts data to a base64-encoded data URL string.
