@@ -1469,8 +1469,9 @@ extension GeminiClient {
         } else {
           result[key] = value.toAny()
         }
-      } else if key == "anyOf" {
-        // Recursively convert anyOf schemas, extracting null types
+      } else if key == "anyOf" || key == "oneOf" {
+        // Recursively convert anyOf/oneOf schemas, extracting null types
+        // Gemini treats oneOf the same as anyOf
         if case let .array(schemas) = value {
           var converted: [[String: any Sendable]] = []
           for item in schemas {
@@ -1486,13 +1487,28 @@ extension GeminiClient {
             result[key] = converted
           }
         }
+      } else if key == "$defs" {
+        // Recursively convert schema definitions
+        if case let .object(defs) = value {
+          var convertedDefs: [String: any Sendable] = [:]
+          for (defName, defSchema) in defs {
+            if case let .object(defSchemaDict) = defSchema {
+              convertedDefs[defName] = convertSchemaForGemini(defSchemaDict)
+            } else {
+              convertedDefs[defName] = defSchema.toAny()
+            }
+          }
+          result[key] = convertedDefs
+        }
       } else {
         result[key] = value.toAny()
       }
     }
 
-    // Ensure schema has a type if it's missing
-    if result["type"] == nil, result["anyOf"] == nil, !schema.isEmpty {
+    // Ensure schema has a type if it's missing and no composable keyword is present
+    if result["type"] == nil, result["anyOf"] == nil, result["oneOf"] == nil,
+       result["$ref"] == nil, !schema.isEmpty
+    {
       result["type"] = "STRING"
     }
 
