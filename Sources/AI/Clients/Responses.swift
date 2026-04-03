@@ -1235,14 +1235,11 @@ public final class ResponsesClient: APIClient, Sendable {
           try await Task.sleep(nanoseconds: UInt64(backoffDelay * 1_000_000_000))
 
           if isDirect {
-            openAIResponsesLogger.log("\(logPrefix): Retrying initial request...")
-            try await streamBackgroundResponseDirect(
-              request: request,
-              apiKey: apiKey,
-              continuation: continuation,
-              retryCount: retryCount + 1,
-              maxRetries: maxRetries,
-            )
+            // Don't replay the initial create request without a response ID.
+            // The server may have accepted the first request before the transport
+            // error occurred, and replaying would create a duplicate job.
+            openAIResponsesLogger.warning("\(logPrefix): Cannot safely retry initial create request without a response ID")
+            throw error
           } else {
             openAIResponsesLogger.log("\(logPrefix): Retrying from sequence \(lastSequenceNumber)...")
             try await streamBackgroundResponse(
