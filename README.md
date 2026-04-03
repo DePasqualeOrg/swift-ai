@@ -108,7 +108,7 @@ public enum Model {
 }
 ```
 
-The top-level `generateText` and `streamText` functions provide options that map to provider-specific configurations:
+The top-level `generateText` and `streamText` functions provide common options:
 
 ```swift
 let response = try await generateText(
@@ -116,7 +116,21 @@ let response = try await generateText(
     messages: messages,
     apiKey: apiKey,
     webSearch: true,  // Defaults to false
-    reasoning: false  // Defaults to true
+    reasoning: false  // Defaults to true; applies to Anthropic and Gemini
+)
+```
+
+For provider-specific control, pass a `ProviderConfiguration`. When provided, it takes precedence and the `reasoning` and `webSearch` parameters are ignored:
+
+```swift
+let response = try await generateText(
+    model: .responses("gpt-5.1"),
+    messages: messages,
+    apiKey: apiKey,
+    configuration: .responses(.init(
+        reasoningEffortLevel: .medium,
+        serverSideTools: [.OpenAI.webSearch(contextSize: .medium)]
+    ))
 )
 ```
 

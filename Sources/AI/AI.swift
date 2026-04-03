@@ -27,6 +27,24 @@ public enum Model: Sendable {
   }
 }
 
+/// Provider-specific configuration for use with top-level generation functions.
+///
+/// Each case wraps the corresponding provider client's `Configuration` type.
+/// When passed to ``generateText(model:tools:systemPrompt:messages:maxTokens:temperature:apiKey:webSearch:reasoning:configuration:)``
+/// or ``streamText(model:tools:systemPrompt:messages:maxTokens:temperature:apiKey:webSearch:reasoning:configuration:)``,
+/// the explicit configuration takes precedence and the `reasoning` and `webSearch`
+/// parameters are ignored.
+public enum ProviderConfiguration: Sendable {
+  /// Configuration for Anthropic Claude models.
+  case anthropic(AnthropicClient.Configuration)
+  /// Configuration for Google Gemini models.
+  case gemini(GeminiClient.Configuration)
+  /// Configuration for OpenAI Chat Completions API models.
+  case chatCompletions(ChatCompletionsClient.Configuration)
+  /// Configuration for OpenAI Responses API models.
+  case responses(ResponsesClient.Configuration)
+}
+
 // MARK: - Top-Level Generation Functions
 
 /// Generate a text response from an LLM without streaming.
@@ -53,8 +71,11 @@ public enum Model: Sendable {
 ///   - temperature: Sampling temperature. Pass nil to use model default.
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
-///   - reasoning: Enable reasoning mode if supported by the provider. Applies to Anthropic and Gemini.
-///     For OpenAI Responses models, use ``ResponsesClient/Configuration`` to control reasoning effort. Defaults to true.
+///     Ignored when an explicit `configuration` is provided.
+///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
+///     Ignored when an explicit `configuration` is provided.
+///   - configuration: Optional provider-specific configuration. When provided, takes precedence
+///     over `reasoning` and `webSearch`. Must match the provider specified in `model`.
 /// - Returns: The generation response.
 public func generateText(
   model: Model,
@@ -66,15 +87,18 @@ public func generateText(
   apiKey: String?,
   webSearch: Bool = false,
   reasoning: Bool = true,
+  configuration: ProviderConfiguration? = nil,
 ) async throws -> GenerationResponse {
   switch model {
     case let .anthropic(modelId):
       let client = AnthropicClient()
-      let enableThinking = reasoning && AnthropicClient.supportsThinking(modelId)
-      let configuration = AnthropicClient.Configuration(
-        effort: enableThinking ? .high : nil,
-        webSearch: webSearch,
-      )
+      let config: AnthropicClient.Configuration = try extractConfiguration(configuration, expected: .anthropic) {
+        let enableThinking = reasoning && AnthropicClient.supportsThinking(modelId)
+        return AnthropicClient.Configuration(
+          effort: enableThinking ? .high : nil,
+          webSearch: webSearch,
+        )
+      }
       return try await client.generateText(
         modelId: modelId,
         tools: tools,
@@ -83,17 +107,19 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration,
+        configuration: config,
       )
 
     case let .gemini(modelId):
       let client = GeminiClient()
-      let (thinkingLevel, thinkingBudget) = GeminiClient.thinkingConfig(for: modelId, reasoning: reasoning)
-      let configuration = GeminiClient.Configuration(
-        searchGrounding: webSearch,
-        thinkingBudget: thinkingBudget,
-        thinkingLevel: thinkingLevel,
-      )
+      let config: GeminiClient.Configuration = try extractConfiguration(configuration, expected: .gemini) {
+        let (thinkingLevel, thinkingBudget) = GeminiClient.thinkingConfig(for: modelId, reasoning: reasoning)
+        return GeminiClient.Configuration(
+          searchGrounding: webSearch,
+          thinkingBudget: thinkingBudget,
+          thinkingLevel: thinkingLevel,
+        )
+      }
       return try await client.generateText(
         modelId: modelId,
         tools: tools,
@@ -102,11 +128,14 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration,
+        configuration: config,
       )
 
     case let .chatCompletions(modelId, endpoint):
       let client = ChatCompletionsClient(endpoint: endpoint)
+      let config: ChatCompletionsClient.Configuration = try extractConfiguration(configuration, expected: .chatCompletions) {
+        ChatCompletionsClient.Configuration()
+      }
       return try await client.generateText(
         modelId: modelId,
         tools: tools,
@@ -115,15 +144,16 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
+        configuration: config,
       )
 
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
-      // reasoning: true → let the provider use its default level (don't override)
-      // reasoning: false → explicitly disable reasoning with .none
-      let configuration = ResponsesClient.Configuration(
-        serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
-      )
+      let config: ResponsesClient.Configuration = try extractConfiguration(configuration, expected: .responses) {
+        ResponsesClient.Configuration(
+          serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
+        )
+      }
       return try await client.generateText(
         modelId: modelId,
         tools: tools,
@@ -132,7 +162,7 @@ public func generateText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration,
+        configuration: config,
       )
   }
 }
@@ -151,8 +181,11 @@ public func generateText(
 ///   - temperature: Sampling temperature. Pass nil to use model default.
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
-///   - reasoning: Enable reasoning mode if supported by the provider. Applies to Anthropic and Gemini.
-///     For OpenAI Responses models, use ``ResponsesClient/Configuration`` to control reasoning effort. Defaults to true.
+///     Ignored when an explicit `configuration` is provided.
+///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
+///     Ignored when an explicit `configuration` is provided.
+///   - configuration: Optional provider-specific configuration. When provided, takes precedence
+///     over `reasoning` and `webSearch`. Must match the provider specified in `model`.
 /// - Returns: An async stream of generation responses.
 public func streamText(
   model: Model,
@@ -164,15 +197,23 @@ public func streamText(
   apiKey: String?,
   webSearch: Bool = false,
   reasoning: Bool = true,
+  configuration: ProviderConfiguration? = nil,
 ) -> AsyncThrowingStream<GenerationResponse, Error> {
   switch model {
     case let .anthropic(modelId):
       let client = AnthropicClient()
-      let enableThinking = reasoning && AnthropicClient.supportsThinking(modelId)
-      let configuration = AnthropicClient.Configuration(
-        effort: enableThinking ? .high : nil,
-        webSearch: webSearch,
-      )
+      let config: AnthropicClient.Configuration
+      do {
+        config = try extractConfiguration(configuration, expected: .anthropic) {
+          let enableThinking = reasoning && AnthropicClient.supportsThinking(modelId)
+          return AnthropicClient.Configuration(
+            effort: enableThinking ? .high : nil,
+            webSearch: webSearch,
+          )
+        }
+      } catch {
+        return AsyncThrowingStream { $0.finish(throwing: error) }
+      }
       return client.streamText(
         modelId: modelId,
         tools: tools,
@@ -181,17 +222,24 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration,
+        configuration: config,
       )
 
     case let .gemini(modelId):
       let client = GeminiClient()
-      let (thinkingLevel, thinkingBudget) = GeminiClient.thinkingConfig(for: modelId, reasoning: reasoning)
-      let configuration = GeminiClient.Configuration(
-        searchGrounding: webSearch,
-        thinkingBudget: thinkingBudget,
-        thinkingLevel: thinkingLevel,
-      )
+      let config: GeminiClient.Configuration
+      do {
+        config = try extractConfiguration(configuration, expected: .gemini) {
+          let (thinkingLevel, thinkingBudget) = GeminiClient.thinkingConfig(for: modelId, reasoning: reasoning)
+          return GeminiClient.Configuration(
+            searchGrounding: webSearch,
+            thinkingBudget: thinkingBudget,
+            thinkingLevel: thinkingLevel,
+          )
+        }
+      } catch {
+        return AsyncThrowingStream { $0.finish(throwing: error) }
+      }
       return client.streamText(
         modelId: modelId,
         tools: tools,
@@ -200,11 +248,19 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration,
+        configuration: config,
       )
 
     case let .chatCompletions(modelId, endpoint):
       let client = ChatCompletionsClient(endpoint: endpoint)
+      let config: ChatCompletionsClient.Configuration
+      do {
+        config = try extractConfiguration(configuration, expected: .chatCompletions) {
+          ChatCompletionsClient.Configuration()
+        }
+      } catch {
+        return AsyncThrowingStream { $0.finish(throwing: error) }
+      }
       return client.streamText(
         modelId: modelId,
         tools: tools,
@@ -213,13 +269,21 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
+        configuration: config,
       )
 
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
-      let configuration = ResponsesClient.Configuration(
-        serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
-      )
+      let config: ResponsesClient.Configuration
+      do {
+        config = try extractConfiguration(configuration, expected: .responses) {
+          ResponsesClient.Configuration(
+            serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
+          )
+        }
+      } catch {
+        return AsyncThrowingStream { $0.finish(throwing: error) }
+      }
       return client.streamText(
         modelId: modelId,
         tools: tools,
@@ -228,7 +292,7 @@ public func streamText(
         maxTokens: maxTokens,
         temperature: temperature,
         apiKey: apiKey,
-        configuration: configuration,
+        configuration: config,
       )
   }
 }
@@ -259,8 +323,11 @@ public func streamText(
 ///   - temperature: Sampling temperature. Pass nil to use model default.
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
-///   - reasoning: Enable reasoning mode if supported by the provider. Applies to Anthropic and Gemini.
-///     For OpenAI Responses models, use ``ResponsesClient/Configuration`` to control reasoning effort. Defaults to true.
+///     Ignored when an explicit `configuration` is provided.
+///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
+///     Ignored when an explicit `configuration` is provided.
+///   - configuration: Optional provider-specific configuration. When provided, takes precedence
+///     over `reasoning` and `webSearch`. Must match the provider specified in `model`.
 /// - Returns: The generation response.
 public func generateText(
   model: Model,
@@ -272,6 +339,7 @@ public func generateText(
   apiKey: String?,
   webSearch: Bool = false,
   reasoning: Bool = true,
+  configuration: ProviderConfiguration? = nil,
 ) async throws -> GenerationResponse {
   try await generateText(
     model: model,
@@ -283,6 +351,7 @@ public func generateText(
     apiKey: apiKey,
     webSearch: webSearch,
     reasoning: reasoning,
+    configuration: configuration,
   )
 }
 
@@ -300,8 +369,11 @@ public func generateText(
 ///   - temperature: Sampling temperature. Pass nil to use model default.
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
-///   - reasoning: Enable reasoning mode if supported by the provider. Applies to Anthropic and Gemini.
-///     For OpenAI Responses models, use ``ResponsesClient/Configuration`` to control reasoning effort. Defaults to true.
+///     Ignored when an explicit `configuration` is provided.
+///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
+///     Ignored when an explicit `configuration` is provided.
+///   - configuration: Optional provider-specific configuration. When provided, takes precedence
+///     over `reasoning` and `webSearch`. Must match the provider specified in `model`.
 /// - Returns: An async stream of generation responses.
 public func streamText(
   model: Model,
@@ -313,6 +385,7 @@ public func streamText(
   apiKey: String?,
   webSearch: Bool = false,
   reasoning: Bool = true,
+  configuration: ProviderConfiguration? = nil,
 ) -> AsyncThrowingStream<GenerationResponse, Error> {
   streamText(
     model: model,
@@ -324,6 +397,7 @@ public func streamText(
     apiKey: apiKey,
     webSearch: webSearch,
     reasoning: reasoning,
+    configuration: configuration,
   )
 }
 
@@ -336,5 +410,46 @@ private func responsesWebSearchTools(modelId: String) -> [ResponsesClient.Server
     [.xAI.webSearch()]
   } else {
     [.OpenAI.webSearch(contextSize: .medium)]
+  }
+}
+
+/// The provider family, used for configuration mismatch error messages.
+private enum Provider: String {
+  case anthropic
+  case gemini
+  case chatCompletions
+  case responses
+}
+
+/// Extracts the provider-specific configuration from a `ProviderConfiguration`, or falls back
+/// to building a default configuration from the generic parameters.
+///
+/// Throws ``AIError/invalidRequest(message:)`` if the configuration doesn't match the expected provider.
+private func extractConfiguration<T>(
+  _ configuration: ProviderConfiguration?,
+  expected: Provider,
+  default defaultConfig: () -> T,
+) throws -> T {
+  guard let configuration else {
+    return defaultConfig()
+  }
+
+  switch (configuration, expected) {
+    case let (.anthropic(config), .anthropic):
+      return config as! T
+    case let (.gemini(config), .gemini):
+      return config as! T
+    case let (.chatCompletions(config), .chatCompletions):
+      return config as! T
+    case let (.responses(config), .responses):
+      return config as! T
+    default:
+      let actual = switch configuration {
+        case .anthropic: "anthropic"
+        case .gemini: "gemini"
+        case .chatCompletions: "chatCompletions"
+        case .responses: "responses"
+      }
+      throw AIError.invalidRequest(message: "Configuration mismatch: expected \(expected.rawValue) configuration for \(expected.rawValue) model, but got \(actual) configuration")
   }
 }
