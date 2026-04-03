@@ -12,11 +12,24 @@ public extension ChatCompletionsClient {
     /// Use this to pass provider-specific options not covered by the standard interface.
     public var extraParameters: [String: any Sendable]?
 
+    /// When true, sends `max_tokens` instead of `max_completion_tokens` in the request body.
+    /// Many OpenAI-compatible servers (Ollama, vLLM, etc.) only accept the legacy `max_tokens`
+    /// field, while OpenAI's own API uses `max_completion_tokens` (required for reasoning models).
+    /// Defaults to false, which sends `max_completion_tokens`.
+    public var useLegacyMaxTokensField: Bool
+
     /// Creates a new configuration with optional extra parameters.
     ///
-    /// - Parameter extraParameters: Additional parameters for the API request.
-    public init(extraParameters: [String: any Sendable]? = nil) {
+    /// - Parameters:
+    ///   - extraParameters: Additional parameters for the API request.
+    ///   - useLegacyMaxTokensField: Send `max_tokens` instead of `max_completion_tokens` for
+    ///     compatibility with endpoints that don't support the newer field.
+    public init(
+      extraParameters: [String: any Sendable]? = nil,
+      useLegacyMaxTokensField: Bool = false,
+    ) {
       self.extraParameters = extraParameters
+      self.useLegacyMaxTokensField = useLegacyMaxTokensField
     }
   }
 }
@@ -256,6 +269,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     stream: Bool,
     tools: [Tool] = [],
     extraParameters: [String: any Sendable]?,
+    useLegacyMaxTokensField: Bool = false,
     endpoint: URL,
   ) async throws -> AsyncThrowingStream<GenerationResponse, Error> {
     var request = URLRequest(url: endpoint)
@@ -281,7 +295,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       "stream": stream,
     ]
     if let maxTokens {
-      body["max_completion_tokens"] = maxTokens
+      body[useLegacyMaxTokensField ? "max_tokens" : "max_completion_tokens"] = maxTokens
     }
     if let temperature {
       body["temperature"] = temperature
@@ -717,6 +731,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           stream: stream,
           tools: tools,
           extraParameters: configuration.extraParameters,
+          useLegacyMaxTokensField: configuration.useLegacyMaxTokensField,
           endpoint: endpoint,
         )
         for try await chunk in stream {
