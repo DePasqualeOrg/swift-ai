@@ -1334,6 +1334,7 @@ public final class ResponsesClient: APIClient, Sendable {
     }
 
     var streamingState = StreamingResponseState()
+    var receivedCompletedEvent = false
 
     for try await event in result.events {
       try Task.checkCancellation()
@@ -1362,6 +1363,10 @@ public final class ResponsesClient: APIClient, Sendable {
           sequenceHandler(sequenceNumber)
         }
 
+        if event.type == StreamEventType.completed {
+          receivedCompletedEvent = true
+        }
+
         try processStreamingEvent(
           event: event,
           streamingState: &streamingState,
@@ -1372,6 +1377,15 @@ public final class ResponsesClient: APIClient, Sendable {
       } catch {
         openAIResponsesLogger.error("\(logPrefix) parsing error for JSON: \(jsonString). Error: \(error)")
         throw AIError.parsing(message: "Failed to parse streamed JSON: \(jsonString)")
+      }
+    }
+
+    // If the stream ended without a response.completed event, yield a final
+    // response from the accumulated state so callers aren't left without content.
+    if !receivedCompletedEvent {
+      let content = streamingState.content
+      if !content.isEmpty {
+        continuation.yield(GenerationResponse(content: content))
       }
     }
   }
