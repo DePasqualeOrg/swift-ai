@@ -204,10 +204,10 @@ public enum Value: Hashable, Sendable {
   static func schemaForStrictMode(_ schema: [String: Value], path: [String] = []) throws -> [String: any Sendable] {
     var result: [String: any Sendable] = [:]
 
-    let isObjectType = if case let .string(typeStr) = schema["type"] {
-      typeStr == "object"
-    } else {
-      false
+    let isObjectType: Bool = switch schema["type"] {
+      case let .string(typeStr): typeStr == "object"
+      case let .array(types): types.contains { if case .string("object") = $0 { true } else { false } }
+      default: false
     }
 
     // Read the original required array to identify optional properties
