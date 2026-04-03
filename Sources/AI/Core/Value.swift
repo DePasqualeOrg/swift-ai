@@ -303,13 +303,15 @@ public enum Value: Hashable, Sendable {
       }
     }
 
-    if isObjectType {
-      if result["additionalProperties"] == nil {
-        result["additionalProperties"] = false
-      }
-      if !propertyNames.isEmpty {
-        result["required"] = propertyNames.sorted()
-      }
+    if isObjectType, result["additionalProperties"] == nil {
+      result["additionalProperties"] = false
+    }
+    // Repopulate required whenever properties exist, not just for exact "object" type.
+    // Nullable objects (type: ["object", "null"]) also need their required array rebuilt.
+    // This matches the OpenAI TS SDK, which sets required = Object.keys(properties)
+    // inside its properties check, independent of the type check.
+    if !propertyNames.isEmpty {
+      result["required"] = propertyNames.sorted()
     }
 
     return result
