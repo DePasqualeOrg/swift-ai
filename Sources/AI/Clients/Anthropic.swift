@@ -1091,6 +1091,19 @@ public final class AnthropicClient: APIClient, Sendable {
             resultText += "```Exit code: \(resultDetails.returnCode)```\n\n"
           }
           text = resultText.isEmpty ? nil : resultText
+        case let .encryptedResult(resultDetails):
+          // encrypted_stdout is opaque to the client; display stderr and return code
+          var resultText = ""
+          if !resultDetails.stderr.isEmpty {
+            resultText += "\n\n**Error:**\n```\n\(resultDetails.stderr)\(resultDetails.stderr.hasSuffix("\n") ? "" : "\n")```\n\n"
+          }
+          if resultDetails.returnCode != 0 || !resultDetails.stderr.isEmpty {
+            if resultText.isEmpty {
+              resultText += "\n\n"
+            }
+            resultText += "```Exit code: \(resultDetails.returnCode)```\n\n"
+          }
+          text = resultText.isEmpty ? nil : resultText
         case let .error(errorDetails):
           text = "\n\n**Code execution error:** \(errorDetails.errorCode)\n\n"
         case let .output(outputBlock):
@@ -2649,10 +2662,28 @@ extension AnthropicClient {
     }
   }
 
+  /// Code execution result with encrypted stdout, used when code execution is paired
+  /// with server-side tools such as web search. The encrypted stdout is opaque to the
+  /// client but can be round-tripped back to the API.
+  struct EncryptedCodeExecutionResultContent: Codable {
+    let type: String
+    let encryptedStdout: String
+    let stderr: String
+    let returnCode: Int
+    let content: [CodeExecutionOutputBlock]
+
+    enum CodingKeys: String, CodingKey {
+      case type, stderr, content
+      case encryptedStdout = "encrypted_stdout"
+      case returnCode = "return_code"
+    }
+  }
+
   enum CodeExecutionContentItem: Codable {
     case result(CodeExecutionResultContent)
+    case encryptedResult(EncryptedCodeExecutionResultContent)
     case error(CodeExecutionToolResultErrorContent)
-    case output(CodeExecutionOutputBlock) // New case
+    case output(CodeExecutionOutputBlock)
 
     private enum TypeCodingKey: String, CodingKey {
       case type
@@ -2665,9 +2696,11 @@ extension AnthropicClient {
       switch type {
         case "code_execution_result":
           self = try .result(CodeExecutionResultContent(from: decoder))
+        case "encrypted_code_execution_result":
+          self = try .encryptedResult(EncryptedCodeExecutionResultContent(from: decoder))
         case "code_execution_tool_result_error":
           self = try .error(CodeExecutionToolResultErrorContent(from: decoder))
-        case "code_execution_output": // Handle new case
+        case "code_execution_output":
           self = try .output(CodeExecutionOutputBlock(from: decoder))
         default:
           let context = DecodingError.Context(codingPath: decoder.codingPath, debugDescription: "Unknown code execution content item type: \(type)")
@@ -2679,9 +2712,11 @@ extension AnthropicClient {
       switch self {
         case let .result(content):
           try content.encode(to: encoder)
+        case let .encryptedResult(content):
+          try content.encode(to: encoder)
         case let .error(content):
           try content.encode(to: encoder)
-        case let .output(content): // Handle new case
+        case let .output(content):
           try content.encode(to: encoder)
       }
     }
