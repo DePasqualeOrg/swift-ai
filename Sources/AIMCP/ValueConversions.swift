@@ -1,6 +1,7 @@
 // Copyright © Anthony DePasquale
 
 import AI
+import Foundation
 import MCP
 
 // MARK: - AI.Value ↔ MCP.Value Conversions
@@ -50,7 +51,11 @@ public extension AI.Value {
       case let .double(d):
         .double(d)
       case let .string(s):
-        .string(s)
+        if Data.isDataURL(string: s), let (mimeType, data) = Data.parseDataURL(s) {
+          .data(mimeType: mimeType, data)
+        } else {
+          .string(s)
+        }
       case let .array(arr):
         .array(arr.map { $0.mcpValue })
       case let .object(obj):

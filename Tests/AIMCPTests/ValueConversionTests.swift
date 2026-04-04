@@ -1,6 +1,7 @@
 // Copyright © Anthony DePasquale
 
 import AIMCP
+import Foundation
 import Testing
 
 struct ValueConversionTests {
@@ -99,5 +100,26 @@ struct ValueConversionTests {
     } else {
       Issue.record("Expected string value for data conversion")
     }
+  }
+
+  @Test
+  func `AI.Value data URL string converts to MCP.Value data`() {
+    let data = "Hello".data(using: .utf8)!
+    let aiValue = AI.Value.string("data:text/plain;base64,\(data.base64EncodedString())")
+
+    if case let .data(mimeType, convertedData) = aiValue.mcpValue {
+      #expect(mimeType == "text/plain")
+      #expect(convertedData == data)
+    } else {
+      Issue.record("Expected MCP data value for data URL string")
+    }
+  }
+
+  @Test
+  func `MCP.Value data round-trip preserves binary values`() {
+    let data = Data([0x00, 0xFF, 0x7F, 0x41])
+    let original = MCP.Value.data(mimeType: "application/octet-stream", data)
+
+    #expect(original.aiValue.mcpValue == original)
   }
 }
