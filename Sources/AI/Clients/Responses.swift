@@ -900,7 +900,10 @@ public final class ResponsesClient: APIClient, Sendable {
               {
                 currentMetadata = parsed
               } else {
-                currentMetadata = [:]
+                // Metadata block is present but unusable — treat as absent so that
+                // subsequent content is serialized as EasyInputMessage (input_text)
+                // rather than as a ResponseOutputMessage missing required fields.
+                currentMetadata = nil
               }
             case let .text(text) where !text.isEmpty:
               contentItems.append([
