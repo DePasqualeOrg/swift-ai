@@ -350,6 +350,36 @@ struct ChatCompletionsClientTests {
     #expect(endnotes.contains("https://github.com/apple/swift"))
   }
 
+  @Test
+  func `Streaming response preserves citations from earlier chunks`() async throws {
+    let sseData = """
+    data: {"id":"chatcmpl-citations123","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4.1","choices":[{"index":0,"delta":{"role":"assistant","content":"Swift is a programming language."},"finish_reason":null}],"citations":["https://developer.apple.com/swift/"]}
+
+    data: {"id":"chatcmpl-citations123","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4.1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+
+    data: [DONE]
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4.1",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What is Swift?")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.responseText == "Swift is a programming language.")
+
+    let endnotes = response.content.compactMap { block -> String? in
+      if case let .endnotes(text) = block { return text }
+      return nil
+    }.joined()
+    #expect(endnotes.contains("https://developer.apple.com/swift/"))
+  }
+
   // MARK: - Empty Response Tests
 
   @Test

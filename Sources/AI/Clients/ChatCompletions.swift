@@ -768,7 +768,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           if let responseTextChunk = snapshot.response {
             fullResponseText += responseTextChunk
           }
-          notesText = snapshot.notes
+          if let notes = snapshot.notes {
+            notesText = notes
+          }
           if !snapshot.toolCalls.isEmpty {
             toolCalls = snapshot.toolCalls
           }
