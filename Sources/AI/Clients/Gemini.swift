@@ -1782,7 +1782,15 @@ public final class GeminiClient: APIClient, Sendable {
         guard let checkRequestURL = checkComponents.url else {
           throw AIError.parsing(message: "Failed to construct status check URL for file: \(fileUri)")
         }
-        let (checkData, _) = try await session.data(from: checkRequestURL)
+        let statusRequest = URLRequest(url: checkRequestURL)
+        let (checkData, checkResponse) = try await session.data(for: statusRequest)
+        guard let checkHTTPResponse = checkResponse as? HTTPURLResponse else {
+          throw AIError.network(underlying: URLError(.badServerResponse))
+        }
+        if !(200 ... 299).contains(checkHTTPResponse.statusCode) {
+          let errorMessage = Self.parseGeminiErrorMessage(from: checkData)
+          throw Self.geminiHTTPError(statusCode: checkHTTPResponse.statusCode, message: errorMessage)
+        }
         // Decode the status check response
         let statusResponse = try JSONDecoder().decode(StatusResponse.self, from: checkData)
         let statusState = resolvedState(statusResponse.state, error: statusResponse.error)

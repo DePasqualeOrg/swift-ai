@@ -1003,6 +1003,92 @@ struct GeminiClientTests {
     ])
   }
 
+  @Test
+  func `Polled upload HTTP error preserves Gemini status mapping`() async throws {
+    let observedPaths = OSAllocatedUnfairLock(initialState: [String]())
+    let testId = UUID().uuidString
+    let modelsEndpoint = try #require(URL(string: "https://mock.test/\(testId)/v1beta/models"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let path = request.url?.path ?? ""
+      observedPaths.withLock { $0.append(path) }
+
+      switch path {
+        case "/\(testId)/upload/v1beta/files":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: [
+              "Content-Type": "application/json",
+              "X-Goog-Upload-URL": "https://mock.test/\(testId)/upload-session",
+            ],
+          )!
+          return (response, Data())
+
+        case "/\(testId)/upload-session":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"file":{"uri":"https://mock.test/\(testId)/files/file_123","state":"PROCESSING"}}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+
+        case "/\(testId)/files/file_123":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 403,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "text/plain"],
+          )!
+          return (response, Data("Forbidden".utf8))
+
+        default:
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}]}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+      }
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let attachment = Attachment(kind: .video(data: Data([0x00, 0x01]), mimeType: "video/mp4"), filename: "clip.mp4")
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: modelsEndpoint)
+
+    do {
+      _ = try await client.generateText(
+        modelId: "gemini-2.0-flash",
+        systemPrompt: nil,
+        messages: [Message(role: .user, content: [.attachment(attachment)])],
+        maxTokens: 1024,
+        apiKey: "test-key",
+      )
+      Issue.record("Expected upload failure")
+    } catch let error as AIError {
+      if case let .authentication(message) = error {
+        #expect(message == "Ensure your API key is set correctly and has the right access.")
+      } else {
+        Issue.record("Expected authentication error for poll failure, got: \(error)")
+      }
+    }
+
+    #expect(observedPaths.withLock { $0 } == [
+      "/\(testId)/upload/v1beta/files",
+      "/\(testId)/upload-session",
+      "/\(testId)/files/file_123",
+    ])
+  }
+
   // MARK: - Multiple Tool Calls Tests
 
   @Test
