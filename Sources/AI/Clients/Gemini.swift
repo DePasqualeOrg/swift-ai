@@ -926,7 +926,11 @@ public final class GeminiClient: APIClient, Sendable {
         thoughtSignature: thoughtSignature,
       )
       try applyPartialArgs(partialArgs, to: &toolCall.parameters)
-      partialToolCallState.current = toolCall
+      if let willContinue = functionCall["willContinue"] as? Bool, willContinue {
+        partialToolCallState.current = toolCall
+      } else {
+        partialToolCallState.current = nil
+      }
       return toolCall
     }
 

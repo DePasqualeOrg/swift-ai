@@ -716,6 +716,58 @@ struct GeminiClientTests {
     #expect(streamedToolCallStates.last?.parameters == toolCall.parameters)
   }
 
+  @Test
+  func `Final partial function call chunk clears active state without sentinel`() async throws {
+    let sseData = """
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_partial_1","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":1,"totalTokenCount":26}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"partialArgs":[{"jsonPath":"$.location","stringValue":"Paris"}]}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":2,"totalTokenCount":27}}
+
+    data: {"candidates":[{"content":{"parts":[{"thoughtSignature":"sig_unrelated"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":3,"totalTokenCount":28}}
+
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let collector = UpdateCollector()
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-3-pro-preview",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What's the weather in Paris?")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ), collecting: collector)
+
+    #expect(response.toolCalls.count == 1)
+    #expect(response.metadata?.finishReason == .toolUse)
+
+    let toolCall = try #require(response.toolCalls.first)
+    #expect(toolCall.id == "call_partial_1")
+    #expect(toolCall.providerMetadata == nil)
+    if case let .string(location) = toolCall.parameters["location"] {
+      #expect(location == "Paris")
+    } else {
+      Issue.record("Expected final partial argument to persist on the tool call")
+    }
+
+    let streamedToolCallStates = collector.updates.compactMap(\.toolCalls.first)
+    #expect(streamedToolCallStates.count == 3, "Only the initial chunk, final partial-args chunk, and terminal update should contain tool calls")
+    #expect(streamedToolCallStates.allSatisfy { $0.providerMetadata == nil })
+  }
+
   // MARK: - Stream Cancellation Tests
 
   @Test
