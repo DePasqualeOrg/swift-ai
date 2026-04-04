@@ -2035,7 +2035,8 @@ public final class ResponsesClient: APIClient, Sendable {
           case .failed:
             let errorMessage = response.error?.message ?? "Background response failed"
             openAIResponsesLogger.log("\(logPrefix): Response failed - \(errorMessage)")
-            throw AIError.serverError(statusCode: 0, message: errorMessage, context: nil)
+            parseCompletedResponse(response, continuation: continuation)
+            return true
           case .cancelled:
             openAIResponsesLogger.log("\(logPrefix): Response was cancelled")
             return true
@@ -2095,13 +2096,9 @@ public final class ResponsesClient: APIClient, Sendable {
           try await Task.sleep(nanoseconds: 2_000_000_000) // Sleep for 2 seconds
           continue
 
-        case .completed, .incomplete:
+        case .completed, .incomplete, .failed:
           parseCompletedResponse(response, continuation: continuation)
           return
-
-        case .failed:
-          let errorMessage = response.error?.message ?? "Background response failed"
-          throw AIError.serverError(statusCode: 0, message: errorMessage, context: nil)
 
         case .cancelled:
           openAIResponsesLogger.log("Background response was cancelled")
@@ -2140,7 +2137,7 @@ public final class ResponsesClient: APIClient, Sendable {
     }
 
     // Parse response if terminal with usable payload
-    let generationResponse: GenerationResponse? = if status == .completed || status == .incomplete {
+    let generationResponse: GenerationResponse? = if status == .completed || status == .incomplete || status == .failed {
       response.toGenerationResponse()
     } else {
       nil
