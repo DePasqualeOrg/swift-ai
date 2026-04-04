@@ -534,8 +534,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               cacheReadInputTokens: completionResponse.usage?.promptTokensDetails?.cachedTokens,
               reasoningTokens: completionResponse.usage?.completionTokensDetails?.reasoningTokens,
             )
-            // Perplexity citations
+            // Citations: Perplexity uses top-level `citations`, OpenAI uses `message.annotations`
             let notesText = formatCitations(completionResponse.citations)
+              ?? Self.formatAnnotations(message.annotations)
             continuation.yield(.init(
               content: Self.assistantContent(
                 reasoningText: reasoningText,
@@ -566,6 +567,20 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     return citations.enumerated()
       .map { index, url in "\(index + 1). \(url)" }
       .joined(separator: "\n")
+  }
+
+  private static func formatAnnotations(_ annotations: [Annotation]?) -> String? {
+    guard let annotations, !annotations.isEmpty else { return nil }
+    let lines = annotations.compactMap { annotation -> String? in
+      guard annotation.type == "url_citation",
+            let citation = annotation.urlCitation,
+            let url = citation.url
+      else { return nil }
+      let label = citation.title ?? url
+      return "- [\(label)](\(url))"
+    }
+    guard !lines.isEmpty else { return nil }
+    return lines.joined(separator: "\n") + "\n"
   }
 
   private func handleErrorResponse(_ httpResponse: HTTPURLResponse, data: Data) throws {
@@ -940,13 +955,30 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     let refusal: String?
     let reasoningContent: String?
     let toolCalls: [ToolCall]?
+    let annotations: [Annotation]?
 
     enum CodingKeys: String, CodingKey {
       case content
       case refusal
       case reasoningContent = "reasoning_content"
       case toolCalls = "tool_calls"
+      case annotations
     }
+  }
+
+  struct Annotation: Decodable {
+    let type: String?
+    let urlCitation: URLCitation?
+
+    enum CodingKeys: String, CodingKey {
+      case type
+      case urlCitation = "url_citation"
+    }
+  }
+
+  struct URLCitation: Decodable {
+    let title: String?
+    let url: String?
   }
 
   struct ToolCall: Decodable {

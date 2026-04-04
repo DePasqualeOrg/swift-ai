@@ -1,0 +1,41 @@
+{
+  "id": "chatcmpl-annotations123",
+  "object": "chat.completion",
+  "created": 1700000000,
+  "model": "gpt-4o",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Swift is a programming language developed by Apple.",
+        "annotations": [
+          {
+            "type": "url_citation",
+            "url_citation": {
+              "start_index": 0,
+              "end_index": 50,
+              "title": "Swift Programming Language",
+              "url": "https://developer.apple.com/swift/"
+            }
+          },
+          {
+            "type": "url_citation",
+            "url_citation": {
+              "start_index": 0,
+              "end_index": 50,
+              "title": "Swift on GitHub",
+              "url": "https://github.com/apple/swift"
+            }
+          }
+        ]
+      },
+      "finish_reason": "stop"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 20,
+    "completion_tokens": 10,
+    "total_tokens": 30
+  }
+}

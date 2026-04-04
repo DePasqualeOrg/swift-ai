@@ -311,6 +311,45 @@ struct ChatCompletionsClientTests {
     #expect(response.metadata?.totalTokens == 23)
   }
 
+  @Test
+  func `Non-streaming response parses web search annotations as endnotes`() async throws {
+    let fixture = try loadFixture("openai_annotations_response.json")
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      return (response, fixture.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+    let response = try await client.generateText(
+      modelId: "gpt-4o",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What is Swift?")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    )
+
+    #expect(response.responseText == "Swift is a programming language developed by Apple.")
+
+    // Verify annotations were parsed into endnotes
+    let endnotes = response.content.compactMap { block -> String? in
+      if case let .endnotes(text) = block { return text }
+      return nil
+    }.joined()
+    #expect(endnotes.contains("Swift Programming Language"))
+    #expect(endnotes.contains("https://developer.apple.com/swift/"))
+    #expect(endnotes.contains("Swift on GitHub"))
+    #expect(endnotes.contains("https://github.com/apple/swift"))
+  }
+
   // MARK: - Empty Response Tests
 
   @Test
