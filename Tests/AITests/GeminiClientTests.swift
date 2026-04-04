@@ -790,6 +790,171 @@ struct GeminiClientTests {
     ])
   }
 
+  @Test
+  func `Immediate failed upload without uri surfaces nested file error`() async throws {
+    let observedPaths = OSAllocatedUnfairLock(initialState: [String]())
+    let testId = UUID().uuidString
+    let modelsEndpoint = try #require(URL(string: "https://mock.test/\(testId)/v1beta/models"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let path = request.url?.path ?? ""
+      observedPaths.withLock { $0.append(path) }
+
+      switch path {
+        case "/\(testId)/upload/v1beta/files":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: [
+              "Content-Type": "application/json",
+              "X-Goog-Upload-URL": "https://mock.test/\(testId)/upload-session",
+            ],
+          )!
+          return (response, Data())
+
+        case "/\(testId)/upload-session":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"file":{"state":"FAILED","error":{"code":9,"message":"Upload rejected"}}}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+
+        default:
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}]}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+      }
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let attachment = Attachment(kind: .video(data: Data([0x00, 0x01]), mimeType: "video/mp4"), filename: "clip.mp4")
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: modelsEndpoint)
+
+    do {
+      _ = try await client.generateText(
+        modelId: "gemini-2.0-flash",
+        systemPrompt: nil,
+        messages: [Message(role: .user, content: [.attachment(attachment)])],
+        maxTokens: 1024,
+        apiKey: "test-key",
+      )
+      Issue.record("Expected upload failure")
+    } catch let error as AIError {
+      if case let .serverError(_, message, _) = error {
+        #expect(message == "Upload rejected")
+      } else {
+        Issue.record("Expected server error for failed upload, got: \(error)")
+      }
+    }
+
+    #expect(observedPaths.withLock { $0 } == [
+      "/\(testId)/upload/v1beta/files",
+      "/\(testId)/upload-session",
+    ])
+  }
+
+  @Test
+  func `Polled failed upload without uri returns status error`() async throws {
+    let observedPaths = OSAllocatedUnfairLock(initialState: [String]())
+    let testId = UUID().uuidString
+    let modelsEndpoint = try #require(URL(string: "https://mock.test/\(testId)/v1beta/models"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let path = request.url?.path ?? ""
+      observedPaths.withLock { $0.append(path) }
+
+      switch path {
+        case "/\(testId)/upload/v1beta/files":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: [
+              "Content-Type": "application/json",
+              "X-Goog-Upload-URL": "https://mock.test/\(testId)/upload-session",
+            ],
+          )!
+          return (response, Data())
+
+        case "/\(testId)/upload-session":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"file":{"uri":"https://mock.test/\(testId)/files/file_123","state":"PROCESSING"}}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+
+        case "/\(testId)/files/file_123":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"state":"FAILED","error":{"code":13,"message":"Video processing failed"}}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+
+        default:
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}]}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+      }
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let attachment = Attachment(kind: .video(data: Data([0x00, 0x01]), mimeType: "video/mp4"), filename: "clip.mp4")
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: modelsEndpoint)
+
+    do {
+      _ = try await client.generateText(
+        modelId: "gemini-2.0-flash",
+        systemPrompt: nil,
+        messages: [Message(role: .user, content: [.attachment(attachment)])],
+        maxTokens: 1024,
+        apiKey: "test-key",
+      )
+      Issue.record("Expected upload failure")
+    } catch let error as AIError {
+      if case let .serverError(_, message, _) = error {
+        #expect(message == "Video processing failed")
+      } else {
+        Issue.record("Expected server error for failed upload, got: \(error)")
+      }
+    }
+
+    #expect(observedPaths.withLock { $0 } == [
+      "/\(testId)/upload/v1beta/files",
+      "/\(testId)/upload-session",
+      "/\(testId)/files/file_123",
+    ])
+  }
+
   // MARK: - Multiple Tool Calls Tests
 
   @Test

@@ -1713,11 +1713,17 @@ public final class GeminiClient: APIClient, Sendable {
       throw AIError.fromHTTPStatusCode(uploadHttpResponse.statusCode, message: errorMessage)
     }
     do {
+      struct UploadErrorInfo: Codable {
+        let code: Int?
+        let message: String?
+      }
+
       // Response structure for the upload
       struct FileResponse: Codable {
         struct File: Codable {
-          let uri: String
-          let state: String
+          let uri: String?
+          let state: String?
+          let error: UploadErrorInfo?
         }
 
         let file: File
@@ -1725,15 +1731,9 @@ public final class GeminiClient: APIClient, Sendable {
 
       // Status check response structure
       struct StatusResponse: Codable {
-        let uri: String
-        let state: String
-
-        struct ErrorInfo: Codable {
-          let code: Int
-          let message: String
-        }
-
-        let error: ErrorInfo?
+        let uri: String?
+        let state: String?
+        let error: UploadErrorInfo?
       }
 
       func failedUploadError(message: String? = nil) -> AIError {
@@ -1744,13 +1744,27 @@ public final class GeminiClient: APIClient, Sendable {
         )
       }
 
-      var fileResponse = try JSONDecoder().decode(FileResponse.self, from: uploadResponseData)
-      let fileUri = fileResponse.file.uri
-      if fileResponse.file.state == "FAILED" {
-        throw failedUploadError()
+      func resolvedState(_ state: String?, error: UploadErrorInfo?) -> String? {
+        if let state, !state.isEmpty {
+          return state
+        }
+        return error == nil ? nil : "FAILED"
       }
+
+      let fileResponse = try JSONDecoder().decode(FileResponse.self, from: uploadResponseData)
+      let initialState = resolvedState(fileResponse.file.state, error: fileResponse.file.error)
+      if initialState == "FAILED" {
+        throw failedUploadError(message: fileResponse.file.error?.message)
+      }
+      guard let fileUri = fileResponse.file.uri, !fileUri.isEmpty else {
+        throw AIError.parsing(message: "Upload response omitted file URI")
+      }
+      guard let initialState else {
+        throw AIError.parsing(message: "Upload response omitted file state")
+      }
+      var fileState = initialState
       // Wait for video processing to complete
-      while fileResponse.file.state == "PROCESSING" {
+      while fileState == "PROCESSING" {
         try Task.checkCancellation()
         try await Task.sleep(for: .seconds(2))
         // Use the full URI from the response
@@ -1766,15 +1780,18 @@ public final class GeminiClient: APIClient, Sendable {
         let (checkData, _) = try await session.data(from: checkRequestURL)
         // Decode the status check response
         let statusResponse = try JSONDecoder().decode(StatusResponse.self, from: checkData)
+        let statusState = resolvedState(statusResponse.state, error: statusResponse.error)
         // Check for processing failure
-        if statusResponse.state == "FAILED" {
+        if statusState == "FAILED" {
           throw failedUploadError(message: statusResponse.error?.message)
         }
-        // Update state from status check
-        fileResponse = FileResponse(file: .init(uri: fileResponse.file.uri, state: statusResponse.state))
+        guard let statusState else {
+          throw AIError.parsing(message: "Status response omitted file state")
+        }
+        fileState = statusState
       }
-      guard fileResponse.file.state == "ACTIVE" else {
-        throw AIError.parsing(message: "Unexpected file state: \(fileResponse.file.state)")
+      guard fileState == "ACTIVE" else {
+        throw AIError.parsing(message: "Unexpected file state: \(fileState)")
       }
       // Return the complete URI for use with the Gemini API
       return fileUri
