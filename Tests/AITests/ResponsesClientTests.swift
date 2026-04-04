@@ -541,6 +541,84 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Clean EOF reasoning summaries round-trip as summary_text without completed event`() async throws {
+    let eofSSEData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_eof_summary_roundtrip","status":"in_progress","model":"o3-mini"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_summary_roundtrip_123","type":"reasoning","summary":[]}}
+
+    event: response.reasoning_summary_text.done
+    data: {"type":"response.reasoning_summary_text.done","item_id":"rs_summary_roundtrip_123","output_index":0,"summary_index":0,"text":"First summary item."}
+
+    event: response.reasoning_summary_text.done
+    data: {"type":"response.reasoning_summary_text.done","item_id":"rs_summary_roundtrip_123","output_index":0,"summary_index":1,"text":"Second summary item."}
+
+    data: [DONE]
+
+    """
+    let (eofTestId, eofEndpoint) = setupMockHandler(sseData: eofSSEData)
+
+    var capturedBodyData: Data?
+    let roundTripTestId = UUID().uuidString
+    let roundTripEndpoint = try #require(URL(string: "https://mock.test/\(roundTripTestId)"))
+    MockURLProtocol.setHandler(for: roundTripTestId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"o3-mini"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"o3-mini","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+
+    defer {
+      MockURLProtocol.removeHandler(for: eofTestId)
+      MockURLProtocol.removeHandler(for: roundTripTestId)
+    }
+
+    let eofClient = ResponsesClient(endpoint: eofEndpoint, session: makeMockSession())
+    let response = try await consumeStream(eofClient.streamText(
+      modelId: "o3-mini",
+      messages: [Message(role: .user, content: "Summarize your reasoning")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+      configuration: .init(reasoningEffortLevel: .medium),
+    ))
+
+    let roundTripClient = ResponsesClient(endpoint: roundTripEndpoint, session: makeMockSession())
+    _ = try await consumeStream(roundTripClient.streamText(
+      modelId: "o3-mini",
+      messages: [response.message, Message(role: .user, content: "Continue")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let reasoningItem = try #require(input.first(where: { $0["type"] as? String == "reasoning" }))
+    let summary = try #require(reasoningItem["summary"] as? [[String: Any]])
+
+    #expect(summary.count == 2)
+    #expect(summary[0]["type"] as? String == "summary_text")
+    #expect(summary[0]["text"] as? String == "First summary item.")
+    #expect(summary[1]["type"] as? String == "summary_text")
+    #expect(summary[1]["text"] as? String == "Second summary item.")
+  }
+
+  @Test
   func `Clean EOF preserves annotations and message metadata without completed event`() async throws {
     let sseData = """
     event: response.created

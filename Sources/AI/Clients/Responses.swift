@@ -711,7 +711,10 @@ public final class ResponsesClient: APIClient, Sendable {
       if let requested {
         return requested
       }
-      if let existingIndex = summary.lastIndex(where: { $0.objectValue?["type"]?.stringValue == "text" }) {
+      if let existingIndex = summary.lastIndex(where: {
+        let type = $0.objectValue?["type"]?.stringValue
+        return type == "summary_text" || type == "text"
+      }) {
         return existingIndex
       }
       return summary.count
@@ -765,7 +768,7 @@ public final class ResponsesClient: APIClient, Sendable {
 
     private static func syntheticSummaryItem() -> [String: Value] {
       [
-        "type": .string("text"),
+        "type": .string("summary_text"),
         "text": .string(""),
       ]
     }
