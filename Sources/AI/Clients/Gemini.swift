@@ -1736,8 +1736,19 @@ public final class GeminiClient: APIClient, Sendable {
         let error: ErrorInfo?
       }
 
+      func failedUploadError(message: String? = nil) -> AIError {
+        AIError.serverError(
+          statusCode: 0,
+          message: message ?? "File processing failed with unknown error",
+          context: nil,
+        )
+      }
+
       var fileResponse = try JSONDecoder().decode(FileResponse.self, from: uploadResponseData)
       let fileUri = fileResponse.file.uri
+      if fileResponse.file.state == "FAILED" {
+        throw failedUploadError()
+      }
       // Wait for video processing to complete
       while fileResponse.file.state == "PROCESSING" {
         try Task.checkCancellation()
@@ -1757,17 +1768,18 @@ public final class GeminiClient: APIClient, Sendable {
         let statusResponse = try JSONDecoder().decode(StatusResponse.self, from: checkData)
         // Check for processing failure
         if statusResponse.state == "FAILED" {
-          if let error = statusResponse.error {
-            throw AIError.serverError(statusCode: 0, message: error.message, context: nil)
-          } else {
-            throw AIError.serverError(statusCode: 0, message: "File processing failed with unknown error", context: nil)
-          }
+          throw failedUploadError(message: statusResponse.error?.message)
         }
         // Update state from status check
         fileResponse = FileResponse(file: .init(uri: fileResponse.file.uri, state: statusResponse.state))
       }
+      guard fileResponse.file.state == "ACTIVE" else {
+        throw AIError.parsing(message: "Unexpected file state: \(fileResponse.file.state)")
+      }
       // Return the complete URI for use with the Gemini API
       return fileUri
+    } catch let error as AIError {
+      throw error
     } catch {
       geminiLogger.error("Decoding error: \(error)")
       // Try to decode as an error response format
