@@ -1032,6 +1032,60 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Audio attachment is omitted from Responses input`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Done"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Done"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let audioData = Data("fake-wav-content".utf8)
+    let audioAttachment = Attachment(kind: .audio(data: audioData, mimeType: "audio/wav"))
+    let message = Message(role: .user, content: [
+      .text("Describe this audio"),
+      .attachment(audioAttachment),
+    ])
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [message],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let firstInput = try #require(input.first)
+    let content = try #require(firstInput["content"] as? [[String: Any]])
+
+    // Audio is not supported by the Responses API, so only the text should be present
+    #expect(content.count == 1)
+    #expect(content[0]["type"] as? String == "input_text")
+    #expect(content[0]["text"] as? String == "Describe this audio")
+  }
+
+  @Test
   func `Mixed tool output preserves original content order`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
