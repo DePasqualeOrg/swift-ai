@@ -416,7 +416,7 @@ public final class ResponsesClient: APIClient, Sendable {
           if let arguments = event.arguments {
             completeFunctionCallArguments(arguments, outputIndex: event.outputIndex, itemID: event.itemId)
           }
-        case StreamEventType.completed:
+        case StreamEventType.completed, StreamEventType.failed, StreamEventType.incomplete:
           if let response = event.response {
             self = Self(response)
           }
@@ -1093,6 +1093,8 @@ public final class ResponsesClient: APIClient, Sendable {
     static let functionCallArgumentsDelta = "response.function_call_arguments.delta"
     static let functionCallArgumentsDone = "response.function_call_arguments.done"
     static let completed = "response.completed"
+    static let failed = "response.failed"
+    static let incomplete = "response.incomplete"
     static let created = "response.created"
   }
 
@@ -1923,20 +1925,19 @@ public final class ResponsesClient: APIClient, Sendable {
       do {
         let event = try JSONDecoder().decode(StreamEvent.self, from: jsonData)
 
-        if event.type == StreamEventType.created {
+        let isTerminalEvent = event.type == StreamEventType.completed
+          || event.type == StreamEventType.failed
+          || event.type == StreamEventType.incomplete
+
+        if event.type == StreamEventType.created || isTerminalEvent {
           guard let response = event.response else {
-            throw AIError.parsing(message: "Responses stream created event missing response payload")
-          }
-          accumulatedSnapshot = AccumulatedResponseSnapshot(response)
-          if let id = response.id, let responseIdHandler {
-            await responseIdHandler(id)
-          }
-        } else if event.type == StreamEventType.completed {
-          guard let response = event.response else {
-            throw AIError.parsing(message: "Responses stream completed event missing response payload")
+            throw AIError.parsing(message: "Responses stream \(event.type ?? "unknown") event missing response payload")
           }
           if accumulatedSnapshot == nil {
             accumulatedSnapshot = AccumulatedResponseSnapshot(response)
+          }
+          if event.type == StreamEventType.created, let id = response.id, let responseIdHandler {
+            await responseIdHandler(id)
           }
         }
 
@@ -1950,10 +1951,10 @@ public final class ResponsesClient: APIClient, Sendable {
           accumulatedSnapshot = snapshot
         }
 
-        if event.type == StreamEventType.completed {
+        if isTerminalEvent {
           receivedCompletedEvent = true
           guard let snapshot = accumulatedSnapshot else {
-            throw AIError.parsing(message: "Responses stream completed without an accumulated response snapshot")
+            throw AIError.parsing(message: "Responses stream ended (\(event.type ?? "unknown")) without an accumulated response snapshot")
           }
           yieldFinalResponse(
             snapshot.finalize(),

@@ -262,6 +262,45 @@ struct ResponsesClientTests {
     #expect(response.responseText?.contains("can't") == true)
   }
 
+  @Test
+  func `Handles response failed terminal event`() async throws {
+    let fixture = try loadFixture("responses_failed_response.txt")
+    let (testId, endpoint) = setupMockHandler(sseData: fixture)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Hello")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.metadata?.finishReason == .other)
+    #expect(response.metadata?.responseId == "resp_fail123")
+  }
+
+  @Test
+  func `Handles response incomplete terminal event`() async throws {
+    let fixture = try loadFixture("responses_incomplete_response.txt")
+    let (testId, endpoint) = setupMockHandler(sseData: fixture)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Write a long story")],
+      maxTokens: 15,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.responseText == "Truncated output")
+    #expect(response.metadata?.finishReason == .maxTokens)
+    #expect(response.metadata?.responseId == "resp_inc123")
+  }
+
   // MARK: - Non-Streaming Mode Tests
 
   @Test
