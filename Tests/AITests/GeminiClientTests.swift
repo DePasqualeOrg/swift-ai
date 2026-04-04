@@ -577,6 +577,68 @@ struct GeminiClientTests {
     #expect(response.responseText?.contains("weather") == true)
   }
 
+  @Test
+  func `Parses streamed partial function call arguments`() async throws {
+    let sseData = """
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_partial_1","name":"get_weather","willContinue":true},"thoughtSignature":"sig_partial_1"}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":1,"totalTokenCount":26}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"partialArgs":[{"jsonPath":"$.location","stringValue":"NewYork","willContinue":true}],"willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":2,"totalTokenCount":27}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"partialArgs":[{"jsonPath":"$.location","stringValue":"City"},{"jsonPath":"$.unit","stringValue":"C"}],"willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":3,"totalTokenCount":28}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":4,"totalTokenCount":29}}
+
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let collector = UpdateCollector()
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-3-pro-preview",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What should I wear in New York City?")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ), collecting: collector)
+
+    #expect(response.toolCalls.count == 1)
+    #expect(response.metadata?.finishReason == .toolUse)
+
+    let toolCall = try #require(response.toolCalls.first)
+    #expect(toolCall.id == "call_partial_1")
+    #expect(toolCall.name == "get_weather")
+    #expect(toolCall.providerMetadata?["thoughtSignature"] == "sig_partial_1")
+
+    if case let .string(location) = toolCall.parameters["location"] {
+      #expect(location == "NewYorkCity")
+    } else {
+      Issue.record("Expected streamed location parameter to be reconstructed as a string")
+    }
+
+    if case let .string(unit) = toolCall.parameters["unit"] {
+      #expect(unit == "C")
+    } else {
+      Issue.record("Expected streamed unit parameter to be reconstructed as a string")
+    }
+
+    let streamedToolCallStates = collector.updates.compactMap(\.toolCalls.first)
+    #expect(streamedToolCallStates.count >= 2, "Expected incremental tool-call updates while partial args stream")
+    #expect(streamedToolCallStates.last?.parameters == toolCall.parameters)
+  }
+
   // MARK: - Stream Cancellation Tests
 
   @Test

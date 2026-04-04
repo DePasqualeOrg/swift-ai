@@ -190,6 +190,15 @@ public final class GeminiClient: APIClient, Sendable {
     let finishReason: FinishReason?
   }
 
+  private struct PartialToolCallState {
+    var current: ToolCall?
+  }
+
+  private enum JSONPathComponent {
+    case key(String)
+    case index(Int)
+  }
+
   private static func assistantContent(
     reasoningText: String? = nil,
     reasoningSignature: String? = nil,
@@ -603,6 +612,7 @@ public final class GeminiClient: APIClient, Sendable {
   private func processResponseChunk(
     _ jsonObject: [String: any Sendable]?,
     continuation: AsyncThrowingStream<StreamResponse, Error>.Continuation,
+    partialToolCallState: inout PartialToolCallState,
   ) throws -> Bool {
     // Check for promptFeedback (indicates a blocked prompt)
     if let promptFeedback = jsonObject?["promptFeedback"] as? [String: any Sendable],
@@ -673,23 +683,14 @@ public final class GeminiClient: APIClient, Sendable {
             else { false }
           let signature = isThinkingText ? part["thoughtSignature"] as? String : nil
           continuation.yield(StreamResponse(text: text, thought: isThinkingText, thoughtSignature: signature, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
-        } else if let functionCall = part["functionCall"] as? [String: any Sendable],
-                  let name = functionCall["name"] as? String,
-                  let args = functionCall["args"] as? [String: any Sendable]
-        {
-          let parameters = try args.mapValues { try Value.fromAny($0) }
-          var providerMetadata: [String: String]?
-          if let thoughtSignature = part["thoughtSignature"] as? String {
-            providerMetadata = ["thoughtSignature": thoughtSignature]
+        } else if let functionCall = part["functionCall"] as? [String: any Sendable] {
+          if let toolCallResponse = try Self.parseToolCall(
+            from: functionCall,
+            part: part,
+            partialToolCallState: &partialToolCallState,
+          ) {
+            continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: toolCallResponse, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
           }
-          let toolCallId = functionCall["id"] as? String ?? generateShortId()
-          let toolCallResponse = ToolCall(
-            name: name,
-            id: toolCallId,
-            parameters: parameters,
-            providerMetadata: providerMetadata,
-          )
-          continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: toolCallResponse, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
         } else if let executableCodeDict = part["executableCode"] as? [String: any Sendable] {
           do {
             let jsonData = try JSONSerialization.data(withJSONObject: executableCodeDict)
@@ -766,6 +767,7 @@ public final class GeminiClient: APIClient, Sendable {
     let (stream, continuation) = AsyncThrowingStream<StreamResponse, Error>.makeStream()
     let task = Task {
       do {
+        var partialToolCallState = PartialToolCallState()
         guard let httpResponse = response as? HTTPURLResponse else {
           throw AIError.network(underlying: URLError(.badServerResponse))
         }
@@ -795,7 +797,11 @@ public final class GeminiClient: APIClient, Sendable {
           }
           let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: any Sendable]
 
-          if try processResponseChunk(jsonObject, continuation: continuation) {
+          if try processResponseChunk(
+            jsonObject,
+            continuation: continuation,
+            partialToolCallState: &partialToolCallState,
+          ) {
             return
           }
         }
@@ -816,6 +822,7 @@ public final class GeminiClient: APIClient, Sendable {
     let (stream, continuation) = AsyncThrowingStream<StreamResponse, Error>.makeStream()
     let task = Task {
       do {
+        var partialToolCallState = PartialToolCallState()
         guard let httpResponse = response as? HTTPURLResponse else {
           throw AIError.network(underlying: URLError(.badServerResponse))
         }
@@ -826,7 +833,11 @@ public final class GeminiClient: APIClient, Sendable {
         }
 
         let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: any Sendable]
-        _ = try processResponseChunk(jsonObject, continuation: continuation)
+        _ = try processResponseChunk(
+          jsonObject,
+          continuation: continuation,
+          partialToolCallState: &partialToolCallState,
+        )
         continuation.finish()
       } catch {
         geminiLogger.error("Buffered response processing error: \(error.localizedDescription)")
@@ -859,6 +870,275 @@ public final class GeminiClient: APIClient, Sendable {
       return firstError.error.message
     }
     return nil
+  }
+
+  private static func parseToolCall(
+    from functionCall: [String: any Sendable],
+    part: [String: any Sendable],
+    partialToolCallState: inout PartialToolCallState,
+  ) throws -> ToolCall? {
+    let thoughtSignature = part["thoughtSignature"] as? String
+    let existingToolCall = partialToolCallState.current
+
+    if let args = functionCall["args"] as? [String: any Sendable] {
+      let explicitName = functionCall["name"] as? String
+      let name = explicitName ?? existingToolCall?.name
+      guard let name else {
+        geminiLogger.warning("Dropping Gemini functionCall chunk with args but no function name")
+        return nil
+      }
+      let toolCallId = (functionCall["id"] as? String)
+        ?? (explicitName == nil ? existingToolCall?.id : nil)
+        ?? generateShortId()
+      let parameters = try args.mapValues { try Value.fromAny($0) }
+      let toolCall = ToolCall(
+        name: name,
+        id: toolCallId,
+        parameters: parameters,
+        providerMetadata: mergedProviderMetadata(
+          existing: explicitName == nil ? existingToolCall?.providerMetadata : nil,
+          thoughtSignature: thoughtSignature,
+        ),
+      )
+      if let willContinue = functionCall["willContinue"] as? Bool, willContinue {
+        partialToolCallState.current = toolCall
+      } else {
+        partialToolCallState.current = nil
+      }
+      return toolCall
+    }
+
+    if let partialArgs = functionCall["partialArgs"] as? [[String: any Sendable]] {
+      let name = (functionCall["name"] as? String) ?? existingToolCall?.name
+      guard let name else {
+        geminiLogger.warning("Dropping Gemini partial functionCall chunk with no active function name")
+        return nil
+      }
+      let toolCallId = (functionCall["id"] as? String) ?? existingToolCall?.id ?? generateShortId()
+      var toolCall = existingToolCall ?? ToolCall(
+        name: name,
+        id: toolCallId,
+        parameters: [:],
+        providerMetadata: nil,
+      )
+      toolCall.name = name
+      toolCall.providerMetadata = mergedProviderMetadata(
+        existing: existingToolCall?.providerMetadata,
+        thoughtSignature: thoughtSignature,
+      )
+      try applyPartialArgs(partialArgs, to: &toolCall.parameters)
+      partialToolCallState.current = toolCall
+      return toolCall
+    }
+
+    if let name = functionCall["name"] as? String {
+      let toolCallId = (functionCall["id"] as? String) ?? generateShortId()
+      let toolCall = ToolCall(
+        name: name,
+        id: toolCallId,
+        parameters: [:],
+        providerMetadata: mergedProviderMetadata(existing: nil, thoughtSignature: thoughtSignature),
+      )
+      partialToolCallState.current = toolCall
+      return toolCall
+    }
+
+    if thoughtSignature != nil, var toolCall = partialToolCallState.current {
+      toolCall.providerMetadata = mergedProviderMetadata(
+        existing: toolCall.providerMetadata,
+        thoughtSignature: thoughtSignature,
+      )
+      partialToolCallState.current = toolCall
+      return toolCall
+    }
+
+    return nil
+  }
+
+  private static func mergedProviderMetadata(
+    existing: [String: String]?,
+    thoughtSignature: String?,
+  ) -> [String: String]? {
+    guard existing != nil || thoughtSignature != nil else { return nil }
+    var metadata = existing ?? [:]
+    if let thoughtSignature {
+      metadata["thoughtSignature"] = thoughtSignature
+    }
+    return metadata
+  }
+
+  private static func applyPartialArgs(
+    _ partialArgs: [[String: any Sendable]],
+    to parameters: inout [String: Value],
+  ) throws {
+    for partialArg in partialArgs {
+      guard let jsonPath = partialArg["jsonPath"] as? String else {
+        geminiLogger.warning("Dropping Gemini partial functionCall arg without jsonPath")
+        continue
+      }
+      guard let path = parseJSONPath(jsonPath) else {
+        geminiLogger.warning("Dropping Gemini partial functionCall arg with unsupported jsonPath '\(jsonPath)'")
+        continue
+      }
+      guard let newValue = try partialArgValue(
+        from: partialArg,
+        existing: value(at: path, in: .object(parameters)),
+      ) else {
+        continue
+      }
+      var root = Value.object(parameters)
+      setValue(newValue, at: ArraySlice(path), in: &root)
+      if case let .object(updatedParameters) = root {
+        parameters = updatedParameters
+      }
+    }
+  }
+
+  private static func partialArgValue(
+    from partialArg: [String: any Sendable],
+    existing: Value?,
+  ) throws -> Value? {
+    if let stringValue = partialArg["stringValue"] as? String {
+      let existingText = existing?.stringValue ?? ""
+      return .string(existingText + stringValue)
+    }
+    if let boolValue = partialArg["boolValue"] as? Bool {
+      return .bool(boolValue)
+    }
+    if let numberValue = partialArg["numberValue"] {
+      return try Value.fromAny(numberValue)
+    }
+    if let nullValue = partialArg["nullValue"] as? String, nullValue == "NULL_VALUE" {
+      return .null
+    }
+    return nil
+  }
+
+  private static func parseJSONPath(_ path: String) -> [JSONPathComponent]? {
+    guard path.first == "$" else { return nil }
+    var components: [JSONPathComponent] = []
+    var index = path.index(after: path.startIndex)
+
+    while index < path.endIndex {
+      switch path[index] {
+        case ".":
+          index = path.index(after: index)
+          let start = index
+          while index < path.endIndex {
+            let character = path[index]
+            if character == "." || character == "[" {
+              break
+            }
+            index = path.index(after: index)
+          }
+          guard start < index else { return nil }
+          components.append(.key(String(path[start ..< index])))
+        case "[":
+          index = path.index(after: index)
+          guard index < path.endIndex else { return nil }
+          if path[index] == "\"" || path[index] == "'" {
+            let quote = path[index]
+            index = path.index(after: index)
+            var key = ""
+            while index < path.endIndex {
+              let character = path[index]
+              if character == quote {
+                break
+              }
+              if character == "\\" {
+                index = path.index(after: index)
+                guard index < path.endIndex else { return nil }
+              }
+              key.append(path[index])
+              index = path.index(after: index)
+            }
+            guard index < path.endIndex, path[index] == quote else { return nil }
+            index = path.index(after: index)
+            guard index < path.endIndex, path[index] == "]" else { return nil }
+            index = path.index(after: index)
+            components.append(.key(key))
+          } else {
+            let start = index
+            while index < path.endIndex, path[index].wholeNumberValue != nil {
+              index = path.index(after: index)
+            }
+            guard start < index,
+                  let arrayIndex = Int(path[start ..< index]),
+                  index < path.endIndex,
+                  path[index] == "]"
+            else {
+              return nil
+            }
+            index = path.index(after: index)
+            components.append(.index(arrayIndex))
+          }
+        default:
+          return nil
+      }
+    }
+
+    return components
+  }
+
+  private static func value(
+    at path: [JSONPathComponent],
+    in value: Value,
+  ) -> Value? {
+    var current = value
+    for component in path {
+      switch component {
+        case let .key(key):
+          guard case let .object(object) = current, let next = object[key] else { return nil }
+          current = next
+        case let .index(index):
+          guard case let .array(array) = current, array.indices.contains(index) else { return nil }
+          current = array[index]
+      }
+    }
+    return current
+  }
+
+  private static func setValue(
+    _ newValue: Value,
+    at path: ArraySlice<JSONPathComponent>,
+    in value: inout Value,
+  ) {
+    guard let component = path.first else {
+      value = newValue
+      return
+    }
+
+    switch component {
+      case let .key(key):
+        var object = value.objectValue ?? [:]
+        var child = object[key] ?? defaultContainer(for: path.dropFirst().first)
+        setValue(newValue, at: path.dropFirst(), in: &child)
+        object[key] = child
+        value = .object(object)
+      case let .index(index):
+        var array = value.arrayValue ?? []
+        if array.count <= index {
+          array.append(contentsOf: Array(repeating: .null, count: index - array.count + 1))
+        }
+        var child = array[index]
+        if child == .null {
+          child = defaultContainer(for: path.dropFirst().first)
+        }
+        setValue(newValue, at: path.dropFirst(), in: &child)
+        array[index] = child
+        value = .array(array)
+    }
+  }
+
+  private static func defaultContainer(for next: JSONPathComponent?) -> Value {
+    switch next {
+      case .key:
+        .object([:])
+      case .index:
+        .array([])
+      case nil:
+        .null
+    }
   }
 
   /// Extract grounding information from metadata
@@ -1113,6 +1393,14 @@ public final class GeminiClient: APIClient, Sendable {
           )
         }
 
+        func upsertToolCall(_ toolCall: ToolCall) {
+          if let existingIndex = toolCalls.firstIndex(where: { $0.id == toolCall.id }) {
+            toolCalls[existingIndex] = toolCall
+          } else {
+            toolCalls.append(toolCall)
+          }
+        }
+
         let sendUpdate = {
           let blocks = Self.assistantContent(
             reasoningText: fullReasoningText,
@@ -1156,7 +1444,7 @@ public final class GeminiClient: APIClient, Sendable {
 
           // Handle function calls
           if let toolCall = chunk.toolCall {
-            toolCalls.append(toolCall)
+            upsertToolCall(toolCall)
             await sendUpdate()
           }
 
