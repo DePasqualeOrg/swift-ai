@@ -19,16 +19,14 @@ extension MCP.Tool.Content {
         self = .image(data: data.base64EncodedString(), mimeType: mimeType)
       case let .audio(data, mimeType):
         self = .audio(data: data.base64EncodedString(), mimeType: mimeType)
-      case let .file(data, mimeType, _):
-        // MCP doesn't have a direct file content type, so we use the appropriate media type
-        // or fall back to a resource representation
+      case let .file(data, mimeType, filename):
+        // Preserve generic files as embedded resources instead of dropping their bytes.
         if mimeType.hasPrefix("image/") {
           self = .image(data: data.base64EncodedString(), mimeType: mimeType)
         } else if mimeType.hasPrefix("audio/") {
           self = .audio(data: data.base64EncodedString(), mimeType: mimeType)
         } else {
-          // For other file types, encode as text with base64 data
-          self = .text("[File data: \(mimeType), \(data.count) bytes]")
+          self = .resource(uri: Self.fileResourceURI(filename: filename), mimeType: mimeType, blob: data)
         }
     }
   }
@@ -42,6 +40,11 @@ extension MCP.Tool.Content {
       return nil
     }
     return mimeType
+  }
+
+  private static func fileResourceURI(filename: String?) -> String {
+    let path = filename.flatMap { $0.isEmpty ? nil : $0 } ?? "tool-result"
+    return URL(fileURLWithPath: "/\(path)").absoluteString
   }
 }
 

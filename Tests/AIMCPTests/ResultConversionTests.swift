@@ -90,6 +90,22 @@ struct ResultConversionTests {
   }
 
   @Test
+  func `ToolResult.Content to Tool.Content - file (generic type)`() {
+    let fileData = Data([0x25, 0x50, 0x44, 0x46])
+    let value = AI.ToolResult.Content.file(fileData, mimeType: "application/pdf", filename: "report.pdf")
+    let content = MCP.Tool.Content(value)
+
+    if case let .resource(resource, _, _) = content {
+      #expect(resource.uri == "file:///report.pdf")
+      #expect(resource.mimeType == "application/pdf")
+      #expect(resource.text == nil)
+      #expect(Data(base64Encoded: resource.blob ?? "") == fileData)
+    } else {
+      Issue.record("Expected embedded resource content for generic file")
+    }
+  }
+
+  @Test
   func `ToolResult to CallTool.Result`() {
     let result = AI.ToolResult(
       name: "test_tool",
