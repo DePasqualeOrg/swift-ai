@@ -2490,7 +2490,8 @@ public extension AnthropicClient {
 
   /// Whether the given model supports extended thinking.
   /// Thinking was introduced with Claude 3.7 Sonnet; older models reject thinking parameters.
-  /// Defaults to true for unrecognized models, since new Anthropic models generally support thinking.
+  /// Defaults to true for unrecognized models, since new Anthropic models generally support thinking
+  /// and a blocklist of old models is more forward-compatible than an allowlist of known models.
   static func supportsThinking(_ modelId: String) -> Bool {
     if modelId.contains("claude-3-haiku") || modelId.contains("claude-3-opus")
       || modelId.contains("claude-3-sonnet") || modelId.contains("claude-3-5-")
