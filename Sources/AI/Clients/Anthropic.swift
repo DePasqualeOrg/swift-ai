@@ -513,25 +513,59 @@ extension AnthropicClient {
       session: URLSession,
     ) async throws {
       beginRequest()
-      do {
-        let request = try await client.buildMessagesRequest(params: params, stream: true, apiKey: apiKey)
-        let (stream, response) = try await session.bytes(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-          throw AIError.network(underlying: URLError(.badServerResponse))
-        }
-        connected()
-        if !(200 ... 299).contains(httpResponse.statusCode) {
-          var errorData = Data()
-          for try await byte in stream {
-            try Task.checkCancellation()
-            errorData.append(byte)
+
+      // Retry loop covers only the connection phase (before streaming events).
+      // Once a 2xx response is received and events begin flowing, errors are not
+      // retried because partial results have already been emitted to callers.
+      let byteStream: URLSession.AsyncBytes
+      var retriesRemaining = client.maxRetries
+      while true {
+        do {
+          let request = try await client.buildMessagesRequest(params: params, stream: true, apiKey: apiKey)
+          let (stream, response) = try await session.bytes(for: request)
+          guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIError.network(underlying: URLError(.badServerResponse))
           }
-          throw AnthropicClient.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: errorData)
+          connected()
+          if !(200 ... 299).contains(httpResponse.statusCode) {
+            var errorData = Data()
+            for try await byte in stream {
+              try Task.checkCancellation()
+              errorData.append(byte)
+            }
+            throw AnthropicClient.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: errorData)
+          }
+          byteStream = stream
+          break
+        } catch let urlError as URLError {
+          let aiError: AIError = switch urlError.code {
+            case .timedOut: .timeout
+            default: .network(underlying: urlError)
+          }
+          if retriesRemaining > 0, client.shouldRetry(aiError) {
+            let delay = client.calculateRetryDelay(retriesRemaining: retriesRemaining)
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            retriesRemaining -= 1
+            continue
+          }
+          throw aiError
+        } catch {
+          let aiError = (error as? AIError) ?? .network(underlying: error)
+          if retriesRemaining > 0, client.shouldRetry(aiError) {
+            let delay = client.calculateRetryDelay(retriesRemaining: retriesRemaining)
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            retriesRemaining -= 1
+            continue
+          }
+          throw aiError
         }
-        for try await event in stream.events {
+      }
+
+      // Stream events — no retries past this point.
+      do {
+        for try await event in byteStream.events {
           try Task.checkCancellation()
 
-          // Check for abort
           if aborted {
             throw AIError.cancelled
           }
@@ -549,25 +583,19 @@ extension AnthropicClient {
             throw AIError.parsing(message: "Failed to decode stream event: \(error.localizedDescription)")
           }
         }
-        // Use the result of endRequest
         _ = endRequest()
       } catch let urlError as URLError {
-        // Handle specific URL errors
         switch urlError.code {
           case .timedOut:
             throw AIError.timeout
-          case .notConnectedToInternet, .networkConnectionLost:
-            throw AIError.network(underlying: urlError)
           default:
             throw AIError.network(underlying: urlError)
         }
       } catch {
-        // Re-throw if it's already an LLMError
         if let aiError = error as? AIError {
           throw aiError
-        } else {
-          throw AIError.network(underlying: error)
         }
+        throw AIError.network(underlying: error)
       }
     }
 
@@ -1446,6 +1474,7 @@ public final class AnthropicClient: APIClient, Sendable {
   func buildMessagesRequest(params: MessageCreateParams, stream: Bool, apiKey: String) async throws -> URLRequest {
     var request = URLRequest(url: messagesEndpoint)
     request.httpMethod = "POST"
+    request.timeoutInterval = timeout
     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
     request.setValue(version, forHTTPHeaderField: "anthropic-version")
     request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
@@ -1740,6 +1769,7 @@ public final class AnthropicClient: APIClient, Sendable {
     do {
       var request = URLRequest(url: endpoint)
       request.httpMethod = method
+      request.timeoutInterval = timeout
       request.setValue("application/json", forHTTPHeaderField: "Content-Type")
       request.setValue(version, forHTTPHeaderField: "anthropic-version")
       request.setValue(apiKey, forHTTPHeaderField: "x-api-key")
