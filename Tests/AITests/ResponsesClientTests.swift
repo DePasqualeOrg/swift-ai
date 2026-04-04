@@ -1424,6 +1424,70 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Assistant message with metadata emits output_text annotations array`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let metadataJson = #"{"id":"msg_123","status":"completed"}"#
+    let messages = [
+      Message(role: .assistant, content: [
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-responses",
+          type: "message_metadata",
+          data: metadataJson,
+        )),
+        .text("The answer is 42."),
+      ]),
+      Message(role: .user, content: "Follow up"),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let assistantMsg = try #require(input.first(where: {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    }))
+    #expect(assistantMsg["id"] as? String == "msg_123")
+    #expect(assistantMsg["status"] as? String == "completed")
+
+    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    let outputItem = try #require(content.first(where: { $0["text"] as? String == "The answer is 42." }))
+    #expect(outputItem["type"] as? String == "output_text")
+    let annotations = try #require(outputItem["annotations"] as? [[String: Any]])
+    #expect(annotations.isEmpty)
+  }
+
+  @Test
   func `Stop sends authenticated cancel for background response`() async throws {
     var cancelRequest: URLRequest?
     let streamGate = AsyncStream<Data>.makeStream()

@@ -909,10 +909,14 @@ public final class ResponsesClient: APIClient, Sendable {
                 currentMetadata = nil
               }
             case let .text(text) where !text.isEmpty:
-              contentItems.append([
+              var item: [String: any Sendable] = [
                 "type": textContentType,
                 "text": text,
-              ])
+              ]
+              if currentMetadata != nil {
+                item["annotations"] = [[String: any Sendable]]()
+              }
+              contentItems.append(item)
             case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "annotated_output_text":
               if let text = block.content {
                 var item: [String: any Sendable] = [
@@ -921,11 +925,15 @@ public final class ResponsesClient: APIClient, Sendable {
                 ]
                 // Annotations are only valid on output_text (ResponseOutputMessage),
                 // not on input_text (EasyInputMessage).
-                if currentMetadata != nil,
-                   let jsonString = block.data,
-                   let jsonData = jsonString.data(using: .utf8),
-                   let annotations = try? JSONSerialization.jsonObject(with: jsonData) as? [[String: any Sendable]]
-                {
+                if currentMetadata != nil {
+                  let annotations: [[String: any Sendable]] = if let jsonString = block.data,
+                                                                 let jsonData = jsonString.data(using: .utf8),
+                                                                 let parsedAnnotations = try? JSONSerialization.jsonObject(with: jsonData) as? [[String: any Sendable]]
+                  {
+                    parsedAnnotations
+                  } else {
+                    []
+                  }
                   item["annotations"] = annotations
                 }
                 contentItems.append(item)
