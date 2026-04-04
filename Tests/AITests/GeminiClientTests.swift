@@ -593,6 +593,48 @@ struct GeminiClientTests {
     #expect(payload["contentEncoding"] as? String == "base64")
   }
 
+  @Test
+  func `Request body requests server-side tool invocations`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Run some code")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+      configuration: .init(codeExecution: true),
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let tools = try #require(body?["tools"] as? [[String: Any]])
+    #expect(tools.count == 1)
+    #expect((tools.first?["codeExecution"] as? [String: Any]) != nil)
+
+    let toolConfig = try #require(body?["toolConfig"] as? [String: Any])
+    #expect(toolConfig["includeServerSideToolInvocations"] as? Bool == true)
+    #expect(toolConfig["functionCallingConfig"] == nil)
+  }
+
   // MARK: - Multiple Tool Calls Tests
 
   @Test

@@ -575,13 +575,21 @@ public final class GeminiClient: APIClient, Sendable {
     if !toolsArray.isEmpty {
       body["tools"] = toolsArray
 
+      var toolConfig: [String: any Sendable] = [:]
+
+      if searchGrounding || webContent || codeExecution {
+        toolConfig["includeServerSideToolInvocations"] = true
+      }
+
       // Add tool choice configuration if we have function declarations
       if !tools.isEmpty {
-        body["toolConfig"] = [
-          "functionCallingConfig": [
-            "mode": "AUTO", // Can be "AUTO", "ANY", or "NONE"
-          ],
-        ]
+        toolConfig["functionCallingConfig"] = [
+          "mode": "AUTO", // Can be "AUTO", "ANY", or "NONE"
+        ] as [String: any Sendable]
+      }
+
+      if !toolConfig.isEmpty {
+        body["toolConfig"] = toolConfig
       }
     }
 
