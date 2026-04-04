@@ -63,6 +63,8 @@ public extension ChatCompletionsClient {
 @Observable
 public final class ChatCompletionsClient: APIClient, Sendable {
   public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text]
+  private static let refusalOpaqueProvider = "openai-chat-completions"
+  private static let refusalOpaqueType = "refusal"
 
   /// Predefined API endpoints for the Chat Completions API.
   public enum Endpoint {
@@ -111,19 +113,57 @@ public final class ChatCompletionsClient: APIClient, Sendable {
   private static func assistantContent(
     reasoningText: String? = nil,
     responseText: String? = nil,
+    refusalText: String? = nil,
     notesText: String? = nil,
     toolCalls: [AI.ToolCall] = [],
   ) -> [Message.Content] {
-    Message.assistantContent(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
+    var content: [Message.Content] = []
+    if let reasoningText, !reasoningText.isEmpty {
+      content.append(.thinking(text: reasoningText, signature: nil))
+    }
+    if let responseText, !responseText.isEmpty {
+      content.append(.text(responseText))
+    }
+    if let refusalText, !refusalText.isEmpty {
+      content.append(.providerOpaque(OpaqueBlock(
+        provider: refusalOpaqueProvider,
+        type: refusalOpaqueType,
+        content: refusalText,
+        isResponseContent: true,
+      )))
+    }
+    if let notesText, !notesText.isEmpty {
+      content.append(.endnotes(notesText))
+    }
+    content.append(contentsOf: toolCalls.map(Message.Content.toolCall))
+    return content
   }
 
-  private static func assistantSnapshot(from response: GenerationResponse) -> (reasoning: String?, response: String?, notes: String?, toolCalls: [AI.ToolCall]) {
+  private static func refusalText(from block: Message.Content) -> String? {
+    guard case let .providerOpaque(opaque) = block,
+          opaque.provider == refusalOpaqueProvider,
+          opaque.type == refusalOpaqueType,
+          let refusalText = opaque.content,
+          !refusalText.isEmpty
+    else {
+      return nil
+    }
+    return refusalText
+  }
+
+  private static func assistantSnapshot(from response: GenerationResponse) -> (reasoning: String?, response: String?, refusal: String?, notes: String?, toolCalls: [AI.ToolCall]) {
     var reasoningParts: [String] = []
     var responseParts: [String] = []
+    var refusalParts: [String] = []
     var notesParts: [String] = []
     var toolCalls: [AI.ToolCall] = []
 
     for block in response.content {
+      if let refusalText = Self.refusalText(from: block) {
+        refusalParts.append(refusalText)
+        continue
+      }
+
       switch block {
         case let .thinking(text, _):
           reasoningParts.append(text)
@@ -141,6 +181,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     return (
       reasoningParts.isEmpty ? nil : reasoningParts.joined(),
       responseParts.isEmpty ? nil : responseParts.joined(),
+      refusalParts.isEmpty ? nil : refusalParts.joined(),
       notesParts.isEmpty ? nil : notesParts.joined(),
       toolCalls,
     )
@@ -185,11 +226,17 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     }
 
     var textParts: [String] = []
+    var refusalParts: [String] = []
     var toolCalls: [[String: any Sendable]] = []
     var multimodalContent: [[String: any Sendable]] = []
     var hasNonTextContent = false
 
     for block in message.content {
+      if let refusalText = Self.refusalText(from: block) {
+        refusalParts.append(refusalText)
+        continue
+      }
+
       switch block {
         case let .text(text) where !text.isEmpty:
           textParts.append(text)
@@ -252,15 +299,26 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     var requestMessage: [String: any Sendable] = [
       "role": message.role.rawValue,
     ]
+    let refusalText = refusalParts.joined()
+    var hasSerializedContent = false
 
     if !toolCalls.isEmpty {
       requestMessage["tool_calls"] = toolCalls
       requestMessage["content"] = textParts.joined()
+      hasSerializedContent = true
     } else if hasNonTextContent {
       requestMessage["content"] = multimodalContent
+      hasSerializedContent = true
     } else if !textParts.isEmpty {
       requestMessage["content"] = textParts.joined()
-    } else {
+      hasSerializedContent = true
+    }
+
+    if !refusalText.isEmpty {
+      requestMessage["refusal"] = refusalText
+    }
+
+    if !hasSerializedContent, refusalText.isEmpty {
       return []
     }
 
@@ -398,8 +456,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               // Check if choices array exists and is not empty
               if let choices = chunk.choices, !choices.isEmpty, let delta = choices.first?.delta {
                 let reasoningText = delta.reasoningContent
-                let responseText = delta.content ?? delta.refusal
-                if delta.content == nil, delta.refusal != nil {
+                let responseText = delta.content
+                let refusalText = delta.refusal
+                if refusalText != nil {
                   hasRefusal = true
                 }
 
@@ -439,13 +498,14 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                 let notesText = formatCitations(chunk.citations)
                 let toolCalls = toolCallsById.keys.sorted().compactMap { toolCallsById[$0] }
                 // Yield if we have content, function calls, or a finish reason (final chunk with metadata)
-                if reasoningText != nil || responseText != nil || notesText != nil || !toolCalls.isEmpty || lastFinishReason != nil {
+                if reasoningText != nil || responseText != nil || refusalText != nil || notesText != nil || !toolCalls.isEmpty || lastFinishReason != nil {
                   var currentMetadata = metadata
                   currentMetadata.finishReason = hasRefusal ? .refusal : parseFinishReason(lastFinishReason)
                   continuation.yield(GenerationResponse(
                     content: Self.assistantContent(
                       reasoningText: reasoningText,
                       responseText: responseText,
+                      refusalText: refusalText,
                       notesText: notesText,
                       toolCalls: toolCalls,
                     ),
@@ -493,8 +553,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               throw AIError.parsing(message: "Failed to parse JSON from non-streamed response")
             }
             let reasoningText = message.reasoningContent
-            let responseText = message.content ?? message.refusal
-            let hasRefusal = message.content == nil && message.refusal != nil
+            let responseText = message.content
+            let refusalText = message.refusal
+            let hasRefusal = refusalText != nil
             var toolCalls: [AI.ToolCall] = []
 
             // Get tool calls if available
@@ -541,6 +602,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               content: Self.assistantContent(
                 reasoningText: reasoningText,
                 responseText: responseText,
+                refusalText: refusalText,
                 notesText: notesText,
                 toolCalls: toolCalls,
               ),
@@ -741,6 +803,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     let task = Task<GenerationResponse, Error> {
       var fullReasoningText = ""
       var fullResponseText = ""
+      var fullRefusalText = ""
       var notesText: String?
       var toolCalls: [AI.ToolCall] = []
       var finalMetadata: GenerationResponse.Metadata?
@@ -768,6 +831,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           if let responseTextChunk = snapshot.response {
             fullResponseText += responseTextChunk
           }
+          if let refusalTextChunk = snapshot.refusal {
+            fullRefusalText += refusalTextChunk
+          }
           if let notes = snapshot.notes {
             notesText = notes
           }
@@ -780,6 +846,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           }
           let fullReasoningTextCopy = fullReasoningText
           let fullResponseTextCopy = fullResponseText
+          let fullRefusalTextCopy = fullRefusalText
           let notesTextCopy = notesText
           let toolCallsCopy = toolCalls
           let metadataCopy = finalMetadata
@@ -788,6 +855,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               content: Self.assistantContent(
                 reasoningText: fullReasoningTextCopy.isEmpty ? nil : fullReasoningTextCopy,
                 responseText: fullResponseTextCopy.isEmpty ? nil : fullResponseTextCopy,
+                refusalText: fullRefusalTextCopy.isEmpty ? nil : fullRefusalTextCopy,
                 notesText: notesTextCopy,
                 toolCalls: toolCallsCopy,
               ),
@@ -799,6 +867,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           content: Self.assistantContent(
             reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
             responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+            refusalText: fullRefusalText.isEmpty ? nil : fullRefusalText,
             notesText: notesText,
             toolCalls: toolCalls,
           ),
@@ -810,6 +879,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             content: Self.assistantContent(
               reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+              refusalText: fullRefusalText.isEmpty ? nil : fullRefusalText,
               notesText: notesText,
               toolCalls: toolCalls,
             ),

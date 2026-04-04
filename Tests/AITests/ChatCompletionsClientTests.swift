@@ -268,6 +268,42 @@ struct ChatCompletionsClientTests {
     #expect(response.responseText?.contains("can't") == true)
   }
 
+  @Test
+  func `Streaming refusal is preserved as opaque response content`() async throws {
+    let sseData = """
+    data: {"id":"chatcmpl-refusal123","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant","refusal":"I can't assist with that."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: endpoint, session: makeMockSession())
+
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Tell me how to do something disallowed")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.responseText == "I can't assist with that.")
+    #expect(response.metadata?.finishReason == .refusal)
+
+    let refusalBlock = response.content.compactMap { item -> OpaqueBlock? in
+      guard case let .providerOpaque(block) = item,
+            block.provider == "openai-chat-completions",
+            block.type == "refusal"
+      else {
+        return nil
+      }
+      return block
+    }.first
+    #expect(refusalBlock?.content == "I can't assist with that.")
+  }
+
   // MARK: - Non-Streaming Mode Tests
 
   @Test
@@ -309,6 +345,69 @@ struct ChatCompletionsClientTests {
     #expect(response.metadata?.inputTokens == 15)
     #expect(response.metadata?.outputTokens == 8)
     #expect(response.metadata?.totalTokens == 23)
+  }
+
+  @Test
+  func `Non-streaming refusal is preserved as opaque response content`() async throws {
+    let refusalResponse = """
+    {
+      "id": "chatcmpl-refusal456",
+      "object": "chat.completion",
+      "created": 1700000000,
+      "model": "gpt-4",
+      "choices": [{
+        "index": 0,
+        "message": {
+          "role": "assistant",
+          "content": null,
+          "refusal": "I can't assist with that."
+        },
+        "finish_reason": "stop"
+      }],
+      "usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 5,
+        "total_tokens": 15
+      }
+    }
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      return (response, refusalResponse.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+
+    let response = try await client.generateText(
+      modelId: "gpt-4",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Tell me how to do something disallowed")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    )
+
+    #expect(response.responseText == "I can't assist with that.")
+    #expect(response.metadata?.finishReason == .refusal)
+
+    let refusalBlock = response.content.compactMap { item -> OpaqueBlock? in
+      guard case let .providerOpaque(block) = item,
+            block.provider == "openai-chat-completions",
+            block.type == "refusal"
+      else {
+        return nil
+      }
+      return block
+    }.first
+    #expect(refusalBlock?.content == "I can't assist with that.")
   }
 
   @Test
@@ -763,6 +862,57 @@ struct ChatCompletionsClientTests {
     let function = firstTool?["function"] as? [String: Any]
     #expect(function?["name"] as? String == "get_weather")
     #expect(function?["description"] as? String == "Get current weather")
+  }
+
+  @Test
+  func `Request body replays assistant refusals via refusal field`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"id":"test","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-chat-completions",
+            type: "refusal",
+            content: "I can't help with that.",
+            isResponseContent: true,
+          )),
+        ]),
+        Message(role: .user, content: "Try again"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let assistantMessage = try #require(messages.first(where: { $0["role"] as? String == "assistant" }))
+
+    #expect(assistantMessage["refusal"] as? String == "I can't help with that.")
+    #expect(assistantMessage["content"] == nil)
   }
 
   @Test
