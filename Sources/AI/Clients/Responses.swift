@@ -946,6 +946,13 @@ public final class ResponsesClient: APIClient, Sendable {
                   ])
                 }
               }
+            case let .providerOpaque(block) where block.provider == "openai-chat-completions" && block.type == "refusal":
+              if let refusal = block.content {
+                contentItems.append([
+                  "type": ContentType.inputText,
+                  "text": refusal,
+                ])
+              }
             case let .toolCall(toolCall):
               flushContentItems()
               let foundationParams = Value.toSendable(toolCall.parameters)

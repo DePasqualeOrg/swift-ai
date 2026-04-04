@@ -1363,6 +1363,10 @@ public final class AnthropicClient: APIClient, Sendable {
                   rawValue: rawValue,
                 ))
               }
+            case ("openai-chat-completions", "refusal"):
+              if let refusal = opaqueBlock.content, !refusal.isEmpty {
+                contentBlocks.append(.init(type: .text, text: refusal))
+              }
             default:
               break
           }

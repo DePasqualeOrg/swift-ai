@@ -916,6 +916,72 @@ struct ChatCompletionsClientTests {
   }
 
   @Test
+  func `Chat Completions refusals survive replay through Responses as text`() async throws {
+    let refusalSSEData = """
+    data: {"id":"chatcmpl-refusal-cross-client","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant","refusal":"I can't assist with that."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+
+    data: [DONE]
+
+    """
+    let (chatTestId, chatEndpoint) = setupMockHandler(sseData: refusalSSEData)
+
+    var capturedResponsesBody: Data?
+    let responsesTestId = UUID().uuidString
+    let responsesEndpoint = try #require(URL(string: "https://mock.test/\(responsesTestId)"))
+    MockURLProtocol.setHandler(for: responsesTestId) { request in
+      capturedResponsesBody = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+
+    defer {
+      MockURLProtocol.removeHandler(for: chatTestId)
+      MockURLProtocol.removeHandler(for: responsesTestId)
+    }
+
+    let chatClient = ChatCompletionsClient(endpoint: chatEndpoint, session: makeMockSession())
+    let refusalResponse = try await consumeStream(chatClient.streamText(
+      modelId: "gpt-4",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Tell me how to do something disallowed")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    let responsesClient = ResponsesClient(endpoint: responsesEndpoint, session: makeMockSession())
+    _ = try await consumeStream(responsesClient.streamText(
+      modelId: "gpt-4o",
+      messages: [refusalResponse.message, Message(role: .user, content: "Try again")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedResponsesBody)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let assistantMsg = try #require(input.first(where: {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    }))
+    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    let refusalItem = try #require(content.first(where: { $0["text"] as? String == "I can't assist with that." }))
+    #expect(refusalItem["type"] as? String == "input_text")
+  }
+
+  @Test
   func `Request includes authorization header`() async throws {
     var capturedRequest: URLRequest?
     let testId = UUID().uuidString
