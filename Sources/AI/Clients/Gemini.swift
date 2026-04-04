@@ -549,9 +549,8 @@ public final class GeminiClient: APIClient, Sendable {
           "name": function.name,
           "description": function.description,
         ]
-        // Convert schema to Gemini format (uppercase types)
-        let geminiSchema = Self.convertSchemaForGemini(function.rawInputSchema)
-        declarationDict["parameters"] = geminiSchema
+        // Preserve full JSON Schema semantics for Gemini tool declarations.
+        declarationDict["parametersJsonSchema"] = Self.parametersJSONSchemaForGemini(function.rawInputSchema)
         return declarationDict
       }
       toolsArray.append([
@@ -1730,120 +1729,9 @@ public final class GeminiClient: APIClient, Sendable {
 }
 
 extension GeminiClient {
-  /// Converts a raw JSON schema (from rawInputSchema) to Gemini format.
-  /// Gemini requires uppercase type values ("STRING" not "string") and
-  /// doesn't support "additionalProperties".
-  static func convertSchemaForGemini(_ schema: [String: Value]) -> [String: any Sendable] {
-    var result: [String: any Sendable] = [:]
-
-    // Pre-process: if schema has anyOf with a null type, extract nullable and unwrap
-    var effectiveSchema = schema
-    if let anyOf = schema["anyOf"]?.arrayValue {
-      let nullTypes = anyOf.filter { $0.objectValue?["type"]?.stringValue == "null" }
-      let nonNullTypes = anyOf.filter { $0.objectValue?["type"]?.stringValue != "null" }
-      if !nullTypes.isEmpty {
-        result["nullable"] = true
-      }
-      if nonNullTypes.count == 1, let single = nonNullTypes.first?.objectValue {
-        // Single non-null type: unwrap the anyOf and merge into the schema
-        effectiveSchema = schema.filter { $0.key != "anyOf" }
-        for (k, v) in single {
-          effectiveSchema[k] = v
-        }
-      } else if nonNullTypes.count > 1 {
-        // Multiple non-null types: keep as anyOf with null types removed
-        effectiveSchema = schema
-      }
-    }
-
-    for (key, value) in effectiveSchema {
-      // Skip additionalProperties - Gemini doesn't support this field
-      if key == "additionalProperties" {
-        continue
-      }
-
-      if key == "type" {
-        // Convert type values to uppercase
-        if case let .string(typeStr) = value {
-          result[key] = typeStr.uppercased()
-        } else if case let .array(types) = value {
-          // Handle nullable type arrays like ["string", "null"] → type: "STRING", nullable: true
-          let typeStrings = types.compactMap(\.stringValue)
-          let nonNullTypes = typeStrings.filter { $0 != "null" }
-          if typeStrings.contains("null") {
-            result["nullable"] = true
-          }
-          if nonNullTypes.count == 1 {
-            result[key] = nonNullTypes[0].uppercased()
-          } else if nonNullTypes.count > 1 {
-            result["anyOf"] = nonNullTypes.map { ["type": $0.uppercased()] as [String: any Sendable] }
-            continue
-          } else {
-            result[key] = "STRING"
-          }
-        } else {
-          result[key] = value.toAny()
-        }
-      } else if key == "properties" {
-        // Recursively convert property schemas
-        if case let .object(props) = value {
-          var convertedProps: [String: any Sendable] = [:]
-          for (propName, propSchema) in props {
-            if case let .object(propSchemaDict) = propSchema {
-              convertedProps[propName] = convertSchemaForGemini(propSchemaDict)
-            } else {
-              convertedProps[propName] = propSchema.toAny()
-            }
-          }
-          result[key] = convertedProps
-        } else {
-          result[key] = value.toAny()
-        }
-      } else if key == "items" {
-        // Recursively convert array item schema
-        if case let .object(itemSchema) = value {
-          let convertedItems = convertSchemaForGemini(itemSchema)
-          result[key] = convertedItems
-        } else {
-          result[key] = value.toAny()
-        }
-      } else if key == "anyOf" || key == "oneOf" {
-        // Recursively convert anyOf/oneOf schemas, extracting null types
-        // Gemini treats oneOf the same as anyOf
-        if case let .array(schemas) = value {
-          var converted: [[String: any Sendable]] = []
-          for item in schemas {
-            if item.objectValue?["type"]?.stringValue == "null" {
-              result["nullable"] = true
-              continue
-            }
-            if let obj = item.objectValue {
-              converted.append(convertSchemaForGemini(obj))
-            }
-          }
-          if !converted.isEmpty {
-            result[key] = converted
-          }
-        }
-      } else if key == "$defs" {
-        // Recursively convert schema definitions
-        if case let .object(defs) = value {
-          var convertedDefs: [String: any Sendable] = [:]
-          for (defName, defSchema) in defs {
-            if case let .object(defSchemaDict) = defSchema {
-              convertedDefs[defName] = convertSchemaForGemini(defSchemaDict)
-            } else {
-              convertedDefs[defName] = defSchema.toAny()
-            }
-          }
-          result[key] = convertedDefs
-        }
-      } else {
-        result[key] = value.toAny()
-      }
-    }
-
-    return result
+  /// Gemini accepts full JSON Schema for function declarations via `parametersJsonSchema`.
+  static func parametersJSONSchemaForGemini(_ schema: [String: Value]) -> [String: any Sendable] {
+    Value.toSendable(schema)
   }
 
   /// Maps an HTTP status code and optional error message to an `AIError`.

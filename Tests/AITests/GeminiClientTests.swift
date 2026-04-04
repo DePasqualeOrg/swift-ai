@@ -514,6 +514,83 @@ struct GeminiClientTests {
     #expect(functionDeclarations != nil)
     #expect(functionDeclarations?.first?["name"] as? String == "get_weather")
     #expect(functionDeclarations?.first?["description"] as? String == "Get current weather")
+    #expect(functionDeclarations?.first?["parameters"] == nil)
+    let parametersJsonSchema = functionDeclarations?.first?["parametersJsonSchema"] as? [String: Any]
+    #expect(parametersJsonSchema != nil)
+    #expect(parametersJsonSchema?["type"] as? String == "object")
+  }
+
+  @Test
+  func `Request body preserves full JSON Schema in parametersJsonSchema`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+    let rawSchemaTool = Tool(
+      name: "process_nested_data",
+      description: "Process nested data structures",
+      inputSchema: [
+        "type": .string("object"),
+        "properties": .object([
+          "grouped": .object([
+            "type": .string("object"),
+            "additionalProperties": .object([
+              "type": .string("array"),
+              "items": .object(["type": .string("integer")]),
+            ]),
+          ]),
+          "payload": .object([
+            "type": .string("string"),
+            "contentEncoding": .string("base64"),
+          ]),
+        ]),
+        "required": .array([.string("grouped"), .string("payload")]),
+      ],
+    ) { _ in [.text("OK")] }
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      tools: [rawSchemaTool],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Process this data")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let tools = try #require(body?["tools"] as? [[String: Any]])
+    let functionDeclarations = try #require(tools.first?["functionDeclarations"] as? [[String: Any]])
+    let declaration = try #require(functionDeclarations.first)
+
+    #expect(declaration["parameters"] == nil)
+    let parametersJsonSchema = try #require(declaration["parametersJsonSchema"] as? [String: Any])
+    #expect(parametersJsonSchema["type"] as? String == "object")
+
+    let properties = try #require(parametersJsonSchema["properties"] as? [String: Any])
+    let grouped = try #require(properties["grouped"] as? [String: Any])
+    let groupedAdditionalProperties = try #require(grouped["additionalProperties"] as? [String: Any])
+    #expect(groupedAdditionalProperties["type"] as? String == "array")
+    let groupedItems = try #require(groupedAdditionalProperties["items"] as? [String: Any])
+    #expect(groupedItems["type"] as? String == "integer")
+
+    let payload = try #require(properties["payload"] as? [String: Any])
+    #expect(payload["contentEncoding"] as? String == "base64")
   }
 
   // MARK: - Multiple Tool Calls Tests
