@@ -635,6 +635,84 @@ struct GeminiClientTests {
     #expect(toolConfig["functionCallingConfig"] == nil)
   }
 
+  @Test
+  func `Server-side Gemini tool history survives parse and replay`() async throws {
+    var requestCount = 0
+    var replayRequestBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      requestCount += 1
+
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+
+      if requestCount == 1 {
+        let sseData = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I checked the URL.\"},{\"toolCall\":{\"id\":\"server_tool_1\",\"toolType\":\"URL_CONTEXT\",\"args\":{\"url\":\"https://example.com\"}}},{\"toolResponse\":{\"id\":\"server_tool_1\",\"toolType\":\"URL_CONTEXT\",\"response\":{\"status\":\"ok\"}}}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0,\"urlContextMetadata\":{\"urlMetadata\":[{\"retrievedUrl\":\"https://example.com\",\"urlRetrievalStatus\":\"URL_RETRIEVAL_STATUS_SUCCESS\"}]}}],\"usageMetadata\":{\"promptTokenCount\":20,\"candidatesTokenCount\":9,\"totalTokenCount\":29}}\n\n"
+        return (response, sseData.data(using: .utf8)!)
+      }
+
+      replayRequestBodyData = readRequestBody(from: request)
+      let sseData = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Summary\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0}],\"usageMetadata\":{\"promptTokenCount\":16,\"candidatesTokenCount\":2,\"totalTokenCount\":18}}\n\n"
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let firstResponse = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Check https://example.com")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+      configuration: .init(webContent: true),
+    ))
+
+    let opaqueBlocks = firstResponse.content.compactMap { item -> OpaqueBlock? in
+      guard case let .providerOpaque(block) = item else { return nil }
+      return block
+    }
+    #expect(opaqueBlocks.contains { $0.provider == "gemini" && $0.type == "toolCall" })
+    #expect(opaqueBlocks.contains { $0.provider == "gemini" && $0.type == "toolResponse" })
+    #expect(opaqueBlocks.contains { $0.provider == "gemini" && $0.type == "urlContextMetadata" })
+
+    let assistantMessage = Message(role: .assistant, content: firstResponse.content)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .user, content: "Check https://example.com"),
+        assistantMessage,
+        Message(role: .user, content: "Summarize it again"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+      configuration: .init(webContent: true),
+    ))
+
+    #expect(requestCount == 2)
+
+    let body = try JSONSerialization.jsonObject(with: #require(replayRequestBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    let modelMessage = try #require(contents.first { ($0["role"] as? String) == "model" })
+    let parts = try #require(modelMessage["parts"] as? [[String: Any]])
+
+    #expect(parts.contains { part in
+      let toolCall = part["toolCall"] as? [String: Any]
+      return toolCall?["id"] as? String == "server_tool_1"
+    })
+    #expect(parts.contains { part in
+      let toolResponse = part["toolResponse"] as? [String: Any]
+      return toolResponse?["id"] as? String == "server_tool_1"
+    })
+    #expect(parts.allSatisfy { $0["urlContextMetadata"] == nil })
+  }
+
   // MARK: - Multiple Tool Calls Tests
 
   @Test

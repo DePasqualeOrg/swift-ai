@@ -199,6 +199,77 @@ public final class GeminiClient: APIClient, Sendable {
     case index(Int)
   }
 
+  private static let roundTrippableOpaquePartTypes: Set<String> = [
+    "executableCode",
+    "codeExecutionResult",
+    "toolCall",
+    "toolResponse",
+  ]
+
+  private static func geminiOpaqueBlock(
+    type: String,
+    jsonObject: [String: Any],
+    content: String? = nil,
+    isResponseContent: Bool = false,
+  ) -> OpaqueBlock? {
+    guard let jsonData = try? JSONSerialization.data(withJSONObject: jsonObject),
+          let rawJSON = String(data: jsonData, encoding: .utf8)
+    else {
+      return nil
+    }
+
+    return OpaqueBlock(
+      provider: "gemini",
+      type: type,
+      content: content,
+      data: rawJSON,
+      isResponseContent: isResponseContent,
+    )
+  }
+
+  private static func geminiJSONObject(from opaque: OpaqueBlock) -> [String: any Sendable]? {
+    guard let jsonString = opaque.data,
+          let jsonData = jsonString.data(using: .utf8),
+          let jsonObject = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+          let value = try? Value.fromAny(jsonObject),
+          case let .object(dictionary) = value
+    else {
+      return nil
+    }
+
+    return Value.toSendable(dictionary)
+  }
+
+  private static func decodedJSONObject(from data: Data) throws -> [String: Any]? {
+    try JSONSerialization.jsonObject(with: data) as? [String: Any]
+  }
+
+  private static func sendableJSONObject(from jsonObject: [String: Any]) -> [String: any Sendable]? {
+    guard let value = try? Value.fromAny(jsonObject),
+          case let .object(dictionary) = value
+    else {
+      return nil
+    }
+
+    return Value.toSendable(dictionary)
+  }
+
+  private static func jsonObjectArray(from value: Any?) -> [[String: Any]]? {
+    guard let array = value as? [Any] else {
+      return nil
+    }
+
+    var objects = [[String: Any]]()
+    objects.reserveCapacity(array.count)
+    for element in array {
+      guard let object = element as? [String: Any] else {
+        return nil
+      }
+      objects.append(object)
+    }
+    return objects
+  }
+
   private static func assistantContent(
     reasoningText: String? = nil,
     reasoningSignature: String? = nil,
@@ -391,13 +462,14 @@ public final class GeminiClient: APIClient, Sendable {
           parts.append(part)
 
         case let .providerOpaque(opaque) where opaque.provider == "gemini"
-        && (opaque.type == "executableCode" || opaque.type == "codeExecutionResult"):
-          if let jsonString = opaque.data,
-             let jsonData = jsonString.data(using: .utf8),
-             let jsonObject = try? JSONSerialization.jsonObject(with: jsonData) as? [String: any Sendable]
-          {
+        && Self.roundTrippableOpaquePartTypes.contains(opaque.type):
+          if let jsonObject = Self.geminiJSONObject(from: opaque) {
             parts.append([opaque.type: jsonObject])
           }
+
+        case let .providerOpaque(opaque) where opaque.provider == "gemini" && opaque.type == "urlContextMetadata":
+          // urlContextMetadata is candidate-level output metadata, not a request Part.
+          break
 
         default:
           break
@@ -617,12 +689,12 @@ public final class GeminiClient: APIClient, Sendable {
   /// Returns `true` if parsing terminated the stream (e.g., a blocking error),
   /// meaning the caller should not continue processing further chunks.
   private func processResponseChunk(
-    _ jsonObject: [String: any Sendable]?,
+    _ jsonObject: [String: Any]?,
     continuation: AsyncThrowingStream<StreamResponse, Error>.Continuation,
     partialToolCallState: inout PartialToolCallState,
   ) throws -> Bool {
     // Check for promptFeedback (indicates a blocked prompt)
-    if let promptFeedback = jsonObject?["promptFeedback"] as? [String: any Sendable],
+    if let promptFeedback = jsonObject?["promptFeedback"] as? [String: Any],
        let blockReason = promptFeedback["blockReason"] as? String
     {
       let blockMessage = (promptFeedback["blockReasonMessage"] as? String) ?? "Content was blocked."
@@ -642,7 +714,7 @@ public final class GeminiClient: APIClient, Sendable {
     }
 
     // Check for safety ratings in candidates
-    if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
+    if let candidates = Self.jsonObjectArray(from: jsonObject?["candidates"]),
        let firstCandidate = candidates.first
     {
       if let finishReason = firstCandidate["finishReason"] as? String {
@@ -677,10 +749,10 @@ public final class GeminiClient: APIClient, Sendable {
     }
 
     // Extract text chunks
-    if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
+    if let candidates = Self.jsonObjectArray(from: jsonObject?["candidates"]),
        let firstCandidate = candidates.first,
-       let content = firstCandidate["content"] as? [String: any Sendable],
-       let parts = content["parts"] as? [[String: any Sendable]]
+       let content = firstCandidate["content"] as? [String: Any],
+       let parts = Self.jsonObjectArray(from: content["parts"])
     {
       for part in parts {
         if let text = part["text"] as? String {
@@ -690,42 +762,55 @@ public final class GeminiClient: APIClient, Sendable {
             else { false }
           let signature = isThinkingText ? part["thoughtSignature"] as? String : nil
           continuation.yield(StreamResponse(text: text, thought: isThinkingText, thoughtSignature: signature, groundingMetadata: nil, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
-        } else if let functionCall = part["functionCall"] as? [String: any Sendable] {
+        } else if let functionCall = part["functionCall"] as? [String: Any],
+                  let sendableFunctionCall = Self.sendableJSONObject(from: functionCall),
+                  let sendablePart = Self.sendableJSONObject(from: part)
+        {
           if let toolCallResponse = try Self.parseToolCall(
-            from: functionCall,
-            part: part,
+            from: sendableFunctionCall,
+            part: sendablePart,
             partialToolCallState: &partialToolCallState,
           ) {
             continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: toolCallResponse, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
           }
-        } else if let executableCodeDict = part["executableCode"] as? [String: any Sendable] {
+        } else if let serverToolCallDict = part["toolCall"] as? [String: Any] {
+          if let block = Self.geminiOpaqueBlock(type: "toolCall", jsonObject: serverToolCallDict) {
+            continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+          }
+        } else if let serverToolResponseDict = part["toolResponse"] as? [String: Any] {
+          if let block = Self.geminiOpaqueBlock(type: "toolResponse", jsonObject: serverToolResponseDict) {
+            continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+          }
+        } else if let executableCodeDict = part["executableCode"] as? [String: Any] {
           do {
             let jsonData = try JSONSerialization.data(withJSONObject: executableCodeDict)
             let executableCode = try JSONDecoder().decode(ExecutableCode.self, from: jsonData)
             let languageTag = (executableCode.language ?? "").lowercased()
             let displayText = executableCode.code.map { "\n\n```\(languageTag)\n\($0)\n```\n\n" }
-            let rawJson = String(data: jsonData, encoding: .utf8)
-            let block = OpaqueBlock(
-              provider: "gemini", type: "executableCode",
-              content: displayText, data: rawJson,
+            if let block = Self.geminiOpaqueBlock(
+              type: "executableCode",
+              jsonObject: executableCodeDict,
+              content: displayText,
               isResponseContent: displayText != nil,
-            )
-            continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+            ) {
+              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+            }
           } catch {
             geminiLogger.error("Failed to decode ExecutableCode: \(error.localizedDescription)")
           }
-        } else if let codeExecutionResultDict = part["codeExecutionResult"] as? [String: any Sendable] {
+        } else if let codeExecutionResultDict = part["codeExecutionResult"] as? [String: Any] {
           do {
             let jsonData = try JSONSerialization.data(withJSONObject: codeExecutionResultDict)
             let executionResult = try JSONDecoder().decode(CodeExecutionResult.self, from: jsonData)
             let displayText = executionResult.output.map { "\n\n```\n\($0)\($0.last == "\n" ? "" : "\n")```\n\n" }
-            let rawJson = String(data: jsonData, encoding: .utf8)
-            let block = OpaqueBlock(
-              provider: "gemini", type: "codeExecutionResult",
-              content: displayText, data: rawJson,
+            if let block = Self.geminiOpaqueBlock(
+              type: "codeExecutionResult",
+              jsonObject: codeExecutionResultDict,
+              content: displayText,
               isResponseContent: displayText != nil,
-            )
-            continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+            ) {
+              continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+            }
           } catch {
             geminiLogger.error("Failed to decode CodeExecutionResult: \(error.localizedDescription)")
           }
@@ -737,17 +822,25 @@ public final class GeminiClient: APIClient, Sendable {
     }
 
     // Extract grounding metadata
-    if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
+    if let candidates = Self.jsonObjectArray(from: jsonObject?["candidates"]),
        let firstCandidate = candidates.first,
-       let groundingMetadataDict = firstCandidate["groundingMetadata"] as? [String: any Sendable]
+       let groundingMetadataDict = firstCandidate["groundingMetadata"] as? [String: Any]
     {
       let metadataData = try JSONSerialization.data(withJSONObject: groundingMetadataDict)
       let groundingMetadata = try JSONDecoder().decode(GroundingMetadata.self, from: metadataData)
       continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: groundingMetadata, toolCall: nil, opaqueBlock: nil, usageMetadata: nil, finishReason: nil))
     }
 
+    if let candidates = Self.jsonObjectArray(from: jsonObject?["candidates"]),
+       let firstCandidate = candidates.first,
+       let urlContextMetadataDict = firstCandidate["urlContextMetadata"] as? [String: Any],
+       let block = Self.geminiOpaqueBlock(type: "urlContextMetadata", jsonObject: urlContextMetadataDict)
+    {
+      continuation.yield(StreamResponse(text: nil, thought: nil, thoughtSignature: nil, groundingMetadata: nil, toolCall: nil, opaqueBlock: block, usageMetadata: nil, finishReason: nil))
+    }
+
     // Parse usage metadata
-    if let usageMetadataDict = jsonObject?["usageMetadata"] as? [String: any Sendable] {
+    if let usageMetadataDict = jsonObject?["usageMetadata"] as? [String: Any] {
       do {
         let metadataData = try JSONSerialization.data(withJSONObject: usageMetadataDict)
         let decodedUsageMetadata = try JSONDecoder().decode(UsageMetadata.self, from: metadataData)
@@ -758,7 +851,7 @@ public final class GeminiClient: APIClient, Sendable {
     }
 
     // Check for finish reason and yield it
-    if let candidates = jsonObject?["candidates"] as? [[String: any Sendable]],
+    if let candidates = Self.jsonObjectArray(from: jsonObject?["candidates"]),
        let firstCandidate = candidates.first,
        let finishReasonString = firstCandidate["finishReason"] as? String
     {
@@ -802,7 +895,7 @@ public final class GeminiClient: APIClient, Sendable {
           guard let data = jsonString.data(using: .utf8) else {
             throw AIError.parsing(message: "Failed to convert SSE payload to UTF-8 data")
           }
-          let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: any Sendable]
+          let jsonObject = try Self.decodedJSONObject(from: data)
 
           if try processResponseChunk(
             jsonObject,
@@ -839,7 +932,7 @@ public final class GeminiClient: APIClient, Sendable {
           throw Self.geminiHTTPError(statusCode: httpResponse.statusCode, message: errorMessage)
         }
 
-        let jsonObject = try JSONSerialization.jsonObject(with: data) as? [String: any Sendable]
+        let jsonObject = try Self.decodedJSONObject(from: data)
         _ = try processResponseChunk(
           jsonObject,
           continuation: continuation,
