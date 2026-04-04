@@ -266,6 +266,110 @@ struct AnthropicClientTests {
     #expect(response.metadata?.responseId == "msg_4QpJur2dWWDjF6C758FbBw5vm12BaVipnK")
   }
 
+  @Test
+  func `Request body normalizes raw tool schema for Anthropic`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+    let rawSchemaTool = Tool(
+      name: "raw_schema_tool",
+      description: "Tool with unsupported schema keywords",
+      inputSchema: [
+        "type": .string("object"),
+        "properties": .object([
+          "meeting_time": .object([
+            "type": .string("string"),
+            "format": .string("custom-time"),
+          ]),
+          "config": .object([
+            "type": .string("object"),
+            "additionalProperties": .object([
+              "type": .string("string"),
+            ]),
+          ]),
+          "tags": .object([
+            "type": .string("array"),
+            "items": .object(["type": .string("string")]),
+            "minItems": .int(2),
+          ]),
+        ]),
+        "required": .array([.string("meeting_time"), .string("config"), .string("tags")]),
+      ],
+    ) { _ in [.text("ok")] }
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = AnthropicClient(
+      session: makeMockSession(),
+      messagesEndpoint: testEndpoint,
+    )
+
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      tools: [ToolWithDateAndData.tool, ProcessNestedData.tool, rawSchemaTool],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Test")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let tools = try #require(body?["tools"] as? [[String: Any]])
+
+    let dateTool = try #require(tools.first { ($0["name"] as? String) == "tool_with_date_data" })
+    let dateSchema = try #require(dateTool["input_schema"] as? [String: Any])
+    let dateProperties = try #require(dateSchema["properties"] as? [String: Any])
+    let payloadProp = try #require(dateProperties["payload"] as? [String: Any])
+
+    #expect(payloadProp["contentEncoding"] == nil)
+    let payloadDescription = try #require(payloadProp["description"] as? String)
+    #expect(payloadDescription.contains("contentEncoding: \"base64\""))
+
+    let nestedTool = try #require(tools.first { ($0["name"] as? String) == "process_nested_data" })
+    let nestedSchema = try #require(nestedTool["input_schema"] as? [String: Any])
+    let nestedProperties = try #require(nestedSchema["properties"] as? [String: Any])
+    let groupedProp = try #require(nestedProperties["grouped"] as? [String: Any])
+
+    #expect(groupedProp["additionalProperties"] == nil)
+    let groupedDescription = try #require(groupedProp["description"] as? String)
+    #expect(groupedDescription.contains("additionalProperties"))
+
+    let rawTool = try #require(tools.first { ($0["name"] as? String) == "raw_schema_tool" })
+    let rawSchema = try #require(rawTool["input_schema"] as? [String: Any])
+    let rawProperties = try #require(rawSchema["properties"] as? [String: Any])
+
+    let meetingTimeProp = try #require(rawProperties["meeting_time"] as? [String: Any])
+    #expect(meetingTimeProp["format"] == nil)
+    let meetingTimeDescription = try #require(meetingTimeProp["description"] as? String)
+    #expect(meetingTimeDescription.contains("format: \"custom-time\""))
+
+    let configProp = try #require(rawProperties["config"] as? [String: Any])
+    #expect(configProp["additionalProperties"] as? Bool == false)
+
+    let tagsProp = try #require(rawProperties["tags"] as? [String: Any])
+    #expect(tagsProp["minItems"] == nil)
+    let tagsDescription = try #require(tagsProp["description"] as? String)
+    #expect(tagsDescription.contains("minItems: 2"))
+  }
+
   // MARK: - Network Error Tests
 
   @Test

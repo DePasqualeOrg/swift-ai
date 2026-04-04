@@ -2041,7 +2041,7 @@ extension AnthropicClient {
           var container = encoder.container(keyedBy: CustomCodingKeys.self)
           try container.encode(name, forKey: .name)
           try container.encode(description, forKey: .description)
-          try container.encode(rawInputSchema, forKey: .inputSchema)
+          try container.encode(Self.transformRawInputSchema(rawInputSchema), forKey: .inputSchema)
         case .webSearch:
           var container = encoder.container(keyedBy: WebSearchCodingKeys.self)
           try container.encode("web_search", forKey: .name)
@@ -2095,6 +2095,101 @@ extension AnthropicClient {
       let inputSchema = try customContainer.decode(JSONSchema.self, forKey: .inputSchema)
       self = .custom(name: name, description: description, inputSchema: inputSchema)
     }
+
+    private static func transformRawInputSchema(_ schema: [String: Value]) -> [String: Value] {
+      transformAnthropicSchema(.object(schema)).objectValue ?? schema
+    }
+
+    private static func transformAnthropicSchema(_ value: Value) -> Value {
+      guard case let .object(schema) = value else { return value }
+
+      if let ref = schema["$ref"] {
+        return .object(["$ref": ref])
+      }
+
+      var remaining = schema
+      var transformed: [String: Value] = [:]
+
+      if let defs = remaining.removeValue(forKey: "$defs") {
+        if case let .object(definitions) = defs {
+          transformed["$defs"] = .object(definitions.mapValues(transformAnthropicSchema))
+        } else {
+          transformed["$defs"] = defs
+        }
+      }
+
+      let type = remaining.removeValue(forKey: "type")
+      let anyOf = remaining.removeValue(forKey: "anyOf")
+      let oneOf = remaining.removeValue(forKey: "oneOf")
+      let allOf = remaining.removeValue(forKey: "allOf")
+
+      if let variants = anyOf?.arrayValue {
+        transformed["anyOf"] = .array(variants.map(transformAnthropicSchema))
+      } else if let variants = oneOf?.arrayValue {
+        transformed["anyOf"] = .array(variants.map(transformAnthropicSchema))
+      } else if let variants = allOf?.arrayValue {
+        transformed["allOf"] = .array(variants.map(transformAnthropicSchema))
+      } else if let type {
+        transformed["type"] = type
+      }
+
+      if let description = remaining.removeValue(forKey: "description") {
+        transformed["description"] = description
+      }
+
+      if let title = remaining.removeValue(forKey: "title") {
+        transformed["title"] = title
+      }
+
+      if type?.stringValue == "object" {
+        let properties = remaining.removeValue(forKey: "properties")?.objectValue ?? [:]
+        transformed["properties"] = .object(properties.mapValues(transformAnthropicSchema))
+
+        _ = remaining.removeValue(forKey: "additionalProperties")
+        transformed["additionalProperties"] = false
+
+        if let required = remaining.removeValue(forKey: "required") {
+          transformed["required"] = required
+        }
+      } else if type?.stringValue == "string" {
+        if let format = remaining["format"],
+           let formatString = format.stringValue,
+           supportedStringFormats.contains(formatString)
+        {
+          _ = remaining.removeValue(forKey: "format")
+          transformed["format"] = .string(formatString)
+        }
+      } else if type?.stringValue == "array" {
+        if let items = remaining.removeValue(forKey: "items") {
+          transformed["items"] = transformAnthropicSchema(items)
+        }
+
+        if let minItems = remaining["minItems"],
+           let count = minItems.intValue,
+           count == 0 || count == 1
+        {
+          _ = remaining.removeValue(forKey: "minItems")
+          transformed["minItems"] = .int(count)
+        }
+      }
+
+      if !remaining.isEmpty {
+        let supplemental = remaining
+          .map { key, value in "\(key): \(value.stringRepresentationForJSON)" }
+          .sorted()
+          .joined(separator: ", ")
+        let existingDescription = transformed["description"]?.stringValue
+        let combinedDescription = ((existingDescription.map { "\($0)\n\n" }) ?? "") + "{\(supplemental)}"
+        transformed["description"] = .string(combinedDescription)
+      }
+
+      return .object(transformed)
+    }
+
+    private static let supportedStringFormats: Set<String> = [
+      "date-time", "time", "date", "duration", "email",
+      "hostname", "uri", "ipv4", "ipv6", "uuid",
+    ]
   }
 }
 

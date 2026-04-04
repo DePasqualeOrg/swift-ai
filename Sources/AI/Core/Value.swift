@@ -115,6 +115,37 @@ public enum Value: Hashable, Sendable {
     }
   }
 
+  /// A JSON-oriented scalar/object representation used when embedding unsupported
+  /// schema keywords into provider descriptions.
+  var stringRepresentationForJSON: String {
+    switch self {
+      case .null:
+        return "null"
+      case let .bool(value):
+        return value ? "true" : "false"
+      case let .int(value):
+        return String(value)
+      case let .double(value):
+        return String(value)
+      case let .string(value):
+        let escapedValue = value
+          .replacingOccurrences(of: "\\", with: "\\\\")
+          .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escapedValue)\""
+      case let .array(values):
+        return "[\(values.map(\.stringRepresentationForJSON).joined(separator: ", "))]"
+      case let .object(object):
+        let entries = object.keys.sorted().map { key in
+          let escapedKey = key
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+          let value = object[key]?.stringRepresentationForJSON ?? "null"
+          return "\"\(escapedKey)\": \(value)"
+        }
+        return "{\(entries.joined(separator: ", "))}"
+    }
+  }
+
   // MARK: - Data Conversion
 
   /// Creates a Value from raw JSON data.
