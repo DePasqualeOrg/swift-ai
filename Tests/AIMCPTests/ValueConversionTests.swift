@@ -103,23 +103,32 @@ struct ValueConversionTests {
   }
 
   @Test
-  func `AI.Value data URL string converts to MCP.Value data`() {
+  func `AI.Value data URL string stays string by default`() {
+    let data = "Hello".data(using: .utf8)!
+    let dataURL = "data:text/plain;base64,\(data.base64EncodedString())"
+    let aiValue = AI.Value.string(dataURL)
+
+    #expect(aiValue.mcpValue == .string(dataURL))
+  }
+
+  @Test
+  func `AI.Value data URL string can be explicitly decoded to MCP.Value data`() {
     let data = "Hello".data(using: .utf8)!
     let aiValue = AI.Value.string("data:text/plain;base64,\(data.base64EncodedString())")
 
-    if case let .data(mimeType, convertedData) = aiValue.mcpValue {
+    if case let .data(mimeType, convertedData) = aiValue.mcpValueDecodingDataURLs {
       #expect(mimeType == "text/plain")
       #expect(convertedData == data)
     } else {
-      Issue.record("Expected MCP data value for data URL string")
+      Issue.record("Expected MCP data value when explicitly decoding data URL string")
     }
   }
 
   @Test
-  func `MCP.Value data round-trip preserves binary values`() {
+  func `MCP.Value data round-trip is available via explicit data URL decoding`() {
     let data = Data([0x00, 0xFF, 0x7F, 0x41])
     let original = MCP.Value.data(mimeType: "application/octet-stream", data)
 
-    #expect(original.aiValue.mcpValue == original)
+    #expect(original.aiValue.mcpValueDecodingDataURLs == original)
   }
 }

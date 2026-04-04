@@ -39,8 +39,21 @@ public extension AI.Value {
     }
   }
 
-  /// Converts this Value to an MCP Value.
+  /// Converts this Value to an MCP Value, preserving string values verbatim.
   var mcpValue: MCP.Value {
+    convertedMCPValue(decodingDataURLs: false)
+  }
+
+  /// Converts this Value to an MCP Value, decoding string data URLs as `.data`.
+  ///
+  /// Use this when you explicitly want to recover `MCP.Value.data` from
+  /// an `AI.Value.string` that contains a data URL. The default `mcpValue`
+  /// preserves strings verbatim to avoid changing caller-supplied string values.
+  var mcpValueDecodingDataURLs: MCP.Value {
+    convertedMCPValue(decodingDataURLs: true)
+  }
+
+  private func convertedMCPValue(decodingDataURLs: Bool) -> MCP.Value {
     switch self {
       case .null:
         .null
@@ -51,15 +64,15 @@ public extension AI.Value {
       case let .double(d):
         .double(d)
       case let .string(s):
-        if Data.isDataURL(string: s), let (mimeType, data) = Data.parseDataURL(s) {
+        if decodingDataURLs, Data.isDataURL(string: s), let (mimeType, data) = Data.parseDataURL(s) {
           .data(mimeType: mimeType, data)
         } else {
           .string(s)
         }
       case let .array(arr):
-        .array(arr.map { $0.mcpValue })
+        .array(arr.map { $0.convertedMCPValue(decodingDataURLs: decodingDataURLs) })
       case let .object(obj):
-        .object(obj.mapValues { $0.mcpValue })
+        .object(obj.mapValues { $0.convertedMCPValue(decodingDataURLs: decodingDataURLs) })
     }
   }
 }
@@ -82,6 +95,11 @@ public extension [String: AI.Value] {
   /// Converts a dictionary of AI Values to MCP Values.
   var mcpValues: [String: MCP.Value] {
     mapValues { $0.mcpValue }
+  }
+
+  /// Converts a dictionary of AI Values to MCP Values, decoding string data URLs as `.data`.
+  var mcpValuesDecodingDataURLs: [String: MCP.Value] {
+    mapValues { $0.mcpValueDecodingDataURLs }
   }
 }
 
