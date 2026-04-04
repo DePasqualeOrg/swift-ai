@@ -913,7 +913,10 @@ public final class ResponsesClient: APIClient, Sendable {
                   "type": textContentType,
                   "text": text,
                 ]
-                if let jsonString = block.data,
+                // Annotations are only valid on output_text (ResponseOutputMessage),
+                // not on input_text (EasyInputMessage).
+                if currentMetadata != nil,
+                   let jsonString = block.data,
                    let jsonData = jsonString.data(using: .utf8),
                    let annotations = try? JSONSerialization.jsonObject(with: jsonData) as? [[String: any Sendable]]
                 {
@@ -923,10 +926,19 @@ public final class ResponsesClient: APIClient, Sendable {
               }
             case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "refusal":
               if let refusal = block.content {
-                contentItems.append([
-                  "type": OutputItemType.refusal,
-                  "refusal": refusal,
-                ])
+                if currentMetadata != nil {
+                  // Refusal is only valid in ResponseOutputMessage.
+                  contentItems.append([
+                    "type": OutputItemType.refusal,
+                    "refusal": refusal,
+                  ])
+                } else {
+                  // Without metadata, fall back to plain text for EasyInputMessage.
+                  contentItems.append([
+                    "type": ContentType.inputText,
+                    "text": refusal,
+                  ])
+                }
               }
             case let .toolCall(toolCall):
               flushContentItems()
