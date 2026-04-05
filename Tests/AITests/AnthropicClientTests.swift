@@ -225,6 +225,40 @@ struct AnthropicClientTests {
     #expect(response.metadata?.finishReason == .toolUse)
   }
 
+  @Test
+  func `Refusal sets finish reason to refusal`() async throws {
+    let refusalResponse = """
+    event: message_start
+    data: {"type":"message_start","message":{"id":"msg_refusal","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":0}}}
+
+    event: content_block_start
+    data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+    event: content_block_stop
+    data: {"type":"content_block_stop","index":0}
+
+    event: message_delta
+    data: {"type":"message_delta","delta":{"stop_reason":"refusal","stop_sequence":null},"usage":{"output_tokens":0}}
+
+    event: message_stop
+    data: {"type":"message_stop"}
+
+    """
+    let (client, cleanup) = makeTestClient(sseData: refusalResponse)
+    defer { cleanup() }
+
+    let response = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Decline this")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.metadata?.finishReason == .refusal)
+    #expect(response.responseText == nil)
+  }
+
   // MARK: - Error Handling Tests
 
   @Test

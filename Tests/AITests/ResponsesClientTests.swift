@@ -91,6 +91,36 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Invalid strict schema tool fails before request serialization`() async {
+    let (testId, endpoint) = setupMockHandler(sseData: "")
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let invalidTool = Tool(
+      name: "invalid_tool",
+      description: "Invalid strict schema tool",
+      inputSchema: [
+        "type": "object",
+        "properties": [:],
+      ],
+      schemaBuildErrorMessage: "Strict mode requires all properties to be required.",
+    ) { _ in
+      [.text("ok")]
+    }
+
+    await #expect(throws: AIError.self) {
+      _ = try await consumeStream(client.streamText(
+        modelId: "gpt-4o",
+        tools: [invalidTool],
+        systemPrompt: nil,
+        messages: [Message(role: .user, content: "Hi")],
+        maxTokens: 128,
+        apiKey: "test-api-key",
+      ))
+    }
+  }
+
+  @Test
   func `Parses multiple function calls in single response`() async throws {
     let fixture = try loadFixture("responses_multiple_function_calls.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)
@@ -2121,9 +2151,9 @@ struct ResponsesClientTests {
   func `Stop sends authenticated cancel for background response`() async throws {
     var cancelRequest: URLRequest?
     let streamGate = AsyncStream<Data>.makeStream()
+    let testId = "bg-cancel-test"
 
-    // Use the global stream handler for controlled timing
-    MockURLProtocol.streamHandler = { request in
+    MockURLProtocol.setStreamHandler(for: testId) { request in
       let url = request.url!
 
       // Handle cancel request
@@ -2153,9 +2183,9 @@ struct ResponsesClientTests {
 
       return (response, streamGate.stream)
     }
-    defer { MockURLProtocol.streamHandler = nil }
+    defer { MockURLProtocol.removeStreamHandler(for: testId) }
 
-    let testEndpoint = try #require(URL(string: "https://mock.test/bg-cancel-test"))
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
     let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
 
     // Start a background stream

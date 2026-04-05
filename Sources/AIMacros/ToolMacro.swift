@@ -71,7 +71,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     attachedTo declaration: some DeclGroupSyntax,
     providingExtensionsOf type: some TypeSyntaxProtocol,
     conformingTo _: [TypeSyntax],
-    in _: some MacroExpansionContext,
+    in context: some MacroExpansionContext,
   ) throws -> [ExtensionDeclSyntax] {
     // Validate before adding conformance
     guard let structDecl = declaration.as(StructDeclSyntax.self) else {
@@ -83,6 +83,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     var hasName = false
     var hasDescription = false
     var toolName: String?
+    var parameterInfos: [ParameterInfo] = []
 
     for member in structDecl.memberBlock.members {
       if let varDecl = member.decl.as(VariableDeclSyntax.self),
@@ -118,6 +119,9 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
               // Non-literal default - don't add conformance
               return []
             }
+            if let parameterInfo = try? extractParameterInfo(from: varDecl, binding: binding, context: context) {
+              parameterInfos.append(parameterInfo)
+            }
           }
         }
       }
@@ -130,6 +134,10 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
 
     // Validate tool name
     if let name = toolName, validateToolName(name) != nil {
+      return []
+    }
+
+    if !duplicateParameterKeys(in: parameterInfos).isEmpty {
       return []
     }
 
@@ -269,6 +277,11 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       throw ToolMacroError.invalidToolName(validationError)
     }
 
+    let duplicateParameterKeys = duplicateParameterKeys(in: parameters)
+    if !duplicateParameterKeys.isEmpty {
+      throw ToolMacroError.duplicateParameterKeys(duplicateParameterKeys)
+    }
+
     // Warn about tool name style issues
     if let styleWarning = toolNameStyleWarning(toolName),
        let syntax = nameSyntax
@@ -401,118 +414,51 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
   private static func generateToolProperty(
     toolInfo: ToolInfo,
   ) -> DeclSyntax {
-    // Generate properties for each parameter
-    var propertiesEntries: [String] = []
-
-    for param in toolInfo.parameters {
-      var propEntries: [String] = []
-
-      // Get base type for schema
-      let baseType = param.typeName
-      let schemaType = getJSONSchemaType(for: baseType)
-      let isNullableSchema = param.isOptional || (toolInfo.strictSchema && param.hasDefault)
-
-      // Use nullable type for optional params and default params in strict mode
-      if isNullableSchema {
-        propEntries.append(
-          "\"type\": AI.Value.array([AI.Value.string(\"\(schemaType)\"), AI.Value.string(\"null\")])",
-        )
+    let descriptorEntries = toolInfo.parameters.map { param in
+      let defaultValueLiteral = if let defaultVal = param.defaultValue {
+        convertToValueLiteral(defaultVal, type: param.typeName)
       } else {
-        propEntries.append("\"type\": AI.Value.string(\"\(schemaType)\")")
+        "nil"
       }
+      let titleLiteral = param.title.map { "\"\($0)\"" } ?? "nil"
+      let descriptionLiteral = param.description.map { "\"\($0)\"" } ?? "nil"
+      let minLengthLiteral = param.minLength ?? "nil"
+      let maxLengthLiteral = param.maxLength ?? "nil"
+      let minimumLiteral = param.minimum ?? "nil"
+      let maximumLiteral = param.maximum ?? "nil"
 
-      if let title = param.title {
-        propEntries.append("\"title\": AI.Value.string(\"\(title)\")")
-      }
+      return """
+      AITool.ToolMacroSupport.makeSchemaParameterDescriptor(
+        name: "\(param.jsonKey)",
+        title: \(titleLiteral),
+        description: \(descriptionLiteral),
+        type: \(param.typeName).self,
+        isOptional: \(param.isOptional),
+        hasDefault: \(param.hasDefault),
+        defaultValue: \(defaultValueLiteral),
+        minLength: \(minLengthLiteral),
+        maxLength: \(maxLengthLiteral),
+        minimum: \(minimumLiteral),
+        maximum: \(maximumLiteral)
+      )
+      """
+    }.joined(separator: ",\n                ")
 
-      if let desc = param.description {
-        propEntries.append("\"description\": AI.Value.string(\"\(desc)\")")
-      }
-
-      // Add type-specific properties
-      let additionalProps = getJSONSchemaProperties(for: baseType)
-      for (key, value) in additionalProps {
-        propEntries.append("\"\(key)\": \(value)")
-      }
-
-      // Add constraints
-      if let minLen = param.minLength {
-        propEntries.append("\"minLength\": AI.Value.int(\(minLen))")
-      }
-      if let maxLen = param.maxLength {
-        propEntries.append("\"maxLength\": AI.Value.int(\(maxLen))")
-      }
-      if let min = param.minimum {
-        propEntries.append("\"minimum\": AI.Value.double(\(min))")
-      }
-      if let max = param.maximum {
-        propEntries.append("\"maximum\": AI.Value.double(\(max))")
-      }
-
-      // Add default value if present
-      if let defaultVal = param.defaultValue {
-        let defaultExpr = convertToValueLiteral(defaultVal, type: baseType)
-        propEntries.append("\"default\": \(defaultExpr)")
-      }
-
-      // Merge in runtime jsonSchemaProperties for enums and other custom types
-      let mergedProperties = "[\(propEntries.joined(separator: ", "))].merging(\(baseType).jsonSchemaProperties) { _, new in new }"
-      let propObject = if isNullableSchema {
-        """
-        AI.Value.object({ () -> [String: AI.Value] in
-          var properties = \(mergedProperties)
-          if case let .array(enumValues)? = properties["enum"] {
-            properties["enum"] = AI.Value.array(enumValues + [AI.Value.null])
-          }
-          return properties
-        }())
-        """
-      } else {
-        "AI.Value.object(\(mergedProperties))"
-      }
-      propertiesEntries.append("\"\(param.jsonKey)\": \(propObject)")
-    }
-
-    let propertiesStr = propertiesEntries.joined(separator: ", ")
-
-    // Required fields
-    let requiredFields: [String] = if toolInfo.strictSchema {
-      // Strict mode: all properties must be required (optionality expressed via nullable types)
-      toolInfo.parameters.map { "AI.Value.string(\"\($0.jsonKey)\")" }
-    } else {
-      toolInfo.parameters
-        .filter { !$0.isOptional && !$0.hasDefault }
-        .map { "AI.Value.string(\"\($0.jsonKey)\")" }
-    }
-    let requiredStr = requiredFields.joined(separator: ", ")
-
-    // Handle empty properties - use [:] for empty dictionary literal
-    let propertiesLiteral = propertiesStr.isEmpty ? "[:]" : "[\n            \(propertiesStr)\n        ]"
-
-    // Build schema entries (fully qualified Value types for MCP compatibility)
-    var schemaEntries = [
-      "\"type\": AI.Value.string(\"object\")",
-      "\"properties\": AI.Value.object(\(propertiesLiteral))",
-      "\"required\": AI.Value.array([\(requiredStr)])",
-    ]
-
-    // Add additionalProperties: false if strictSchema is enabled
-    if toolInfo.strictSchema {
-      schemaEntries.append("\"additionalProperties\": AI.Value.bool(false)")
-    }
-
-    let schemaLiteral = schemaEntries.joined(separator: ",\n                    ")
+    let descriptorsLiteral = descriptorEntries.isEmpty ? "[]" : "[\n                \(descriptorEntries)\n            ]"
 
     return """
     public static var tool: AI.Tool {
-        AI.Tool(
+        let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
+            parameters: \(raw: descriptorsLiteral),
+            strict: \(raw: toolInfo.strictSchema ? "true" : "false")
+        )
+        return AI.Tool(
             name: name,
             description: description,
-            title: title,
-            inputSchema: [
-                \(raw: schemaLiteral)
-            ],
+            title: \(raw: toolInfo.hasTitle ? "title" : "name"),
+            inputSchema: _schemaBuild.schema,
             resultTypes: \(raw: toolInfo.outputType).resultTypes,
+            schemaBuildErrorMessage: _schemaBuild.errorMessage,
             execute: { parameters in
                 let instance = try Self.parse(from: parameters)
                 let output = try await instance.perform()
@@ -676,7 +622,11 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
   }
 
   private static func convertToValueLiteral(_ value: String, type: String) -> String {
-    switch type {
+    if value == "nil" {
+      return "AI.Value.null"
+    }
+
+    return switch type {
       case "String":
         "AI.Value.string(\(value))"
       case "Int":
@@ -792,6 +742,17 @@ extension ToolMacro {
     }
     return false
   }
+
+  private static func duplicateParameterKeys(in parameters: [ParameterInfo]) -> [String] {
+    var counts: [String: Int] = [:]
+    for parameter in parameters {
+      counts[parameter.jsonKey, default: 0] += 1
+    }
+    return counts
+      .filter { $0.value > 1 }
+      .map(\.key)
+      .sorted()
+  }
 }
 
 // MARK: - Errors
@@ -803,21 +764,26 @@ enum ToolMacroError: Error, CustomStringConvertible {
   case missingPerformMethod
   case invalidToolName(String)
   case nonLiteralDefaultValue(String)
+  case duplicateParameterKeys([String])
 
   var description: String {
     switch self {
       case .notAStruct:
-        "@Tool can only be applied to structs"
+        return "@Tool can only be applied to structs"
       case .missingName:
-        "@Tool requires 'static let name: String' property"
+        return "@Tool requires 'static let name: String' property"
       case .missingDescription:
-        "@Tool requires 'static let description: String' property"
+        return "@Tool requires 'static let description: String' property"
       case .missingPerformMethod:
-        "@Tool requires a 'func perform() async throws' method"
+        return "@Tool requires a 'func perform() async throws' method"
       case let .invalidToolName(reason):
-        "Invalid tool name: \(reason)"
+        return "Invalid tool name: \(reason)"
       case let .nonLiteralDefaultValue(param):
-        "Parameter '\(param)' has a non-literal default value. Only literal values (numbers, strings, booleans) are supported. For complex defaults, make the parameter optional and handle the default in perform()."
+        return "Parameter '\(param)' has a non-literal default value. Only literal values (numbers, strings, booleans) are supported. For complex defaults, make the parameter optional and handle the default in perform()."
+      case let .duplicateParameterKeys(keys):
+        let quotedKeys = keys.map { "'\($0)'" }.joined(separator: ", ")
+        let suffix = keys.count == 1 ? "" : "s"
+        return "Duplicate parameter key\(suffix): \(quotedKeys). Each @Parameter key must be unique."
     }
   }
 }

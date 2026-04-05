@@ -21,6 +21,8 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
   private struct State: @unchecked Sendable {
     /// URL-keyed handlers for test isolation. The key is extracted from the URL path.
     var handlers: [String: (URLRequest) throws -> (HTTPURLResponse, Data)] = [:]
+    /// URL-keyed streaming handlers for test isolation.
+    var streamHandlers: [String: (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>)] = [:]
     /// Global handler for non-URL-keyed requests.
     var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
     /// Handler for streaming responses that yields data chunks over time.
@@ -39,6 +41,17 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
   static var streamHandler: ((URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))? {
     get { state.withLockUnchecked { $0.streamHandler } }
     set { state.withLockUnchecked { $0.streamHandler = newValue } }
+  }
+
+  static func setStreamHandler(
+    for testId: String,
+    handler: @escaping (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>),
+  ) {
+    state.withLockUnchecked { $0.streamHandlers[testId] = handler }
+  }
+
+  static func removeStreamHandler(for testId: String) {
+    state.withLockUnchecked { _ = $0.streamHandlers.removeValue(forKey: testId) }
   }
 
   /// Sets a handler for a specific test ID.
@@ -81,9 +94,27 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     }
   }
 
+  private func findStreamHandler(for request: URLRequest) -> ((URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))? {
+    guard let path = request.url?.path else { return nil }
+    let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+
+    return MockURLProtocol.state.withLockUnchecked { state in
+      if let handler = state.streamHandlers[cleanPath] {
+        return handler
+      }
+
+      for (testId, handler) in state.streamHandlers {
+        if cleanPath.hasPrefix(testId) {
+          return handler
+        }
+      }
+
+      return nil
+    }
+  }
+
   override func startLoading() {
-    // Try streaming handler first
-    if let streamHandler = MockURLProtocol.streamHandler {
+    if let streamHandler = findStreamHandler(for: request) ?? MockURLProtocol.streamHandler {
       Task {
         do {
           let (response, dataStream) = try await streamHandler(request)

@@ -16,10 +16,11 @@ struct GetCurrentWeather {
   var city: String
 
   @Parameter(description: "Temperature unit: 'celsius' or 'fahrenheit'")
-  var unit: String = "celsius"
+  var unit: String?
 
   func perform() async throws -> String {
-    // Simulated weather data for testing
+    let unit = unit ?? "celsius"
+
     let weatherData: [String: (temp: Int, conditions: String, humidity: Int)] = [
       "paris": (18, "Partly cloudy", 65),
       "london": (14, "Rainy", 80),
@@ -70,7 +71,6 @@ struct CalculateExpression {
       return "Error: Invalid operation"
     }
 
-    // Format without unnecessary decimal places
     if result.truncatingRemainder(dividingBy: 1) == 0 {
       return "Result: \(Int(result))"
     } else {
@@ -84,10 +84,14 @@ struct GetCurrentTime {
   static let name = "get_current_time"
   static let description = "Get the current time in a specified timezone."
 
-  @Parameter(description: "Timezone identifier, e.g. 'America/New_York', 'Europe/London', 'Asia/Tokyo'. Use 'UTC' for Coordinated Universal Time.")
-  var timezone: String = "UTC"
+  @Parameter(
+    description: "Timezone identifier, e.g. 'America/New_York', 'Europe/London', 'Asia/Tokyo'. Use 'UTC' for Coordinated Universal Time.",
+  )
+  var timezone: String?
 
   func perform() async throws -> String {
+    let timezone = timezone ?? "UTC"
+
     let formatter = DateFormatter()
     formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
 
@@ -103,7 +107,7 @@ struct GetCurrentTime {
 
 // MARK: - E2E Tests
 
-/// End-to-end tests for AI tools (@Tool macro) with real model providers.
+/// End-to-end tests for AI tools with real model providers.
 @Suite(.serialized)
 struct AIToolsE2ETests {
   // MARK: - Single Tool Tests

@@ -95,6 +95,65 @@ struct ChatCompletionsClientTests {
   }
 
   @Test
+  func `Invalid strict schema tool fails before request serialization`() async {
+    let (testId, endpoint) = setupMockHandler(sseData: "")
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: endpoint, session: makeMockSession())
+    let invalidTool = Tool(
+      name: "invalid_tool",
+      description: "Invalid strict schema tool",
+      inputSchema: [
+        "type": "object",
+        "properties": [:],
+      ],
+      schemaBuildErrorMessage: "Strict mode requires all properties to be required.",
+    ) { _ in
+      [.text("ok")]
+    }
+
+    await #expect(throws: AIError.self) {
+      _ = try await consumeStream(client.streamText(
+        modelId: "gpt-4",
+        tools: [invalidTool],
+        systemPrompt: nil,
+        messages: [Message(role: .user, content: "Hi")],
+        maxTokens: 128,
+        apiKey: "test-api-key",
+      ))
+    }
+  }
+
+  @Test
+  func `Duplicate imperative parameter names fail before request serialization`() async {
+    let (testId, endpoint) = setupMockHandler(sseData: "")
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: endpoint, session: makeMockSession())
+    let invalidTool = Tool(
+      name: "invalid_tool",
+      description: "Invalid tool with duplicate parameters",
+      parameters: [
+        .string("query", description: "First query"),
+        .string("query", description: "Second query"),
+      ],
+    ) { _ in
+      [.text("ok")]
+    }
+
+    await #expect(throws: AIError.self) {
+      _ = try await consumeStream(client.streamText(
+        modelId: "gpt-4",
+        tools: [invalidTool],
+        systemPrompt: nil,
+        messages: [Message(role: .user, content: "Hi")],
+        maxTokens: 128,
+        apiKey: "test-api-key",
+      ))
+    }
+  }
+
+  @Test
   func `Parses multiple function calls in single response`() async throws {
     let fixture = try loadFixture("openai_multiple_function_calls_response.txt")
     let (testId, endpoint) = setupMockHandler(sseData: fixture)

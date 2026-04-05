@@ -188,5 +188,47 @@ final class ToolMacroTests: XCTestCase {
       macros: testMacros,
     )
   }
+
+  func testDuplicateParameterKeyError() {
+    assertMacroExpansion(
+      """
+      @Tool
+      struct BadTool {
+          static let name = "bad_tool"
+          static let description = "Duplicate keys"
+
+          @Parameter(key: "query", description: "First query")
+          var first: String
+
+          @Parameter(key: "query", description: "Second query")
+          var second: String
+
+          func perform() async throws -> String {
+              "Result"
+          }
+      }
+      """,
+      expandedSource: """
+      struct BadTool {
+          static let name = "bad_tool"
+          static let description = "Duplicate keys"
+
+          @Parameter(key: "query", description: "First query")
+          var first: String
+
+          @Parameter(key: "query", description: "Second query")
+          var second: String
+
+          func perform() async throws -> String {
+              "Result"
+          }
+      }
+      """,
+      diagnostics: [
+        DiagnosticSpec(message: "Duplicate parameter key: 'query'. Each @Parameter key must be unique.", line: 1, column: 1),
+      ],
+      macros: testMacros,
+    )
+  }
 }
 #endif

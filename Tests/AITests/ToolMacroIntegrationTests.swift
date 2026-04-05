@@ -227,6 +227,45 @@ struct StrictSchemaTool {
   }
 }
 
+struct InvalidStrictSettings: ParameterValue {
+  static var jsonSchemaType: String {
+    "object"
+  }
+
+  static var jsonSchemaProperties: [String: Value] {
+    [
+      "properties": .object([
+        "mode": .object(["type": "string"]),
+      ]),
+    ]
+  }
+
+  static var placeholderValue: InvalidStrictSettings {
+    InvalidStrictSettings()
+  }
+
+  init() {}
+
+  init?(parameterValue value: Value) {
+    guard case .object = value else { return nil }
+    self.init()
+  }
+}
+
+@Tool
+struct InvalidStrictSchemaTool {
+  static let name = "invalid_strict_schema_tool"
+  static let description = "A tool whose nested schema is invalid in strict mode"
+  static let strictSchema = true
+
+  @Parameter(description: "Invalid nested settings")
+  var settings: InvalidStrictSettings
+
+  func perform() async throws -> String {
+    "ok"
+  }
+}
+
 // MARK: - Tests
 
 struct ToolMacroIntegrationTests {
@@ -300,6 +339,15 @@ struct ToolMacroIntegrationTests {
     let nonStrictTool = GetWeather.tool
     let nonStrictSchema = nonStrictTool.rawInputSchema
     #expect(nonStrictSchema["additionalProperties"]?.boolValue == false)
+  }
+
+  @Test
+  func `Invalid strict macro tool records schema build error instead of crashing`() {
+    let tool = InvalidStrictSchemaTool.tool
+
+    #expect(tool.schemaBuildErrorMessage != nil)
+    #expect(tool.rawInputSchema["type"]?.stringValue == "object")
+    #expect(tool.rawInputSchema["additionalProperties"] == nil)
   }
 
   @Test
@@ -688,6 +736,35 @@ struct ToolMacroIntegrationTests {
     let result = await tools.call(toolCall)
 
     #expect(result.isError == nil)
+  }
+
+  @Test
+  func `Tools.call rejects invalid imperative schema before execution`() async {
+    let invalidTool = Tool(
+      name: "invalid_tool",
+      description: "Duplicate parameters",
+      parameters: [
+        .string("query", description: "First query"),
+        .string("query", description: "Second query"),
+      ],
+    ) { _ in
+      [.text("ok")]
+    }
+
+    let tools = Tools([invalidTool])
+    let toolCall = ToolCall(
+      name: "invalid_tool",
+      id: "call_1",
+      parameters: ["query": "value"],
+    )
+
+    let result = await tools.call(toolCall)
+
+    #expect(result.isError == true)
+    if case let .text(text) = result.content[0] {
+      #expect(text.contains("invalid input schema"))
+      #expect(text.contains("Duplicate parameter name"))
+    }
   }
 
   // MARK: - Parse Error Handling Tests

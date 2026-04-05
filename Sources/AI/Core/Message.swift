@@ -93,6 +93,26 @@ public struct Message: Sendable, Hashable {
   }
 }
 
+extension Message.Content {
+  func portableReplayText(
+    includeEndnotes: Bool = true,
+    attachmentFallback: ((Attachment) -> String)? = nil,
+  ) -> String? {
+    switch self {
+      case let .text(text) where !text.isEmpty:
+        text
+      case let .endnotes(text) where includeEndnotes && !text.isEmpty:
+        text
+      case let .providerOpaque(opaque):
+        opaque.portableReplayText
+      case let .attachment(attachment):
+        attachmentFallback?(attachment)
+      default:
+        nil
+    }
+  }
+}
+
 // MARK: - Orphaned Tool Call Handling
 
 public extension Message {
@@ -147,18 +167,17 @@ public extension Message {
 // MARK: - Tool Collapsing Utilities
 
 public extension Message {
+  func replayableTextSegments(
+    includeEndnotes: Bool = true,
+    attachmentFallback: ((Attachment) -> String)? = nil,
+  ) -> [String] {
+    content.compactMap { $0.portableReplayText(includeEndnotes: includeEndnotes, attachmentFallback: attachmentFallback) }
+  }
+
   /// Collects visible text from content that should survive lossy history rewrites,
   /// including provider-opaque response text marked as portable display content.
   private func collapsedVisibleText() -> String {
-    content.compactMap { item -> String? in
-      switch item {
-        case let .text(text): text
-        case let .endnotes(endnotes): endnotes
-        case let .providerOpaque(opaque) where opaque.isResponseContent:
-          opaque.content
-        default: nil
-      }
-    }.joined(separator: "\n\n")
+    replayableTextSegments().joined(separator: "\n\n")
   }
 
   /// Returns a new message with tool_use content collapsed to descriptive text.

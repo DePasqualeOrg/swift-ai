@@ -5,7 +5,7 @@ import Testing
 
 struct ToolConversionTests {
   @Test
-  func `AI.Tool to MCP.Tool conversion`() {
+  func `AI.Tool to MCP.Tool conversion`() throws {
     let aiTool = AI.Tool(
       name: "get_weather",
       description: "Get weather for a location",
@@ -29,7 +29,7 @@ struct ToolConversionTests {
       execute: { _ in [.text("Sunny")] },
     )
 
-    let tool = MCP.Tool(from: aiTool)
+    let tool = try MCP.Tool(from: aiTool)
 
     #expect(tool.name == "get_weather")
     #expect(tool.description == "Get weather for a location")
@@ -108,7 +108,7 @@ struct ToolConversionTests {
   }
 
   @Test
-  func `Parameter type mapping`() {
+  func `Parameter type mapping`() throws {
     let aiTool = AI.Tool(
       name: "test",
       description: "Test tool",
@@ -122,7 +122,7 @@ struct ToolConversionTests {
       execute: { _ in [.text("ok")] },
     )
 
-    let tool = MCP.Tool(from: aiTool)
+    let tool = try MCP.Tool(from: aiTool)
 
     guard case let .object(schema) = tool.inputSchema,
           case let .object(properties) = schema["properties"]
@@ -147,15 +147,32 @@ struct ToolConversionTests {
   }
 
   @Test
-  func `Batch conversion of AI.Tools to MCP.Tools`() {
+  func `Batch conversion of AI.Tools to MCP.Tools`() throws {
     let aiTools = [
       AI.Tool(name: "func1", description: "First", title: "Func 1", parameters: [], execute: { _ in [.text("1")] }),
       AI.Tool(name: "func2", description: "Second", title: "Func 2", parameters: [], execute: { _ in [.text("2")] }),
     ]
 
-    let tools = aiTools.mcpTools
+    let tools = try aiTools.mcpTools()
     #expect(tools.count == 2)
     #expect(tools[0].name == "func1")
     #expect(tools[1].name == "func2")
+  }
+
+  @Test
+  func `AI.Tool to MCP.Tool conversion throws for invalid imperative schema`() {
+    let aiTool = AI.Tool(
+      name: "invalid_tool",
+      description: "Duplicate parameters",
+      parameters: [
+        AI.Tool.Parameter(name: "query", title: "Query", type: .string, description: "", required: true),
+        AI.Tool.Parameter(name: "query", title: "Query Again", type: .string, description: "", required: true),
+      ],
+      execute: { _ in [.text("ok")] },
+    )
+
+    #expect(throws: AIError.self) {
+      _ = try MCP.Tool(from: aiTool)
+    }
   }
 }

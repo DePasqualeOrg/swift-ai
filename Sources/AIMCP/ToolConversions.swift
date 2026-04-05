@@ -15,8 +15,8 @@ public extension MCP.Tool {
   /// are metadata-only; execution happens via ToolSpec or registered handlers.
   ///
   /// - Parameter tool: The AI Tool to convert
-  init(from tool: AI.Tool) {
-    let inputSchema = AI.Tool.convertAIValueToMCPValue(.object(tool.rawInputSchema))
+  init(from tool: AI.Tool) throws {
+    let inputSchema = try AI.Tool.convertAIValueToMCPValue(.object(tool.validatedInputSchema()))
     self.init(
       name: tool.name,
       title: tool.title,
@@ -221,8 +221,8 @@ public extension AI.Tool {
 
 public extension [AI.Tool] {
   /// Converts an array of AI Tools to MCP Tools.
-  var mcpTools: [MCP.Tool] {
-    map { MCP.Tool(from: $0) }
+  func mcpTools() throws -> [MCP.Tool] {
+    try map { try MCP.Tool(from: $0) }
   }
 }
 

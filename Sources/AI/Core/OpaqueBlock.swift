@@ -60,3 +60,10 @@ public struct OpaqueBlock: Sendable, Hashable, Codable {
     self.isResponseContent = isResponseContent
   }
 }
+
+extension OpaqueBlock {
+  var portableReplayText: String? {
+    guard isResponseContent else { return nil }
+    return content
+  }
+}

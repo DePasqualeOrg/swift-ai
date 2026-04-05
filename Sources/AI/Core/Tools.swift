@@ -64,6 +64,13 @@ public struct Tool: Sendable {
   /// This preserves complex schema features like nested objects, anyOf, oneOf, etc.
   public let rawInputSchema: [String: Value]
 
+  /// Captures a schema-generation error for macro-generated strict schemas that
+  /// were downgraded to a non-strict fallback at declaration time.
+  let schemaBuildErrorMessage: String?
+
+  /// Captures a failure while generating the base schema from imperative parameters.
+  let baseSchemaBuildErrorMessage: String?
+
   /// A parameter definition for a tool.
   public struct Parameter: Sendable {
     /// The model-facing name of the parameter.
@@ -248,14 +255,19 @@ public struct Tool: Sendable {
     parameters: [Parameter],
     resultTypes: Set<ToolResult.ValueType>? = nil,
     rawInputSchema: [String: Value]? = nil,
+    schemaBuildErrorMessage: String? = nil,
     execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
   ) {
+    let builtSchema = rawInputSchema.map { BuiltSchema(schema: $0, errorMessage: nil) }
+      ?? Self.buildSchema(from: parameters)
     self.name = name
     self.description = description
     self.title = title ?? name
     self.parameters = parameters
     self.resultTypes = resultTypes
-    self.rawInputSchema = rawInputSchema ?? Self.buildSchema(from: parameters)
+    self.rawInputSchema = builtSchema.schema
+    self.schemaBuildErrorMessage = schemaBuildErrorMessage
+    baseSchemaBuildErrorMessage = builtSchema.errorMessage
     self.execute = execute
   }
 
@@ -276,14 +288,18 @@ public struct Tool: Sendable {
     title: String? = nil,
     parameters: [Parameter] = [],
     resultTypes: Set<ToolResult.ValueType>? = nil,
+    schemaBuildErrorMessage: String? = nil,
     execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
   ) {
+    let builtSchema = Self.buildSchema(from: parameters)
     self.name = name
     self.description = description
     self.title = title ?? name
     self.parameters = parameters
     self.resultTypes = resultTypes
-    rawInputSchema = Self.buildSchema(from: parameters)
+    rawInputSchema = builtSchema.schema
+    self.schemaBuildErrorMessage = schemaBuildErrorMessage
+    baseSchemaBuildErrorMessage = builtSchema.errorMessage
     self.execute = execute
   }
 
@@ -295,6 +311,7 @@ public struct Tool: Sendable {
     title: String? = nil,
     inputSchema: [String: Value],
     resultTypes: Set<ToolResult.ValueType>? = nil,
+    schemaBuildErrorMessage: String? = nil,
     execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
   ) {
     self.name = name
@@ -303,72 +320,61 @@ public struct Tool: Sendable {
     parameters = []
     self.resultTypes = resultTypes
     rawInputSchema = inputSchema
+    self.schemaBuildErrorMessage = schemaBuildErrorMessage
+    baseSchemaBuildErrorMessage = nil
     self.execute = execute
   }
 
+  /// Returns the tool's input schema after confirming schema generation succeeded.
+  ///
+  /// Throws when the tool's imperative parameter schema could not be built and
+  /// `rawInputSchema` only contains a fallback placeholder schema.
+  public func validatedInputSchema() throws -> [String: Value] {
+    if let baseSchemaBuildErrorMessage {
+      throw AIError.invalidRequest(
+        message: "Tool '\(name)' has an invalid input schema: \(baseSchemaBuildErrorMessage)",
+      )
+    }
+    return rawInputSchema
+  }
+
   /// Builds a JSON Schema from the parameter definitions.
-  private static func buildSchema(from parameters: [Parameter]) -> [String: Value] {
-    var properties: [String: Value] = [:]
-    var required: [Value] = []
+  private struct BuiltSchema {
+    let schema: [String: Value]
+    let errorMessage: String?
+  }
 
-    for param in parameters {
-      var property: [String: Value] = [
-        "type": param.required
-          ? .string(param.type.jsonSchemaType)
-          : .array([.string(param.type.jsonSchemaType), .string("null")]),
-        "description": .string(param.description),
-      ]
-
-      // Add title if different from name
-      if param.title != param.name {
-        property["title"] = .string(param.title)
-      }
-
-      // Add items schema for arrays
-      if case let .array(itemType) = param.type {
-        property["items"] = ["type": .string(itemType.jsonSchemaType)]
-      }
-
-      // Add enum values if present
-      if let enumValues = param.enumValues {
-        var schemaEnumValues = enumValues.map(Value.string)
-        if !param.required {
-          schemaEnumValues.append(.null)
-        }
-        property["enum"] = .array(schemaEnumValues)
-      }
-
-      // Add validation constraints
-      if let minLength = param.minLength {
-        property["minLength"] = .int(minLength)
-      }
-      if let maxLength = param.maxLength {
-        property["maxLength"] = .int(maxLength)
-      }
-      if let minimum = param.minimum {
-        property["minimum"] = .double(minimum)
-      }
-      if let maximum = param.maximum {
-        property["maximum"] = .double(maximum)
-      }
-
-      properties[param.name] = .object(property)
-
-      if param.required {
-        required.append(.string(param.name))
-      }
+  private static func buildSchema(from parameters: [Parameter]) -> BuiltSchema {
+    do {
+      return try BuiltSchema(
+        schema: ToolSchema.buildObjectSchema(
+          parameters: parameters,
+          strict: false,
+          name: \.name,
+          title: { $0.title },
+          description: { $0.description },
+          jsonSchemaType: { $0.type.jsonSchemaType },
+          jsonSchemaProperties: { $0.type.jsonSchemaProperties(enumValues: $0.enumValues) },
+          isOptional: { !$0.required },
+          hasDefault: { _ in false },
+          defaultValue: { _ in nil },
+          minLength: \.minLength,
+          maxLength: \.maxLength,
+          minimum: \.minimum,
+          maximum: \.maximum,
+        ),
+        errorMessage: nil,
+      )
+    } catch {
+      return BuiltSchema(
+        schema: [
+          "type": .string("object"),
+          "properties": .object([:]),
+          "required": .array([]),
+        ],
+        errorMessage: error.localizedDescription,
+      )
     }
-
-    var schema: [String: Value] = [
-      "type": "object",
-      "properties": .object(properties),
-    ]
-
-    if !required.isEmpty {
-      schema["required"] = .array(required)
-    }
-
-    return schema
   }
 }
 
@@ -385,6 +391,20 @@ extension Tool.ParameterType {
       case .array: "array"
       case .object: "object"
     }
+  }
+
+  func jsonSchemaProperties(enumValues: [String]?) -> [String: Value] {
+    var properties: [String: Value] = [:]
+
+    if case let .array(itemType) = self {
+      properties["items"] = ["type": .string(itemType.jsonSchemaType)]
+    }
+
+    if let enumValues {
+      properties["enum"] = .array(enumValues.map(Value.string))
+    }
+
+    return properties
   }
 }
 
@@ -479,7 +499,7 @@ public struct Tools: Collection, Sendable {
     // Validate input against schema
     do {
       let inputValue = Value.object(toolCall.parameters)
-      let schemaValue = Value.object(tool.rawInputSchema)
+      let schemaValue = try Value.object(tool.validatedInputSchema())
       try validator.validate(inputValue, against: schemaValue)
     } catch {
       let completedAt = Date()

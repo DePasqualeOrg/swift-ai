@@ -502,6 +502,16 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     if !tools.isEmpty {
       var toolsArray: [[String: any Sendable]] = []
       for tool in tools {
+        if let baseSchemaBuildErrorMessage = tool.baseSchemaBuildErrorMessage {
+          throw AIError.invalidRequest(
+            message: "Tool '\(tool.name)' has an invalid input schema: \(baseSchemaBuildErrorMessage)",
+          )
+        }
+        if enableStrictModeForTools, let schemaBuildErrorMessage = tool.schemaBuildErrorMessage {
+          throw AIError.invalidRequest(
+            message: "Tool '\(tool.name)' has an invalid strict schema: \(schemaBuildErrorMessage)",
+          )
+        }
         let parameters: [String: any Sendable]
           // Transform schema for strict mode compliance if enabled
           = if enableStrictModeForTools
