@@ -476,7 +476,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     if let apiKey {
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
-    let patchedMessages = Message.patchingOrphanedToolCalls(messages)
+    let patchedMessages = ChatCompletionsReplaySupport.patchingOrphanedToolCalls(messages)
     var processedMessages: [[String: any Sendable]] = []
     if let systemPrompt, !systemPrompt.isEmpty {
       processedMessages.append([

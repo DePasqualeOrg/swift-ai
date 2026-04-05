@@ -365,37 +365,17 @@ public extension AnthropicClient {
       // buildMessagesRequest will inject it and budget_tokens must be less than max_tokens.
       let effectiveMaxTokens = maxTokens ?? Self.defaultMaxTokens(for: modelId)
       let effectiveThinking = configuration.effectiveThinkingConfig(maxTokens: effectiveMaxTokens)
-      let processedMessages = TranscriptReplay.prepare(
+      let replayPlan = try await AnthropicReplayNormalizer.normalize(
         messages,
-        for: .anthropic(thinkingEnabled: effectiveThinking != nil),
+        thinkingEnabled: effectiveThinking != nil,
       )
-      // Anthropic does not accept system/developer roles in messages; extract their text
-      // and merge it into the top-level system parameter (same approach as GeminiClient).
-      var additionalSystemTexts: [String] = []
-      var messageParams: [AnthropicClient.MessageParam] = []
-      for message in processedMessages {
-        if message.role == .system || message.role == .developer {
-          additionalSystemTexts.append(contentsOf: Self.systemInstructionTexts(for: message))
-          continue
-        }
-        let contentBlocks = try await anthropicContentBlocks(for: message)
-        // Skip messages whose content was entirely unsupported (e.g. audio-only).
-        // Sending a message with no content violates Anthropic's required content field.
-        guard !contentBlocks.isEmpty else { continue }
-        messageParams.append(AnthropicClient.MessageParam(
-          role: mapRole(message.role),
-          text: nil,
-          contentBlocks: contentBlocks,
-          attachments: nil,
-        ))
-      }
       // Combine the explicit systemPrompt with any system/developer messages from history
       let combinedSystemPrompt: String? = {
         var parts: [String] = []
         if let systemPrompt, !systemPrompt.isEmpty {
           parts.append(systemPrompt)
         }
-        parts.append(contentsOf: additionalSystemTexts)
+        parts.append(contentsOf: replayPlan.systemTexts)
         return parts.isEmpty ? nil : parts.joined(separator: "\n")
       }()
       // Temperature must be set to 1 when thinking is enabled.
@@ -404,7 +384,7 @@ public extension AnthropicClient {
       // Create parameters
       var params = MessageCreateParams(
         model: modelId,
-        messages: messageParams,
+        messages: replayPlan.messages,
         maxTokens: maxTokens,
         system: combinedSystemPrompt,
         temperature: adjustedTemperature,

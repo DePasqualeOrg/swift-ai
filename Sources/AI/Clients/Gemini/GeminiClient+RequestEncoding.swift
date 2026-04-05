@@ -55,30 +55,15 @@ enum GeminiRequestEncoder {
     tools: [Tool],
     requestParts: (Message, String) async throws -> [[String: any Sendable]],
   ) async throws -> [String: any Sendable] {
-    var processedMessages: [[String: any Sendable]] = []
-    var additionalSystemParts: [[String: any Sendable]] = []
-
-    for message in TranscriptReplay.prepare(messages, for: .gemini) {
-      switch message.role {
-        case .system, .developer:
-          additionalSystemParts.append(contentsOf: GeminiClient.systemInstructionParts(for: message))
-        case .assistant, .user, .tool:
-          let parts = try await requestParts(message, apiKey)
-          guard !parts.isEmpty else { continue }
-          let role = switch message.role {
-            case .assistant: "model"
-            case .tool: "user"
-            default: message.role.rawValue
-          }
-          processedMessages.append([
-            "role": role,
-            "parts": parts,
-          ])
-      }
-    }
+    let replayPlan = try await GeminiReplayNormalizer.normalize(
+      messages,
+      systemPrompt: systemPrompt,
+      apiKey: apiKey,
+      requestParts: requestParts,
+    )
 
     var body: [String: any Sendable] = [
-      "contents": processedMessages,
+      "contents": replayPlan.contents,
       "generationConfig": generationConfig(
         maxTokens: maxTokens,
         temperature: temperature,
@@ -109,13 +94,8 @@ enum GeminiRequestEncoder {
       body["toolConfig"] = toolConfig
     }
 
-    var systemParts: [[String: any Sendable]] = []
-    if let systemPrompt, !systemPrompt.isEmpty {
-      systemParts.append(["text": systemPrompt])
-    }
-    systemParts.append(contentsOf: additionalSystemParts)
-    if !systemParts.isEmpty {
-      body["systemInstruction"] = ["parts": systemParts]
+    if !replayPlan.systemParts.isEmpty {
+      body["systemInstruction"] = ["parts": replayPlan.systemParts]
     }
 
     return body

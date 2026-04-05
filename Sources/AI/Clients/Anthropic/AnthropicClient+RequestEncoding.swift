@@ -3,7 +3,7 @@
 import Foundation
 
 extension AnthropicClient {
-  func anthropicContentBlocks(for message: Message) async throws -> [AnthropicClient.ContentBlockParam] {
+  static func anthropicContentBlocks(for message: Message) async throws -> [AnthropicClient.ContentBlockParam] {
     var contentBlocks: [AnthropicClient.ContentBlockParam] = []
     let hasNativeCitationBlocks = message.content.contains { block in
       guard case let .providerOpaque(opaque) = block else { return false }
@@ -395,7 +395,7 @@ extension AnthropicClient {
     await MessageStream.createMessage(client: self, params: params, apiKey: apiKey, session: session)
   }
 
-  func mapRole(_ role: Message.Role) -> AnthropicClient.Role {
+  static func mapRole(_ role: Message.Role) -> AnthropicClient.Role {
     switch role {
       case .user, .tool:
         return .user

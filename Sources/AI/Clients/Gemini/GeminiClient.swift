@@ -235,7 +235,7 @@ public final class GeminiClient: APIClient, Sendable {
     message.replayableTextSegments(attachmentFallback: fallbackText(for:)).map { ["text": $0] }
   }
 
-  private func requestParts(for message: Message, apiKey: String) async throws -> [[String: any Sendable]] {
+  func requestParts(for message: Message, apiKey: String) async throws -> [[String: any Sendable]] {
     var parts: [[String: any Sendable]] = []
 
     for block in message.content {

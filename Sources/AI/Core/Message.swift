@@ -113,56 +113,6 @@ extension Message.Content {
   }
 }
 
-// MARK: - Orphaned Tool Call Handling
-
-public extension Message {
-  /// Returns messages with synthetic error results inserted for any tool calls that lack matching tool results.
-  /// Each synthetic result is placed immediately after the message containing its tool call.
-  /// This can happen when generation is canceled or times out mid-tool-call.
-  static func patchingOrphanedToolCalls(_ messages: [Message]) -> [Message] {
-    var toolCallIds = Set<String>()
-    var toolResultIds = Set<String>()
-
-    for message in messages {
-      for item in message.content {
-        switch item {
-          case let .toolCall(toolCall):
-            toolCallIds.insert(toolCall.id)
-          case let .toolResult(toolResult):
-            toolResultIds.insert(toolResult.id)
-          default:
-            break
-        }
-      }
-    }
-
-    let orphanedIds = toolCallIds.subtracting(toolResultIds)
-    guard !orphanedIds.isEmpty else { return messages }
-
-    var result: [Message] = []
-    for message in messages {
-      result.append(message)
-
-      var orphanedResults: [Content] = []
-      for item in message.content {
-        guard case let .toolCall(toolCall) = item, orphanedIds.contains(toolCall.id) else { continue }
-        orphanedResults.append(.toolResult(ToolResult(
-          name: toolCall.name,
-          id: toolCall.id,
-          content: [.text("Function call was not executed. The request may have been canceled or timed out.")],
-          isError: true,
-        )))
-      }
-
-      if !orphanedResults.isEmpty {
-        result.append(Message(role: .tool, content: orphanedResults))
-      }
-    }
-
-    return result
-  }
-}
-
 // MARK: - Tool Collapsing Utilities
 
 public extension Message {
@@ -171,6 +121,27 @@ public extension Message {
     attachmentFallback: ((Attachment) -> String)? = nil,
   ) -> [String] {
     content.compactMap { $0.portableReplayText(includeEndnotes: includeEndnotes, attachmentFallback: attachmentFallback) }
+  }
+
+  var hasToolCalls: Bool {
+    content.contains {
+      if case .toolCall = $0 { return true }
+      return false
+    }
+  }
+
+  var hasToolResults: Bool {
+    content.contains {
+      if case .toolResult = $0 { return true }
+      return false
+    }
+  }
+
+  var toolCalls: [ToolCall] {
+    content.compactMap {
+      guard case let .toolCall(toolCall) = $0 else { return nil }
+      return toolCall
+    }
   }
 
   /// Collects visible text from content that should survive lossy history rewrites,

@@ -28,14 +28,11 @@ extension ResponsesClient {
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
 
-    var inputContent: [[String: any Sendable]] = []
-    for message in TranscriptReplay.prepare(input, for: .responses) {
-      try await inputContent.append(contentsOf: Self.inputItems(for: message))
-    }
+    let replayPlan = try await ResponsesReplayNormalizer.normalize(input)
 
     var body: [String: any Sendable] = [
       "model": modelId,
-      "input": inputContent,
+      "input": replayPlan.inputItems,
       "stream": stream,
     ]
 

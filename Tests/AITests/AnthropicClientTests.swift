@@ -730,6 +730,366 @@ struct AnthropicClientTests {
   }
 
   @Test
+  func `Anthropic replay sanitizes out of order tool results in request bodies`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = AnthropicClient(session: makeMockSession(), messagesEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+        ]),
+        Message(role: .user, content: "Continue"),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Late result body"))),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    #expect(messages.count == 4)
+
+    let syntheticResultMessage = messages[1]
+    let syntheticContent = try #require(syntheticResultMessage["content"] as? [[String: Any]])
+    let syntheticResult = try #require(syntheticContent.first)
+    #expect(syntheticResult["type"] as? String == "tool_result")
+    #expect(syntheticResult["tool_use_id"] as? String == "call_1")
+    #expect(syntheticResult["is_error"] as? Bool == true)
+
+    let collapsedLateResultMessage = messages[3]
+    let collapsedLateResultContent = try #require(collapsedLateResultMessage["content"] as? [[String: Any]])
+    #expect(collapsedLateResultContent.first?["text"] as? String == "\n\n[Result from tool \"search\": Late result body]")
+  }
+
+  @Test
+  func `Anthropic replay splits mixed tool turns and preserves pending tool repair`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = AnthropicClient(session: makeMockSession(), messagesEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+          .toolCall(ToolCall(name: "lookup", id: "call_2", parameters: ["id": "42"])),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "stale", id: "call_stray", content: .text("Stray result"))),
+          .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Matched result"))),
+        ]),
+        Message(role: .user, content: "Continue"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    #expect(messages.count == 5)
+
+    let matchedResultMessage = messages[1]
+    let matchedContent = try #require(matchedResultMessage["content"] as? [[String: Any]])
+    let matchedResult = try #require(matchedContent.first)
+    #expect(matchedResult["type"] as? String == "tool_result")
+    #expect(matchedResult["tool_use_id"] as? String == "call_1")
+    #expect(matchedResult["content"] as? String == "Matched result")
+
+    let syntheticResultMessage = messages[2]
+    let syntheticContent = try #require(syntheticResultMessage["content"] as? [[String: Any]])
+    let syntheticResult = try #require(syntheticContent.first)
+    #expect(syntheticResult["type"] as? String == "tool_result")
+    #expect(syntheticResult["tool_use_id"] as? String == "call_2")
+    #expect(syntheticResult["is_error"] as? Bool == true)
+
+    let collapsedStrayMessage = messages[3]
+    let collapsedStrayContent = try #require(collapsedStrayMessage["content"] as? [[String: Any]])
+    #expect(collapsedStrayContent.first?["text"] as? String == "\n\n[Result from tool \"stale\": Stray result]")
+  }
+
+  @Test
+  func `Anthropic replay synthesizes trailing unresolved tool calls at end of transcript`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = AnthropicClient(session: makeMockSession(), messagesEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    #expect(messages.count == 2)
+
+    let assistantContent = try #require(messages[0]["content"] as? [[String: Any]])
+    #expect(messages[0]["role"] as? String == "assistant")
+    #expect(assistantContent.first?["type"] as? String == "tool_use")
+    #expect(assistantContent.first?["id"] as? String == "call_1")
+
+    let syntheticResultMessage = messages[1]
+    #expect(syntheticResultMessage["role"] as? String == "user")
+    let syntheticContent = try #require(syntheticResultMessage["content"] as? [[String: Any]])
+    let syntheticResult = try #require(syntheticContent.first)
+    #expect(syntheticResult["type"] as? String == "tool_result")
+    #expect(syntheticResult["tool_use_id"] as? String == "call_1")
+    #expect(syntheticResult["is_error"] as? Bool == true)
+  }
+
+  @Test
+  func `Anthropic plain text history extracts system text and preserves assistant text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = AnthropicClient(session: makeMockSession(), messagesEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .system, content: "You are helpful"),
+        Message(role: .developer, content: "Be concise"),
+        Message(role: .assistant, content: "Earlier answer"),
+        Message(role: .user, content: "Follow up"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let system = try #require(body?["system"] as? String)
+    #expect(system.contains("You are helpful"))
+    #expect(system.contains("Be concise"))
+
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    #expect(messages.count == 2)
+    #expect(messages[0]["role"] as? String == "assistant")
+    let assistantContent = try #require(messages[0]["content"] as? [[String: Any]])
+    #expect(assistantContent.first?["text"] as? String == "Earlier answer")
+
+    #expect(messages[1]["role"] as? String == "user")
+    let userContent = try #require(messages[1]["content"] as? [[String: Any]])
+    #expect(userContent.first?["text"] as? String == "Follow up")
+  }
+
+  @Test
+  func `Anthropic replay preserves partial fulfillment across consecutive tool messages`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = AnthropicClient(session: makeMockSession(), messagesEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+          .toolCall(ToolCall(name: "lookup", id: "call_2", parameters: ["id": "42"])),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Result 1"))),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "lookup", id: "call_2", content: .text("Result 2"))),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    #expect(messages.count == 3)
+
+    let assistantContent = try #require(messages[0]["content"] as? [[String: Any]])
+    let toolUseIDs = assistantContent.compactMap { $0["id"] as? String }
+    #expect(toolUseIDs == ["call_1", "call_2"])
+
+    let resultMessages = Array(messages.dropFirst())
+    let resultIDs = try resultMessages.map { message -> String in
+      let content = try #require(message["content"] as? [[String: Any]])
+      let toolResult = try #require(content.first)
+      #expect(toolResult["type"] as? String == "tool_result")
+      #expect(toolResult["is_error"] == nil)
+      return try #require(toolResult["tool_use_id"] as? String)
+    }
+    #expect(resultIDs == ["call_1", "call_2"])
+  }
+
+  @Test
+  func `Anthropic replay collapses stray-only tool results to user text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = AnthropicClient(session: makeMockSession(), messagesEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "stale", id: "call_stray", content: .text("Stray result"))),
+        ]),
+        Message(role: .user, content: "Continue"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let hasNativeToolResult = messages.contains { message in
+      let content = message["content"] as? [[String: Any]]
+      return content?.contains(where: { $0["type"] as? String == "tool_result" }) == true
+    }
+    #expect(hasNativeToolResult == false)
+
+    let collapsedMessage = try #require(messages.first(where: { message in
+      guard let content = message["content"] as? [[String: Any]] else { return false }
+      return content.contains(where: { ($0["text"] as? String)?.contains("Stray result") == true })
+    }))
+    #expect(collapsedMessage["role"] as? String == "user")
+  }
+
+  @Test
   func `Foreign response-content opaque blocks replay as text blocks in Anthropic requests`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
@@ -949,7 +1309,7 @@ struct AnthropicClientTests {
     #expect(assistantText.contains("Fetched excerpt."))
     #expect(assistantText.contains(#"[Called tool "search" with: {"query":"history"}]"#))
 
-    let collapsedToolResultMessage = try #require(requestMessages.first(where: { message in
+    let collapsedOpaqueMessage = try #require(requestMessages.first(where: { message in
       guard (message["role"] as? String) == "user",
             let content = message["content"] as? [[String: Any]]
       else {
@@ -957,9 +1317,20 @@ struct AnthropicClientTests {
       }
       return content.compactMap { $0["text"] as? String }.joined(separator: "\n").contains("Execution output: 42")
     }))
+    let collapsedOpaqueContent = try #require(collapsedOpaqueMessage["content"] as? [[String: Any]])
+    let collapsedOpaqueText = collapsedOpaqueContent.compactMap { $0["text"] as? String }.joined(separator: "\n")
+    #expect(collapsedOpaqueText.contains("Execution output: 42"))
+
+    let collapsedToolResultMessage = try #require(requestMessages.first(where: { message in
+      guard (message["role"] as? String) == "user",
+            let content = message["content"] as? [[String: Any]]
+      else {
+        return false
+      }
+      return content.compactMap { $0["text"] as? String }.joined(separator: "\n").contains(#"[Result from tool "search": Search result summary]"#)
+    }))
     let collapsedToolResultContent = try #require(collapsedToolResultMessage["content"] as? [[String: Any]])
     let collapsedToolResultText = collapsedToolResultContent.compactMap { $0["text"] as? String }.joined(separator: "\n")
-    #expect(collapsedToolResultText.contains("Execution output: 42"))
     #expect(collapsedToolResultText.contains(#"[Result from tool "search": Search result summary]"#))
   }
 

@@ -1806,6 +1806,304 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Responses replay preserves late tool results without synthetic duplicates`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let messages = [
+      Message(role: .assistant, content: [
+        .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+      ]),
+      Message(role: .user, content: "Continue"),
+      Message(role: .tool, content: [
+        .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Late result body"))),
+      ]),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let functionCallOutputs = input.filter { $0["type"] as? String == "function_call_output" }
+    #expect(functionCallOutputs.count == 1)
+    #expect(functionCallOutputs[0]["call_id"] as? String == "call_1")
+    #expect(functionCallOutputs[0]["output"] as? String == "Late result body")
+  }
+
+  @Test
+  func `Responses replay synthesizes trailing unresolved tool calls at end of transcript`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let messages = [
+      Message(role: .assistant, content: [
+        .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+      ]),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let functionCalls = input.filter { $0["type"] as? String == "function_call" }
+    let functionCallOutputs = input.filter { $0["type"] as? String == "function_call_output" }
+    #expect(functionCalls.count == 1)
+    #expect(functionCallOutputs.count == 1)
+    #expect(functionCalls[0]["call_id"] as? String == "call_1")
+    #expect(functionCallOutputs[0]["call_id"] as? String == "call_1")
+    let syntheticError = try #require(functionCallOutputs[0]["output"] as? String)
+    #expect(syntheticError.contains("Function call was not executed."))
+  }
+
+  @Test
+  func `Responses replay preserves partial fulfillment across consecutive tool messages`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+          .toolCall(ToolCall(name: "lookup", id: "call_2", parameters: ["id": "42"])),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Result 1"))),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "lookup", id: "call_2", content: .text("Result 2"))),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let functionCalls = input.filter { $0["type"] as? String == "function_call" }
+    let functionCallOutputs = input.filter { $0["type"] as? String == "function_call_output" }
+    #expect(functionCalls.count == 2)
+    #expect(functionCallOutputs.count == 2)
+    #expect(functionCallOutputs.contains(where: {
+      $0["call_id"] as? String == "call_1" && $0["output"] as? String == "Result 1"
+    }))
+    #expect(functionCallOutputs.contains(where: {
+      $0["call_id"] as? String == "call_2" && $0["output"] as? String == "Result 2"
+    }))
+    #expect(functionCallOutputs.allSatisfy { (($0["output"] as? String)?.contains("Function call was not executed.")) != true })
+  }
+
+  @Test
+  func `Responses replay collapses stray-only tool results to user text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "stale", id: "call_stray", content: .text("Stray result"))),
+        ]),
+        Message(role: .user, content: "Continue"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    #expect(input.contains(where: { $0["type"] as? String == "function_call_output" }) == false)
+
+    let collapsedMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message",
+            item["role"] as? String == "user",
+            let content = item["content"] as? [[String: Any]]
+      else {
+        return false
+      }
+      return content.contains(where: { ($0["text"] as? String)?.contains("Stray result") == true })
+    }))
+    let collapsedContent = try #require(collapsedMessage["content"] as? [[String: Any]])
+    #expect(collapsedContent.contains(where: { ($0["text"] as? String)?.contains("Stray result") == true }))
+  }
+
+  @Test
+  func `Responses replay splits mixed tool turns and synthesizes only orphaned calls`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let messages = [
+      Message(role: .assistant, content: [
+        .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+        .toolCall(ToolCall(name: "lookup", id: "call_2", parameters: ["id": "42"])),
+      ]),
+      Message(role: .tool, content: [
+        .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Matched result"))),
+        .toolResult(ToolResult(name: "stale", id: "call_stray", content: .text("Stray result"))),
+      ]),
+      Message(role: .user, content: "Continue"),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let functionCallOutputs = input.filter { $0["type"] as? String == "function_call_output" }
+    #expect(functionCallOutputs.count == 2)
+
+    let matchedOutput = try #require(functionCallOutputs.first { $0["call_id"] as? String == "call_1" })
+    #expect(matchedOutput["output"] as? String == "Matched result")
+
+    let syntheticOutput = try #require(functionCallOutputs.first { $0["call_id"] as? String == "call_2" })
+    let syntheticError = try #require(syntheticOutput["output"] as? String)
+    #expect(syntheticError.contains("Function call was not executed."))
+
+    let collapsedStrayMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: {
+        ($0["type"] as? String) == "input_text" && (($0["text"] as? String)?.contains("Stray result") == true)
+      }) == true
+    }))
+    #expect(collapsedStrayMessage["id"] == nil)
+  }
+
+  @Test
   func `Reasoning items round-trip with correct wire shape`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString

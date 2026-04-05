@@ -691,6 +691,388 @@ struct GeminiClientTests {
   }
 
   @Test
+  func `Gemini replay preserves late tool results without synthetic duplicates`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(
+            name: "get_weather",
+            id: "call_weather_1",
+            parameters: ["location": .string("Paris")],
+          )),
+        ]),
+        Message(role: .user, content: "Still waiting"),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(
+            name: "get_weather",
+            id: "call_weather_1",
+            content: [.text("Sunny later")],
+          )),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    let functionResponseMessages = contents.filter { content in
+      let parts = content["parts"] as? [[String: Any]]
+      return parts?.contains(where: { $0["functionResponse"] != nil }) == true
+    }
+    #expect(functionResponseMessages.count == 1)
+
+    let functionResponse = try #require((functionResponseMessages[0]["parts"] as? [[String: Any]])?.first?["functionResponse"] as? [String: Any])
+    #expect(functionResponse["id"] as? String == "call_weather_1")
+    let responsePayload = try #require(functionResponse["response"] as? [String: Any])
+    #expect(responsePayload["output"] as? String == "Sunny later")
+  }
+
+  @Test
+  func `Gemini replay synthesizes trailing unresolved tool calls at end of transcript`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(
+            name: "get_weather",
+            id: "call_weather_1",
+            parameters: ["location": .string("Paris")],
+          )),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    #expect(contents.count == 2)
+
+    #expect(contents[0]["role"] as? String == "model")
+    let functionCall = try #require((contents[0]["parts"] as? [[String: Any]])?.first?["functionCall"] as? [String: Any])
+    #expect(functionCall["id"] as? String == "call_weather_1")
+
+    #expect(contents[1]["role"] as? String == "user")
+    let functionResponse = try #require((contents[1]["parts"] as? [[String: Any]])?.first?["functionResponse"] as? [String: Any])
+    #expect(functionResponse["id"] as? String == "call_weather_1")
+    let responsePayload = try #require(functionResponse["response"] as? [String: Any])
+    #expect((responsePayload["error"] as? String)?.contains("Function call was not executed.") == true)
+  }
+
+  @Test
+  func `Gemini plain text history routes system text and preserves assistant text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: "Base instructions",
+      messages: [
+        Message(role: .system, content: "You are helpful"),
+        Message(role: .developer, content: "Be concise"),
+        Message(role: .assistant, content: "Earlier answer"),
+        Message(role: .user, content: "Follow up"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let systemInstruction = try #require(body?["systemInstruction"] as? [String: Any])
+    let systemParts = try #require(systemInstruction["parts"] as? [[String: Any]])
+    let systemTexts = systemParts.compactMap { $0["text"] as? String }
+    #expect(systemTexts.contains("Base instructions"))
+    #expect(systemTexts.contains("You are helpful"))
+    #expect(systemTexts.contains("Be concise"))
+
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    #expect(contents.count == 2)
+    #expect(contents[0]["role"] as? String == "model")
+    let assistantParts = try #require(contents[0]["parts"] as? [[String: Any]])
+    #expect(assistantParts.first?["text"] as? String == "Earlier answer")
+
+    #expect(contents[1]["role"] as? String == "user")
+    let userParts = try #require(contents[1]["parts"] as? [[String: Any]])
+    #expect(userParts.first?["text"] as? String == "Follow up")
+  }
+
+  @Test
+  func `Gemini replay preserves partial fulfillment across consecutive tool messages`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(
+            name: "get_weather",
+            id: "call_weather_1",
+            parameters: ["location": .string("Paris")],
+          )),
+          .toolCall(ToolCall(
+            name: "lookup_timezone",
+            id: "call_timezone_1",
+            parameters: ["city": .string("Paris")],
+          )),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(
+            name: "get_weather",
+            id: "call_weather_1",
+            content: [.text("Result 1")],
+          )),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(
+            name: "lookup_timezone",
+            id: "call_timezone_1",
+            content: [.text("Result 2")],
+          )),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    #expect(contents.count == 3)
+
+    #expect(contents[0]["role"] as? String == "model")
+    let functionResponses = Array(contents.dropFirst()).compactMap { content -> [String: Any]? in
+      let parts = content["parts"] as? [[String: Any]]
+      return parts?.first?["functionResponse"] as? [String: Any]
+    }
+    #expect(functionResponses.count == 2)
+    #expect(functionResponses.contains(where: {
+      $0["id"] as? String == "call_weather_1" && (($0["response"] as? [String: Any])?["output"] as? String == "Result 1")
+    }))
+    #expect(functionResponses.contains(where: {
+      $0["id"] as? String == "call_timezone_1" && (($0["response"] as? [String: Any])?["output"] as? String == "Result 2")
+    }))
+    #expect(functionResponses.allSatisfy { (($0["response"] as? [String: Any])?["error"]) == nil })
+  }
+
+  @Test
+  func `Gemini replay collapses stray-only tool results to user text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(
+            name: "stale",
+            id: "call_stray",
+            content: [.text("Stray result")],
+          )),
+        ]),
+        Message(role: .user, content: "Continue"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    let hasNativeFunctionResponse = contents.contains { content in
+      let parts = content["parts"] as? [[String: Any]]
+      return parts?.contains(where: { $0["functionResponse"] != nil }) == true
+    }
+    #expect(hasNativeFunctionResponse == false)
+
+    let collapsedTurn = try #require(contents.first(where: { content in
+      let parts = content["parts"] as? [[String: Any]]
+      return parts?.contains(where: { ($0["text"] as? String)?.contains("Stray result") == true }) == true
+    }))
+    #expect(collapsedTurn["role"] as? String == "user")
+  }
+
+  @Test
+  func `Gemini replay splits mixed tool turns and synthesizes only orphaned calls`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(
+            name: "get_weather",
+            id: "call_weather_1",
+            parameters: ["location": .string("Paris")],
+          )),
+          .toolCall(ToolCall(
+            name: "lookup_timezone",
+            id: "call_timezone_1",
+            parameters: ["city": .string("Paris")],
+          )),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(
+            name: "get_weather",
+            id: "call_weather_1",
+            content: [.text("Sunny")],
+          )),
+          .toolResult(ToolResult(
+            name: "stale",
+            id: "call_stray",
+            content: [.text("Stray result")],
+          )),
+        ]),
+        Message(role: .user, content: "What about tomorrow?"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    let functionResponses = contents.compactMap { content -> [String: Any]? in
+      let parts = content["parts"] as? [[String: Any]]
+      return parts?.first?["functionResponse"] as? [String: Any]
+    }
+    #expect(functionResponses.count == 2)
+
+    let matchedResponse = try #require(functionResponses.first { $0["id"] as? String == "call_weather_1" })
+    let matchedPayload = try #require(matchedResponse["response"] as? [String: Any])
+    #expect(matchedPayload["output"] as? String == "Sunny")
+
+    let syntheticResponse = try #require(functionResponses.first { $0["id"] as? String == "call_timezone_1" })
+    let syntheticPayload = try #require(syntheticResponse["response"] as? [String: Any])
+    #expect((syntheticPayload["error"] as? String)?.contains("Function call was not executed.") == true)
+
+    let collapsedStrayTurn = try #require(contents.first(where: { content in
+      let parts = content["parts"] as? [[String: Any]]
+      return parts?.contains(where: { ($0["text"] as? String)?.contains("Stray result") == true }) == true
+    }))
+    #expect(collapsedStrayTurn["role"] as? String == "user")
+  }
+
+  @Test
   func `Chat Completions refusals replay as plain text in Gemini requests`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
