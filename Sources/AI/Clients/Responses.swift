@@ -854,6 +854,8 @@ public final class ResponsesClient: APIClient, Sendable {
         case let .providerOpaque(opaque) where opaque.provider == "openai-chat-completions" && opaque.type == "refusal":
           opaque.content
         case let .providerOpaque(opaque) where opaque.isResponseContent:
+          // Responses can replay its own opaque items natively, but foreign visible
+          // opaque output should still survive provider switches as plain input text.
           opaque.content
         default:
           nil
@@ -999,6 +1001,8 @@ public final class ResponsesClient: APIClient, Sendable {
                 ])
               }
             case let .providerOpaque(block) where block.isResponseContent && block.provider != "openai-responses":
+              // Keep visible foreign opaque output in assistant history even though
+              // only native Responses opaque blocks can be replayed structurally.
               if let text = block.content, !text.isEmpty {
                 var item: [String: any Sendable] = [
                   "type": textContentType,

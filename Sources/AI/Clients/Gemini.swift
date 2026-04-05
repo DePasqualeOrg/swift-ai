@@ -324,6 +324,8 @@ public final class GeminiClient: APIClient, Sendable {
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
           opaque.content
         case let .providerOpaque(opaque) where opaque.isResponseContent:
+          // System/developer history is flattened into Gemini system instructions,
+          // so preserve foreign visible opaque output as plain text here.
           opaque.content
         case let .attachment(attachment):
           fallbackText(for: attachment)
@@ -527,6 +529,8 @@ public final class GeminiClient: APIClient, Sendable {
           }
 
         case let .providerOpaque(opaque) where opaque.isResponseContent:
+          // Non-Gemini providers store some visible output only in opaque blocks.
+          // Downgrade that text so provider switches preserve the assistant transcript.
           if let text = opaque.content, !text.isEmpty {
             parts.append(["text": text])
           }

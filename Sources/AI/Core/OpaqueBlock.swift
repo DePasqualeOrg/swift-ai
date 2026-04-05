@@ -6,6 +6,11 @@ import Foundation
 ///
 /// Used to preserve provider metadata (e.g., Anthropic thinking blocks with cryptographic signatures)
 /// through the response → Core Data → message rebuild cycle.
+///
+/// Cross-provider replay follows a simple contract:
+/// - same-provider clients should prefer `data` for lossless native replay
+/// - other providers should fall back to `content` when `isResponseContent` is true
+/// so visible output survives provider switches even when native metadata does not.
 public struct OpaqueBlock: Sendable, Hashable, Codable {
   /// The provider that produced this block (e.g., "anthropic", "gemini").
   public let provider: String
@@ -22,7 +27,8 @@ public struct OpaqueBlock: Sendable, Hashable, Codable {
   /// Encrypted content for redacted blocks.
   public let data: String?
 
-  /// Whether `content` should be surfaced through `GenerationResponse.responseText`.
+  /// Whether `content` should be surfaced through `GenerationResponse.responseText`
+  /// and downgraded to plain text by non-native provider clients during replay.
   /// Used for server-side tool output (e.g., code execution results, fetched web content)
   /// that is part of the response but must be round-tripped as structured data.
   public var isResponseContent: Bool = false

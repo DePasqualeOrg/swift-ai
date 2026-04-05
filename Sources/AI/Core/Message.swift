@@ -147,6 +147,8 @@ public extension Message {
 // MARK: - Tool Collapsing Utilities
 
 public extension Message {
+  /// Collects visible text from content that should survive lossy history rewrites,
+  /// including provider-opaque response text marked as portable display content.
   private func collapsedVisibleText() -> String {
     content.compactMap { item -> String? in
       switch item {

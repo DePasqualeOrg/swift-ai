@@ -1355,6 +1355,8 @@ public final class AnthropicClient: APIClient, Sendable {
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
           opaque.content
         case let .providerOpaque(opaque) where opaque.isResponseContent:
+          // Anthropic lifts system/developer history into a top-level system string,
+          // so foreign visible opaque output must degrade to text here.
           opaque.content
         case let .attachment(attachment):
           fallbackText(for: attachment)
@@ -1417,6 +1419,8 @@ public final class AnthropicClient: APIClient, Sendable {
                 contentBlocks.append(.init(type: .text, text: text))
               }
             case _ where opaqueBlock.isResponseContent:
+              // Preserve visible foreign opaque output as plain text when Anthropic
+              // cannot replay the native structured block.
               if let text = opaqueBlock.content, !text.isEmpty {
                 contentBlocks.append(.init(type: .text, text: text))
               }
