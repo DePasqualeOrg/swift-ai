@@ -757,8 +757,8 @@ public final class GeminiClient: APIClient, Sendable {
 
   /// Parse a single Gemini response JSON object and yield `StreamResponse` items.
   ///
-  /// Returns `true` if parsing terminated the stream (e.g., a blocking error),
-  /// meaning the caller should not continue processing further chunks.
+  /// Returns `true` if parsing terminated the stream early, meaning the caller
+  /// should not continue processing further chunks.
   private func processResponseChunk(
     _ jsonObject: [String: Any]?,
     continuation: AsyncThrowingStream<StreamResponse, Error>.Continuation,
@@ -782,41 +782,6 @@ public final class GeminiClient: APIClient, Sendable {
         response: errorResponse,
       ))
       return true
-    }
-
-    // Check for safety ratings in candidates
-    if let candidates = Self.jsonObjectArray(from: jsonObject?["candidates"]),
-       let firstCandidate = candidates.first
-    {
-      if let finishReason = firstCandidate["finishReason"] as? String {
-        let contentBlockingReasons: Set = [
-          "SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT",
-          "SPII", "IMAGE_SAFETY", "IMAGE_PROHIBITED_CONTENT", "IMAGE_RECITATION",
-        ]
-        if contentBlockingReasons.contains(finishReason) {
-          let finishMessage = (firstCandidate["finishMessage"] as? String) ?? "Content was blocked due to finish reason \"\(finishReason.lowercased())\"."
-          let candidate = Candidate(
-            content: nil,
-            finishReason: FinishReason(rawValue: finishReason) ?? .safety,
-            safetyRatings: nil,
-            citationMetadata: nil,
-            tokenCount: nil,
-            avgLogprobs: nil,
-            index: 0,
-            groundingMetadata: nil,
-          )
-          let errorResponse = GenerateContentResponse(
-            candidates: [candidate],
-            promptFeedback: nil,
-            usageMetadata: nil,
-          )
-          continuation.finish(throwing: GeminiError(
-            message: "\(finishMessage)",
-            response: errorResponse,
-          ))
-          return true
-        }
-      }
     }
 
     // Extract text chunks

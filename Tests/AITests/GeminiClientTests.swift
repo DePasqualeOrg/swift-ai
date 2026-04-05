@@ -316,32 +316,19 @@ struct GeminiClientTests {
     let (client, cleanup) = makeTestClient(sseData: fixture)
     defer { cleanup() }
 
-    do {
-      let response = try await consumeStream(client.streamText(
-        modelId: "gemini-2.0-flash",
-        systemPrompt: nil,
-        messages: [Message(role: .user, content: "Harmful content")],
-        maxTokens: 1024,
-        apiKey: "test-api-key",
-      ))
-      // If no error thrown, verify the finish reason indicates content filter
-      #expect(response.metadata?.finishReason == .contentFilter)
-    } catch let error as AIError {
-      // LLMError.serverError with safety message is expected
-      if case let .serverError(_, message, _) = error {
-        #expect(message.lowercased().contains("safety") || message.lowercased().contains("blocked"))
-      } else {
-        Issue.record("Expected serverError with safety message, got: \(error)")
-      }
-    } catch {
-      // Verify the error message indicates safety blocking
-      let errorMessage = String(describing: error)
-      #expect(
-        errorMessage.lowercased().contains("safety") ||
-          errorMessage.lowercased().contains("blocked") ||
-          errorMessage.lowercased().contains("finish reason"),
-      )
-    }
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-2.0-flash",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Harmful content")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.content.isEmpty)
+    #expect(response.metadata?.finishReason == .contentFilter)
+    #expect(response.metadata?.inputTokens == 10)
+    #expect(response.metadata?.outputTokens == 0)
+    #expect(response.metadata?.totalTokens == 10)
   }
 
   // MARK: - Thinking Content Tests
