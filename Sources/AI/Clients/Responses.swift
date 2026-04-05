@@ -817,6 +817,32 @@ public final class ResponsesClient: APIClient, Sendable {
   }
 
   private static func inputItems(for message: Message) async throws -> [[String: any Sendable]] {
+    func messageAttachmentContentItem(for attachment: Attachment) async throws -> [String: any Sendable]? {
+      switch attachment.kind {
+        case let .image(data, mimeType):
+          let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+          return [
+            "type": ContentType.inputImage,
+            "detail": "auto",
+            "image_url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: processedMimeType),
+          ]
+        case let .document(data, mimeType):
+          // The API expects a data URL (e.g. "data:application/pdf;base64,...") for file_data,
+          // despite the OpenAI TS SDK describing it as "base64-encoded data".
+          var contentItem: [String: any Sendable] = [
+            "type": ContentType.inputFile,
+            "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
+          ]
+          if let fileName = attachment.filename {
+            contentItem["filename"] = fileName
+          }
+          return contentItem
+        case .audio, .video:
+          openAIResponsesLogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported in Responses message content and will be omitted.")
+          return nil
+      }
+    }
+
     switch message.role {
       case .user:
         var contentItems: [[String: any Sendable]] = []
@@ -828,27 +854,8 @@ public final class ResponsesClient: APIClient, Sendable {
                 "text": text,
               ])
             case let .attachment(attachment):
-              switch attachment.kind {
-                case let .image(data, mimeType):
-                  let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
-                  contentItems.append([
-                    "type": ContentType.inputImage,
-                    "detail": "auto",
-                    "image_url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: processedMimeType),
-                  ])
-                case let .document(data, mimeType):
-                  // The API expects a data URL (e.g. "data:application/pdf;base64,...") for file_data,
-                  // despite the OpenAI TS SDK describing it as "base64-encoded data".
-                  var contentItem: [String: any Sendable] = [
-                    "type": ContentType.inputFile,
-                    "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
-                  ]
-                  if let fileName = attachment.filename {
-                    contentItem["filename"] = fileName
-                  }
-                  contentItems.append(contentItem)
-                case .audio, .video:
-                  openAIResponsesLogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported by Responses and will be omitted.")
+              if let contentItem = try await messageAttachmentContentItem(for: attachment) {
+                contentItems.append(contentItem)
               }
             default:
               break
@@ -960,6 +967,17 @@ public final class ResponsesClient: APIClient, Sendable {
                   "type": ContentType.inputText,
                   "text": refusal,
                 ])
+              }
+            case let .attachment(attachment):
+              if let contentItem = try await messageAttachmentContentItem(for: attachment) {
+                // ResponseOutputMessage content only supports output_text/refusal.
+                // If a caller stored attachments inside the same assistant turn, flush the
+                // replayed output segment and continue as an EasyInputMessage.
+                if currentMetadata != nil {
+                  flushContentItems()
+                  currentMetadata = nil
+                }
+                contentItems.append(contentItem)
               }
             case let .toolCall(toolCall):
               flushContentItems()

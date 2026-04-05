@@ -1203,6 +1203,151 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Assistant message without metadata preserves image and document attachments`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Done"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Done"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let imageData = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR2QAAAAASUVORK5CYII="))
+    let pdfData = Data("fake-pdf-content".utf8)
+    let imageAttachment = Attachment(kind: .image(data: imageData, mimeType: "image/png"))
+    let documentAttachment = Attachment(kind: .document(data: pdfData, mimeType: "application/pdf"), filename: "context.pdf")
+    let messages = [
+      Message(role: .assistant, content: [
+        .text("Keep these results in mind."),
+        .attachment(imageAttachment),
+        .attachment(documentAttachment),
+      ]),
+      Message(role: .user, content: "What should I do next?"),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let assistantMessage = try #require(input.first(where: {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    }))
+    let content = try #require(assistantMessage["content"] as? [[String: Any]])
+
+    #expect(content.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "Keep these results in mind." }))
+    let imageContent = try #require(content.first(where: { $0["type"] as? String == "input_image" }))
+    let imageURL = try #require(imageContent["image_url"] as? String)
+    #expect(imageURL.hasPrefix("data:image/"))
+    let fileContent = try #require(content.first(where: { $0["type"] as? String == "input_file" }))
+    #expect(fileContent["filename"] as? String == "context.pdf")
+  }
+
+  @Test
+  func `Assistant metadata-backed replay downgrades attachment segment to EasyInputMessage`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Done"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Done"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let metadata = OpaqueBlock(
+      provider: "openai-responses",
+      type: "message_metadata",
+      data: #"{"id":"msg_123","status":"completed","phase":"commentary"}"#,
+    )
+    let pdfData = Data("attachment-content".utf8)
+    let documentAttachment = Attachment(
+      kind: .document(data: pdfData, mimeType: "application/pdf"),
+      filename: "notes.pdf",
+    )
+    let messages = [
+      Message(role: .assistant, content: [
+        .providerOpaque(metadata),
+        .text("Earlier answer."),
+        .attachment(documentAttachment),
+        .text("Supplemental note."),
+      ]),
+      Message(role: .user, content: "Continue"),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let assistantMessages = input.filter {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    }
+    #expect(assistantMessages.count == 2)
+
+    let replayedOutputMessage = assistantMessages[0]
+    #expect(replayedOutputMessage["id"] as? String == "msg_123")
+    #expect(replayedOutputMessage["status"] as? String == "completed")
+    #expect(replayedOutputMessage["phase"] as? String == "commentary")
+    let replayedOutputContent = try #require(replayedOutputMessage["content"] as? [[String: Any]])
+    #expect(replayedOutputContent.count == 1)
+    #expect(replayedOutputContent[0]["type"] as? String == "output_text")
+    #expect(replayedOutputContent[0]["text"] as? String == "Earlier answer.")
+
+    let downgradedAssistantMessage = assistantMessages[1]
+    #expect(downgradedAssistantMessage["id"] == nil)
+    let downgradedContent = try #require(downgradedAssistantMessage["content"] as? [[String: Any]])
+    #expect(downgradedContent[0]["type"] as? String == "input_file")
+    #expect(downgradedContent[0]["filename"] as? String == "notes.pdf")
+    #expect(downgradedContent[1]["type"] as? String == "input_text")
+    #expect(downgradedContent[1]["text"] as? String == "Supplemental note.")
+  }
+
+  @Test
   func `Mixed tool output preserves original content order`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
