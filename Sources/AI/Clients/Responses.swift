@@ -843,6 +843,27 @@ public final class ResponsesClient: APIClient, Sendable {
       }
     }
 
+    func downgradedTextContentItem(for block: Message.Content) -> [String: any Sendable]? {
+      let text: String? = switch block {
+        case let .text(text) where !text.isEmpty:
+          text
+        case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "annotated_output_text":
+          opaque.content
+        case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
+          opaque.content
+        case let .providerOpaque(opaque) where opaque.provider == "openai-chat-completions" && opaque.type == "refusal":
+          opaque.content
+        default:
+          nil
+      }
+
+      guard let text, !text.isEmpty else { return nil }
+      return [
+        "type": ContentType.inputText,
+        "text": text,
+      ]
+    }
+
     switch message.role {
       case .user:
         var contentItems: [[String: any Sendable]] = []
@@ -1113,11 +1134,14 @@ public final class ResponsesClient: APIClient, Sendable {
       case .system, .developer:
         var contentItems: [[String: any Sendable]] = []
         for block in message.content {
-          if case let .text(text) = block, !text.isEmpty {
-            contentItems.append([
-              "type": ContentType.inputText,
-              "text": text,
-            ])
+          if let textContentItem = downgradedTextContentItem(for: block) {
+            contentItems.append(textContentItem)
+            continue
+          }
+          if case let .attachment(attachment) = block,
+             let attachmentContentItem = try await messageAttachmentContentItem(for: attachment)
+          {
+            contentItems.append(attachmentContentItem)
           }
         }
         guard !contentItems.isEmpty else { return [] }
