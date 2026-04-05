@@ -2037,6 +2037,83 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Responses replay omits synthesized endnotes when native annotations are present`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let metadataJson = #"{"id":"msg_annotated","status":"completed"}"#
+    let citationNotes = """
+    - [Example Docs](https://example.com/docs)
+    """
+    let messages = [
+      Message(role: .assistant, content: [
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-responses",
+          type: "message_metadata",
+          data: metadataJson,
+        )),
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-responses",
+          type: "annotated_output_text",
+          content: "Cited answer.",
+          data: #"[{"type":"url_citation","url":"https://example.com/docs","title":"Example Docs"}]"#,
+          isResponseContent: true,
+        )),
+        .endnotes(citationNotes),
+      ]),
+      Message(role: .user, content: "Follow up"),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let assistantMsg = try #require(input.first(where: {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    }))
+    #expect(assistantMsg["id"] as? String == "msg_annotated")
+    #expect(assistantMsg["status"] as? String == "completed")
+
+    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    #expect(content.count == 1)
+    let outputItem = try #require(content.first)
+    #expect(outputItem["type"] as? String == "output_text")
+    #expect(outputItem["text"] as? String == "Cited answer.")
+    let annotations = try #require(outputItem["annotations"] as? [[String: Any]])
+    #expect(annotations.count == 1)
+    #expect(annotations.first?["url"] as? String == "https://example.com/docs")
+  }
+
+  @Test
   func `Stop sends authenticated cancel for background response`() async throws {
     var cancelRequest: URLRequest?
     let streamGate = AsyncStream<Data>.makeStream()

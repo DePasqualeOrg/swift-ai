@@ -1175,6 +1175,10 @@ public final class ResponsesClient: APIClient, Sendable {
       case .assistant:
         var items: [[String: any Sendable]] = []
         var contentItems: [[String: any Sendable]] = []
+        let hasNativeAnnotatedOutputText = message.content.contains { block in
+          guard case let .providerOpaque(opaque) = block else { return false }
+          return opaque.provider == "openai-responses" && opaque.type == "annotated_output_text"
+        }
         // Per-message metadata from a prior API response. When present, the message
         // is serialized as a ResponseOutputMessage (output_text, id, status). When
         // absent, it's serialized as an EasyInputMessage (input_text).
@@ -1236,6 +1240,10 @@ public final class ResponsesClient: APIClient, Sendable {
               }
               contentItems.append(item)
             case let .endnotes(text) where !text.isEmpty:
+              // Endnotes are synthesized from native annotated_output_text during parsing.
+              // When replaying back into Responses, omit them if the same turn still has
+              // native annotation-bearing output so citations are not duplicated as text.
+              guard !hasNativeAnnotatedOutputText else { break }
               var item: [String: any Sendable] = [
                 "type": textContentType,
                 "text": text,
