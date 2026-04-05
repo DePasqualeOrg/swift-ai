@@ -935,6 +935,58 @@ struct ChatCompletionsClientTests {
   }
 
   @Test
+  func `Non-assistant Chat Completions refusals replay as text content`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"id":"test","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .user, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-chat-completions",
+            type: "refusal",
+            content: "I can't help with that.",
+            isResponseContent: true,
+          )),
+        ]),
+        Message(role: .user, content: "Try again"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let firstUserMessage = try #require(messages.first(where: {
+      $0["role"] as? String == "user" && $0["content"] as? String == "I can't help with that."
+    }))
+
+    #expect(firstUserMessage["refusal"] == nil)
+  }
+
+  @Test
   func `Chat Completions refusals survive replay through Responses as text`() async throws {
     let refusalSSEData = """
     data: {"id":"chatcmpl-refusal-cross-client","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant","refusal":"I can't assist with that."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}

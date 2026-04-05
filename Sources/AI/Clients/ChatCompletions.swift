@@ -350,11 +350,6 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     var hasNonTextContent = false
 
     for block in message.content {
-      if let refusalText = Self.refusalText(from: block) {
-        refusalParts.append(refusalText)
-        continue
-      }
-
       switch block {
         case let .text(text) where !text.isEmpty:
           textParts.append(text)
