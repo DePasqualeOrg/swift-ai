@@ -896,6 +896,9 @@ public final class ResponsesClient: APIClient, Sendable {
         // is serialized as a ResponseOutputMessage (output_text, id, status). When
         // absent, it's serialized as an EasyInputMessage (input_text).
         var currentMetadata: [String: String]?
+        // Preserve assistant phase across downgraded EasyInputMessage segments even
+        // when id/status cannot be replayed.
+        var currentPhase: String?
 
         /// The content type for text parts: output_text when replaying prior API output,
         /// input_text for manually constructed assistant messages.
@@ -913,7 +916,9 @@ public final class ResponsesClient: APIClient, Sendable {
           if let metadata = currentMetadata {
             if let id = metadata["id"] { messageItem["id"] = id }
             if let status = metadata["status"] { messageItem["status"] = status }
-            if let phase = metadata["phase"] { messageItem["phase"] = phase }
+          }
+          if let currentPhase {
+            messageItem["phase"] = currentPhase
           }
           items.append(messageItem)
           contentItems.removeAll(keepingCapacity: true)
@@ -930,11 +935,13 @@ public final class ResponsesClient: APIClient, Sendable {
                  let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: String]
               {
                 currentMetadata = parsed
+                currentPhase = parsed["phase"]
               } else {
                 // Metadata block is present but unusable — treat as absent so that
                 // subsequent content is serialized as EasyInputMessage (input_text)
                 // rather than as a ResponseOutputMessage missing required fields.
                 currentMetadata = nil
+                currentPhase = nil
               }
             case let .text(text) where !text.isEmpty:
               var item: [String: any Sendable] = [

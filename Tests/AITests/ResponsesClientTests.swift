@@ -1433,6 +1433,7 @@ struct ResponsesClientTests {
 
     let downgradedAssistantMessage = assistantMessages[1]
     #expect(downgradedAssistantMessage["id"] == nil)
+    #expect(downgradedAssistantMessage["phase"] as? String == "commentary")
     let downgradedContent = try #require(downgradedAssistantMessage["content"] as? [[String: Any]])
     #expect(downgradedContent[0]["type"] as? String == "input_file")
     #expect(downgradedContent[0]["filename"] as? String == "notes.pdf")
