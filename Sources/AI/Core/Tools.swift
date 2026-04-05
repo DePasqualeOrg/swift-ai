@@ -331,7 +331,11 @@ public struct Tool: Sendable {
 
       // Add enum values if present
       if let enumValues = param.enumValues {
-        property["enum"] = .array(enumValues.map { .string($0) })
+        var schemaEnumValues = enumValues.map(Value.string)
+        if !param.required {
+          schemaEnumValues.append(.null)
+        }
+        property["enum"] = .array(schemaEnumValues)
       }
 
       // Add validation constraints

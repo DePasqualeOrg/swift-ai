@@ -124,6 +124,19 @@ struct SetPriority {
 }
 
 @Tool
+struct SetOptionalPriority {
+  static let name = "set_optional_priority"
+  static let description = "Set task priority with an optional override"
+
+  @Parameter(description: "Priority override")
+  var priority: Priority?
+
+  func perform() async throws -> String {
+    "Priority set to \(priority?.rawValue ?? "none")"
+  }
+}
+
+@Tool
 struct ToolWithCustomKey {
   static let name = "tool_with_custom_key"
   static let description = "Tool using custom JSON keys"
@@ -301,6 +314,22 @@ struct ToolMacroIntegrationTests {
     #expect(enumValues?.contains("low") == true)
     #expect(enumValues?.contains("medium") == true)
     #expect(enumValues?.contains("high") == true)
+  }
+
+  @Test
+  func `Optional enum parameter includes null in schema`() {
+    let tool = SetOptionalPriority.tool
+
+    let schema = tool.rawInputSchema
+    let properties = schema["properties"]?.objectValue
+    let priorityProp = properties?["priority"]?.objectValue
+    let enumValues = priorityProp?["enum"]?.arrayValue
+
+    #expect(priorityProp?["type"]?.arrayValue == [.string("string"), .string("null")])
+    #expect(enumValues?.contains(.string("low")) == true)
+    #expect(enumValues?.contains(.string("medium")) == true)
+    #expect(enumValues?.contains(.string("high")) == true)
+    #expect(enumValues?.contains(.null) == true)
   }
 
   @Test
@@ -831,6 +860,7 @@ struct ToolMacroIntegrationTests {
       description: "Tool created with factory methods",
       parameters: [
         .string("query", description: "Search query", minLength: 1, maxLength: 100),
+        .string("priority", description: "Priority override", required: false, enum: ["low", "medium", "high"]),
         .integer("count", description: "Item count", required: false, minimum: 0, maximum: 1000),
         .number("threshold", description: "Score threshold", minimum: 0.0, maximum: 1.0),
         .boolean("verbose", description: "Enable verbose output", required: false),
@@ -845,6 +875,11 @@ struct ToolMacroIntegrationTests {
     #expect(queryProp?["type"]?.stringValue == "string")
     #expect(queryProp?["minLength"]?.intValue == 1)
     #expect(queryProp?["maxLength"]?.intValue == 100)
+
+    // Optional enum includes null in both type and enum
+    let priorityProp = properties?["priority"]?.objectValue
+    #expect(priorityProp?["type"]?.arrayValue == [.string("string"), .string("null")])
+    #expect(priorityProp?["enum"]?.arrayValue == [.string("low"), .string("medium"), .string("high"), .null])
 
     // Integer with constraints (optional — nullable type)
     let countProp = properties?["count"]?.objectValue
@@ -872,6 +907,7 @@ struct ToolMacroIntegrationTests {
     #expect(required.contains("query"))
     #expect(required.contains("threshold"))
     #expect(required.contains("tags"))
+    #expect(!required.contains("priority"))
     #expect(!required.contains("count"))
     #expect(!required.contains("verbose"))
   }

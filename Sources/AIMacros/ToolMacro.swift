@@ -410,9 +410,10 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       // Get base type for schema
       let baseType = param.typeName
       let schemaType = getJSONSchemaType(for: baseType)
+      let isNullableSchema = param.isOptional || (toolInfo.strictSchema && param.hasDefault)
 
       // Use nullable type for optional params and default params in strict mode
-      if param.isOptional || (toolInfo.strictSchema && param.hasDefault) {
+      if isNullableSchema {
         propEntries.append(
           "\"type\": AI.Value.array([AI.Value.string(\"\(schemaType)\"), AI.Value.string(\"null\")])",
         )
@@ -455,7 +456,20 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       }
 
       // Merge in runtime jsonSchemaProperties for enums and other custom types
-      let propObject = "AI.Value.object([\(propEntries.joined(separator: ", "))].merging(\(baseType).jsonSchemaProperties) { _, new in new })"
+      let mergedProperties = "[\(propEntries.joined(separator: ", "))].merging(\(baseType).jsonSchemaProperties) { _, new in new }"
+      let propObject = if isNullableSchema {
+        """
+        AI.Value.object({ () -> [String: AI.Value] in
+          var properties = \(mergedProperties)
+          if case let .array(enumValues)? = properties["enum"] {
+            properties["enum"] = AI.Value.array(enumValues + [AI.Value.null])
+          }
+          return properties
+        }())
+        """
+      } else {
+        "AI.Value.object(\(mergedProperties))"
+      }
       propertiesEntries.append("\"\(param.jsonKey)\": \(propObject)")
     }
 
