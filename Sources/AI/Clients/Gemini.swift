@@ -1059,7 +1059,7 @@ public final class GeminiClient: APIClient, Sendable {
         return nil
       }
       let toolCallId = (functionCall["id"] as? String)
-        ?? (explicitName == nil ? existingToolCall?.id : nil)
+        ?? existingToolCall?.id
         ?? generateShortId()
       let parameters = try args.mapValues { try Value.fromAny($0) }
       let toolCall = ToolCall(
@@ -1067,7 +1067,7 @@ public final class GeminiClient: APIClient, Sendable {
         id: toolCallId,
         parameters: parameters,
         providerMetadata: mergedProviderMetadata(
-          existing: explicitName == nil ? existingToolCall?.providerMetadata : nil,
+          existing: existingToolCall?.providerMetadata,
           thoughtSignature: thoughtSignature,
         ),
       )
