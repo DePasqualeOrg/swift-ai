@@ -1170,18 +1170,11 @@ struct ChatCompletionsClientTests {
     let messages = try #require(body?["messages"] as? [[String: Any]])
     let assistantMessage = try #require(messages.first(where: { $0["role"] as? String == "assistant" }))
 
-    #expect(assistantMessage["content"] as? String == "Swift is a programming language developed by Apple.")
-
-    let annotations = try #require(assistantMessage["annotations"] as? [[String: Any]])
-    #expect(annotations.count == 2)
-
-    let urls = Set(annotations.compactMap { annotation -> String? in
-      (annotation["url_citation"] as? [String: Any])?["url"] as? String
-    })
-    #expect(urls == [
-      "https://developer.apple.com/swift/",
-      "https://github.com/apple/swift",
-    ])
+    let content = try #require(assistantMessage["content"] as? String)
+    #expect(content.contains("Swift is a programming language developed by Apple."))
+    #expect(content.contains("https://developer.apple.com/swift/"))
+    #expect(content.contains("https://github.com/apple/swift"))
+    #expect(assistantMessage["annotations"] == nil)
   }
 
   @Test

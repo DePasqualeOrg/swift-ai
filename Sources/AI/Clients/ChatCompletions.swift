@@ -344,7 +344,6 @@ public final class ChatCompletionsClient: APIClient, Sendable {
 
     var textParts: [String] = []
     var refusalParts: [String] = []
-    var annotations: [[String: any Sendable]] = []
     var toolCalls: [[String: any Sendable]] = []
     var multimodalContent: [[String: any Sendable]] = []
     var hasNonTextContent = false
@@ -366,14 +365,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             ])
           }
         case let .providerOpaque(block) where block.provider == Self.refusalOpaqueProvider && block.type == Self.annotationsOpaqueType:
-          guard message.role == .assistant else { break }
-          guard let annotationsData = block.data,
-                let decodedAnnotations = Self.decodeSerializedAnnotations(annotationsData)
-          else {
-            openAILogger.warning("Failed to decode ChatCompletions annotations for assistant replay. Dropping annotations.")
-            break
-          }
-          annotations.append(contentsOf: decodedAnnotations)
+          break
         case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "refusal":
           if let refusal = block.content, !refusal.isEmpty {
             if message.role == .assistant {
@@ -421,6 +413,13 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             hasNonTextContent = true
             multimodalContent.append(serializedAttachment)
           }
+        case let .endnotes(text) where !text.isEmpty:
+          let notesText = textParts.isEmpty ? text : "\n\n\(text)"
+          textParts.append(notesText)
+          multimodalContent.append([
+            "type": "text",
+            "text": notesText,
+          ])
         case let .toolCall(toolCall):
           try toolCalls.append(serializedToolCall(toolCall))
         default:
@@ -448,9 +447,6 @@ public final class ChatCompletionsClient: APIClient, Sendable {
 
     if !refusalText.isEmpty {
       requestMessage["refusal"] = refusalText
-    }
-    if !annotations.isEmpty, message.role == .assistant {
-      requestMessage["annotations"] = annotations
     }
 
     if !hasSerializedContent, refusalText.isEmpty {
