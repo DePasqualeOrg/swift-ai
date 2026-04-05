@@ -654,6 +654,47 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Clean EOF finalizes done events and added annotations without completed event`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_eof_done_events","status":"in_progress","model":"gpt-4o"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_done_123","type":"message","role":"assistant","status":"completed","content":[]}}
+
+    event: response.output_text.done
+    data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_done_123","text":"See docs"}
+
+    event: response.output_text.annotation.added
+    data: {"type":"response.output_text.annotation.added","output_index":0,"content_index":0,"item_id":"msg_done_123","annotation_index":0,"annotation":{"type":"url_citation","url":"https://example.com/done","title":"Done Docs"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":1,"item":{"id":"rs_done_123","type":"reasoning","summary":[],"content":[]}}
+
+    event: response.reasoning_text.done
+    data: {"type":"response.reasoning_text.done","output_index":1,"content_index":0,"item_id":"rs_done_123","text":"Reasoning finalized"}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [Message(role: .user, content: "Share the docs")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.responseText == "See docs")
+    #expect(response.reasoningText == "Reasoning finalized")
+    #expect(response.endnotesText?.contains("Done Docs") == true)
+    #expect(response.endnotesText?.contains("https://example.com/done") == true)
+  }
+
+  @Test
   func `Clean EOF preserves empty valid response without completed event`() async throws {
     let sseData = """
     event: response.created
@@ -679,6 +720,46 @@ struct ResponsesClientTests {
     #expect(response.responseText == nil)
     #expect(response.metadata?.responseId == "resp_eof_empty")
     #expect(response.metadata?.model == "gpt-4o")
+  }
+
+  @Test
+  func `Done events emit streaming updates before completion`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_done_progress","status":"in_progress","model":"gpt-4o"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_done_progress","type":"message","role":"assistant","status":"completed","content":[]}}
+
+    event: response.output_text.done
+    data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_done_progress","text":"Done"}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":1,"item":{"id":"rs_done_progress","type":"reasoning","summary":[],"content":[]}}
+
+    event: response.reasoning_text.done
+    data: {"type":"response.reasoning_text.done","output_index":1,"content_index":0,"item_id":"rs_done_progress","text":"Because."}
+
+    event: response.completed
+    data: {"type":"response.completed","response":{"id":"resp_done_progress","status":"completed","model":"gpt-4o","output":[{"id":"msg_done_progress","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Done","annotations":[]}]},{"id":"rs_done_progress","type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":"Because."}]}]}}
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let updates = UpdateCollector()
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [Message(role: .user, content: "Explain")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ), collecting: updates)
+
+    #expect(response.responseText == "Done")
+    #expect(response.reasoningText == "Because.")
+    #expect(updates.updates.contains { $0.responseText == "Done" && $0.reasoningText == nil })
+    #expect(updates.updates.contains { $0.responseText == "Done" && $0.reasoningText == "Because." })
   }
 
   @Test

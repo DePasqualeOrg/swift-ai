@@ -150,6 +150,15 @@ public final class ResponsesClient: APIClient, Sendable {
       indexedContent[k] = .text(text)
     }
 
+    mutating func setFinalizedReasoningText(_ text: String, outputIndex: Int?) {
+      guard let outputIndex else {
+        appendFallback(.thinking(text: text, signature: nil))
+        return
+      }
+      let k = key(outputIndex: outputIndex, contentIndex: nil)
+      indexedContent[k] = .thinking(text: text, signature: nil)
+    }
+
     mutating func appendRefusalDelta(_ delta: String, outputIndex: Int?, contentIndex: Int?) {
       append(delta: delta, outputIndex: outputIndex, contentIndex: contentIndex, as: {
         .providerOpaque(OpaqueBlock(provider: "openai-responses", type: "refusal", content: $0, isResponseContent: true))
@@ -367,6 +376,26 @@ public final class ResponsesClient: APIClient, Sendable {
               fieldName: "text",
             )
           }
+        case StreamEventType.outputTextDone:
+          if let text = event.text {
+            setContentField(
+              text,
+              outputIndex: event.outputIndex,
+              contentIndex: event.contentIndex,
+              defaultOutputType: OutputItemType.message,
+              partType: OutputItemType.outputText,
+              fieldName: "text",
+            )
+          }
+        case StreamEventType.outputTextAnnotationAdded:
+          if let annotation = event.annotation?.raw {
+            addAnnotation(
+              annotation,
+              outputIndex: event.outputIndex,
+              contentIndex: event.contentIndex,
+              annotationIndex: event.annotationIndex,
+            )
+          }
         case StreamEventType.refusalDelta:
           if let delta = event.delta {
             appendDelta(
@@ -393,6 +422,17 @@ public final class ResponsesClient: APIClient, Sendable {
           if let delta = event.delta {
             appendDelta(
               delta,
+              outputIndex: event.outputIndex,
+              contentIndex: event.contentIndex,
+              defaultOutputType: OutputItemType.reasoning,
+              partType: "reasoning_text",
+              fieldName: "text",
+            )
+          }
+        case StreamEventType.reasoningTextDone:
+          if let text = event.text {
+            setContentField(
+              text,
               outputIndex: event.outputIndex,
               contentIndex: event.contentIndex,
               defaultOutputType: OutputItemType.reasoning,
@@ -582,6 +622,39 @@ public final class ResponsesClient: APIClient, Sendable {
       }
       let existingValue = part[fieldName]?.stringValue ?? ""
       part[fieldName] = .string(existingValue + delta)
+
+      content[resolvedContentIndex] = .object(part)
+      output["content"] = .array(content)
+      outputs[resolvedOutputIndex] = output
+    }
+
+    private mutating func addAnnotation(
+      _ annotation: [String: Value],
+      outputIndex: Int?,
+      contentIndex: Int?,
+      annotationIndex: Int?,
+    ) {
+      let resolvedOutputIndex = resolveOutputIndex(explicitIndex: outputIndex, defaultType: OutputItemType.message)
+      guard outputs.indices.contains(resolvedOutputIndex) else { return }
+
+      var output = outputs[resolvedOutputIndex]
+      var content = output["content"]?.arrayValue ?? []
+      let resolvedContentIndex = Self.resolveContentIndex(in: content, requested: contentIndex, preferredType: OutputItemType.outputText)
+
+      while content.count <= resolvedContentIndex {
+        content.append(.object(Self.syntheticContentPart(ofType: OutputItemType.outputText)))
+      }
+
+      var part = content[resolvedContentIndex].objectValue ?? Self.syntheticContentPart(ofType: OutputItemType.outputText)
+      part["type"] = .string(OutputItemType.outputText)
+
+      var annotations = part["annotations"]?.arrayValue ?? []
+      if let annotationIndex, annotationIndex <= annotations.count {
+        annotations.insert(.object(annotation), at: annotationIndex)
+      } else {
+        annotations.append(.object(annotation))
+      }
+      part["annotations"] = .array(annotations)
 
       content[resolvedContentIndex] = .object(part)
       output["content"] = .array(content)
@@ -1189,7 +1262,10 @@ public final class ResponsesClient: APIClient, Sendable {
 
   private enum StreamEventType {
     static let outputTextDelta = "response.output_text.delta"
+    static let outputTextDone = "response.output_text.done"
+    static let outputTextAnnotationAdded = "response.output_text.annotation.added"
     static let reasoningTextDelta = "response.reasoning_text.delta"
+    static let reasoningTextDone = "response.reasoning_text.done"
     static let reasoningDelta = "response.reasoning.delta" // Deprecated, kept for older API versions
     static let reasoningSummaryDelta = "response.reasoning_summary_text.delta"
     static let reasoningSummaryDone = "response.reasoning_summary_text.done"
@@ -1683,6 +1759,12 @@ public final class ResponsesClient: APIClient, Sendable {
           yieldCurrentState()
         }
 
+      case StreamEventType.outputTextDone:
+        if let text = event.text {
+          streamingState.setFinalizedText(text, outputIndex: event.outputIndex, contentIndex: event.contentIndex)
+          yieldCurrentState()
+        }
+
       case StreamEventType.refusalDelta:
         if let delta = event.delta {
           streamingState.appendRefusalDelta(delta, outputIndex: event.outputIndex, contentIndex: event.contentIndex)
@@ -1698,6 +1780,12 @@ public final class ResponsesClient: APIClient, Sendable {
       case StreamEventType.reasoningTextDelta, StreamEventType.reasoningDelta:
         if let delta = event.delta {
           streamingState.appendReasoningDelta(delta, outputIndex: event.outputIndex)
+          yieldCurrentState()
+        }
+
+      case StreamEventType.reasoningTextDone:
+        if let text = event.text {
+          streamingState.setFinalizedReasoningText(text, outputIndex: event.outputIndex)
           yieldCurrentState()
         }
 
@@ -2557,11 +2645,13 @@ extension ResponsesClient {
     let delta: String?
     let text: String?
     let refusal: String?
+    let annotationIndex: Int?
     let itemId: String?
     let outputIndex: Int?
     let contentIndex: Int?
     let summaryIndex: Int?
     let arguments: String?
+    let annotation: AnnotationItem?
     let item: ResponseOutputItem?
     let part: ContentItem?
     let response: ResponseObject?
@@ -2573,11 +2663,13 @@ extension ResponsesClient {
       case delta
       case text
       case refusal
+      case annotationIndex = "annotation_index"
       case itemId = "item_id"
       case outputIndex = "output_index"
       case contentIndex = "content_index"
       case summaryIndex = "summary_index"
       case arguments
+      case annotation
       case item
       case part
       case response
