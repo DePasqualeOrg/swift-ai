@@ -326,6 +326,26 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               ])
             }
           }
+        case let .providerOpaque(block) where block.provider == Self.refusalOpaqueProvider && block.type == Self.refusalOpaqueType:
+          if let refusal = block.content, !refusal.isEmpty {
+            if message.role == .assistant {
+              refusalParts.append(refusal)
+            } else {
+              textParts.append(refusal)
+              multimodalContent.append([
+                "type": "text",
+                "text": refusal,
+              ])
+            }
+          }
+        case let .providerOpaque(block) where block.isResponseContent:
+          if let text = block.content, !text.isEmpty {
+            textParts.append(text)
+            multimodalContent.append([
+              "type": "text",
+              "text": text,
+            ])
+          }
         case let .attachment(attachment):
           guard message.role == .user else {
             openAILogger.warning("Attachments on \(message.role.rawValue) messages are not supported by ChatCompletions. Using fallback text.")

@@ -323,6 +323,8 @@ public final class GeminiClient: APIClient, Sendable {
           opaque.content
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
           opaque.content
+        case let .providerOpaque(opaque) where opaque.isResponseContent:
+          opaque.content
         case let .attachment(attachment):
           fallbackText(for: attachment)
         default:
@@ -522,6 +524,11 @@ public final class GeminiClient: APIClient, Sendable {
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
           if let refusal = opaque.content, !refusal.isEmpty {
             parts.append(["text": refusal])
+          }
+
+        case let .providerOpaque(opaque) where opaque.isResponseContent:
+          if let text = opaque.content, !text.isEmpty {
+            parts.append(["text": text])
           }
 
         case let .providerOpaque(opaque) where opaque.provider == "gemini" && opaque.type == "urlContextMetadata":

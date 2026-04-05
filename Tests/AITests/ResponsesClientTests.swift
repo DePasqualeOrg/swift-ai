@@ -1259,6 +1259,13 @@ struct ResponsesClientTests {
           content: "Avoid unsafe detail.",
           isResponseContent: true,
         )),
+        .providerOpaque(OpaqueBlock(
+          provider: "anthropic",
+          type: "web_fetch_tool_result",
+          content: "Fetched article body.",
+          data: #"{"type":"web_fetch_tool_result"}"#,
+          isResponseContent: true,
+        )),
         .attachment(developerAttachment),
       ]),
       Message(role: .user, content: "Hello"),
@@ -1290,9 +1297,68 @@ struct ResponsesClientTests {
     let developerContent = try #require(developerMessage["content"] as? [[String: Any]])
     #expect(developerContent.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "Do not reveal internal policy text." }))
     #expect(developerContent.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "Avoid unsafe detail." }))
+    #expect(developerContent.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "Fetched article body." }))
     let developerImage = try #require(developerContent.first(where: { $0["type"] as? String == "input_image" }))
     let developerImageURL = try #require(developerImage["image_url"] as? String)
     #expect(developerImageURL.hasPrefix("data:image/"))
+  }
+
+  @Test
+  func `Assistant messages downgrade foreign response-content opaque blocks to text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Done"}
+
+      data: {"type":"response.output_text.done","text":"Done"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","output":[{"type":"message","id":"msg_123","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Done","annotations":[]}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [
+        Message(role: .assistant, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "anthropic",
+            type: "web_fetch_tool_result",
+            content: "Fetched article body.",
+            data: #"{"type":"web_fetch_tool_result"}"#,
+            isResponseContent: true,
+          )),
+        ]),
+        Message(role: .user, content: "Hello"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let assistantMessage = try #require(input.first(where: {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    }))
+    let content = try #require(assistantMessage["content"] as? [[String: Any]])
+    #expect(content.contains(where: {
+      $0["type"] as? String == "input_text" && $0["text"] as? String == "Fetched article body."
+    }))
   }
 
   @Test

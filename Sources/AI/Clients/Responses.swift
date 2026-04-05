@@ -853,6 +853,8 @@ public final class ResponsesClient: APIClient, Sendable {
           opaque.content
         case let .providerOpaque(opaque) where opaque.provider == "openai-chat-completions" && opaque.type == "refusal":
           opaque.content
+        case let .providerOpaque(opaque) where opaque.isResponseContent:
+          opaque.content
         default:
           nil
       }
@@ -995,6 +997,17 @@ public final class ResponsesClient: APIClient, Sendable {
                   "type": ContentType.inputText,
                   "text": refusal,
                 ])
+              }
+            case let .providerOpaque(block) where block.isResponseContent && block.provider != "openai-responses":
+              if let text = block.content, !text.isEmpty {
+                var item: [String: any Sendable] = [
+                  "type": textContentType,
+                  "text": text,
+                ]
+                if currentMetadata != nil {
+                  item["annotations"] = [[String: any Sendable]]()
+                }
+                contentItems.append(item)
               }
             case let .attachment(attachment):
               if let contentItem = try await messageAttachmentContentItem(for: attachment) {

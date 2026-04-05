@@ -1354,6 +1354,8 @@ public final class AnthropicClient: APIClient, Sendable {
           opaque.content
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
           opaque.content
+        case let .providerOpaque(opaque) where opaque.isResponseContent:
+          opaque.content
         case let .attachment(attachment):
           fallbackText(for: attachment)
         default:
@@ -1411,6 +1413,10 @@ public final class AnthropicClient: APIClient, Sendable {
               }
             case ("openai-responses", "annotated_output_text"),
                  ("openai-responses", "refusal"):
+              if let text = opaqueBlock.content, !text.isEmpty {
+                contentBlocks.append(.init(type: .text, text: text))
+              }
+            case _ where opaqueBlock.isResponseContent:
               if let text = opaqueBlock.content, !text.isEmpty {
                 contentBlocks.append(.init(type: .text, text: text))
               }
