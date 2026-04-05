@@ -982,6 +982,64 @@ struct ChatCompletionsClientTests {
   }
 
   @Test
+  func `Responses annotated text and refusal replay through Chat Completions`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"id":"test","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: "annotated_output_text",
+            content: "Cited answer.",
+            data: "[{\"type\":\"url_citation\",\"url\":\"https://example.com\"}]",
+            isResponseContent: true,
+          )),
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: "refusal",
+            content: "I can't continue beyond that.",
+            isResponseContent: true,
+          )),
+        ]),
+        Message(role: .user, content: "Try again"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let assistantMessage = try #require(messages.first(where: { $0["role"] as? String == "assistant" }))
+
+    #expect(assistantMessage["content"] as? String == "Cited answer.")
+    #expect(assistantMessage["refusal"] as? String == "I can't continue beyond that.")
+  }
+
+  @Test
   func `Request includes authorization header`() async throws {
     var capturedRequest: URLRequest?
     let testId = UUID().uuidString

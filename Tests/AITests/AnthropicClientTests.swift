@@ -428,6 +428,70 @@ struct AnthropicClientTests {
     #expect(content.first?["text"] as? String == "I can't assist with that.")
   }
 
+  @Test
+  func `Responses annotated text and refusal replay as text blocks in Anthropic requests`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = AnthropicClient(
+      session: makeMockSession(),
+      messagesEndpoint: testEndpoint,
+    )
+
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: "annotated_output_text",
+            content: "Cited answer.",
+            data: "[{\"type\":\"url_citation\",\"url\":\"https://example.com\"}]",
+            isResponseContent: true,
+          )),
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: "refusal",
+            content: "I can't continue beyond that.",
+            isResponseContent: true,
+          )),
+        ]),
+        Message(role: .user, content: "Try again"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let assistantMessage = try #require(messages.first { ($0["role"] as? String) == "assistant" })
+    let content = try #require(assistantMessage["content"] as? [[String: Any]])
+    let texts = content.compactMap { $0["text"] as? String }
+    #expect(texts == ["Cited answer.", "I can't continue beyond that."])
+  }
+
   // MARK: - Network Error Tests
 
   @Test

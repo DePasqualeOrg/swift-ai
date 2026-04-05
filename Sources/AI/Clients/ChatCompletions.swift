@@ -244,6 +244,26 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             "type": "text",
             "text": text,
           ])
+        case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "annotated_output_text":
+          if let text = block.content, !text.isEmpty {
+            textParts.append(text)
+            multimodalContent.append([
+              "type": "text",
+              "text": text,
+            ])
+          }
+        case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "refusal":
+          if let refusal = block.content, !refusal.isEmpty {
+            if message.role == .assistant {
+              refusalParts.append(refusal)
+            } else {
+              textParts.append(refusal)
+              multimodalContent.append([
+                "type": "text",
+                "text": refusal,
+              ])
+            }
+          }
         case let .attachment(attachment):
           hasNonTextContent = true
           switch attachment.kind {

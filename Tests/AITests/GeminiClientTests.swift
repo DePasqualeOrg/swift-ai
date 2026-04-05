@@ -685,6 +685,62 @@ struct GeminiClientTests {
   }
 
   @Test
+  func `Responses annotated text and refusal replay as plain text in Gemini requests`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: "annotated_output_text",
+            content: "Cited answer.",
+            data: "[{\"type\":\"url_citation\",\"url\":\"https://example.com\"}]",
+            isResponseContent: true,
+          )),
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: "refusal",
+            content: "I can't continue beyond that.",
+            isResponseContent: true,
+          )),
+        ]),
+        Message(role: .user, content: "Try again"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    let modelMessage = try #require(contents.first { ($0["role"] as? String) == "model" })
+    let parts = try #require(modelMessage["parts"] as? [[String: Any]])
+    let texts = parts.compactMap { $0["text"] as? String }
+    #expect(texts == ["Cited answer.", "I can't continue beyond that."])
+  }
+
+  @Test
   func `Server-side Gemini tool history survives parse and replay`() async throws {
     var requestCount = 0
     var replayRequestBodyData: Data?

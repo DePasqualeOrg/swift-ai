@@ -472,6 +472,16 @@ public final class GeminiClient: APIClient, Sendable {
             parts.append(["text": refusal])
           }
 
+        case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "annotated_output_text":
+          if let text = opaque.content, !text.isEmpty {
+            parts.append(["text": text])
+          }
+
+        case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
+          if let refusal = opaque.content, !refusal.isEmpty {
+            parts.append(["text": refusal])
+          }
+
         case let .providerOpaque(opaque) where opaque.provider == "gemini" && opaque.type == "urlContextMetadata":
           // urlContextMetadata is candidate-level output metadata, not a request Part.
           break
