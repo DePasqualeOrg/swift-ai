@@ -106,23 +106,37 @@ extension ResponsesClient {
         var currentMetadata: [String: String]?
         var currentPhase: String?
 
+        var isReplayingOutputMessage: Bool {
+          guard let currentMetadata else { return false }
+          return currentMetadata["id"] != nil && currentMetadata["status"] != nil
+        }
+
         var textContentType: String {
-          currentMetadata != nil ? ContentType.outputText : ContentType.inputText
+          isReplayingOutputMessage ? ContentType.outputText : ContentType.inputText
+        }
+
+        var currentMessageRole: String {
+          isReplayingOutputMessage ? "assistant" : "user"
+        }
+
+        func clearCurrentMetadata() {
+          currentMetadata = nil
+          currentPhase = nil
         }
 
         func flushContentItems() {
           guard !contentItems.isEmpty else { return }
           var messageItem: [String: any Sendable] = [
             "type": ContentType.message,
-            "role": "assistant",
+            "role": currentMessageRole,
             "content": contentItems,
           ]
-          if let metadata = currentMetadata {
+          if isReplayingOutputMessage, let metadata = currentMetadata {
             if let id = metadata["id"] { messageItem["id"] = id }
             if let status = metadata["status"] { messageItem["status"] = status }
-          }
-          if let currentPhase {
-            messageItem["phase"] = currentPhase
+            if let currentPhase {
+              messageItem["phase"] = currentPhase
+            }
           }
           items.append(messageItem)
           contentItems.removeAll(keepingCapacity: true)
@@ -147,7 +161,7 @@ extension ResponsesClient {
                 "type": textContentType,
                 "text": text,
               ]
-              if currentMetadata != nil {
+              if isReplayingOutputMessage {
                 item["annotations"] = [[String: any Sendable]]()
               }
               contentItems.append(item)
@@ -157,7 +171,7 @@ extension ResponsesClient {
                 "type": textContentType,
                 "text": text,
               ]
-              if currentMetadata != nil {
+              if isReplayingOutputMessage {
                 item["annotations"] = [[String: any Sendable]]()
               }
               contentItems.append(item)
@@ -167,7 +181,7 @@ extension ResponsesClient {
                   "type": textContentType,
                   "text": text,
                 ]
-                if currentMetadata != nil {
+                if isReplayingOutputMessage {
                   let annotations: [[String: any Sendable]] = if let jsonString = block.data,
                                                                  let jsonData = jsonString.data(using: .utf8),
                                                                  let parsedAnnotations = try? JSONSerialization.jsonObject(with: jsonData) as? [[String: any Sendable]]
@@ -182,7 +196,7 @@ extension ResponsesClient {
               }
             case let .providerOpaque(block) where block.isOpenAIResponsesRefusal:
               if let refusal = block.content {
-                if currentMetadata != nil {
+                if isReplayingOutputMessage {
                   contentItems.append([
                     "type": OutputItemType.refusal,
                     "refusal": refusal,
@@ -207,7 +221,7 @@ extension ResponsesClient {
                   "type": textContentType,
                   "text": text,
                 ]
-                if currentMetadata != nil {
+                if isReplayingOutputMessage {
                   item["annotations"] = [[String: any Sendable]]()
                 }
                 contentItems.append(item)
@@ -216,7 +230,7 @@ extension ResponsesClient {
               if let contentItem = try await messageAttachmentContentItem(for: attachment) {
                 if currentMetadata != nil {
                   flushContentItems()
-                  currentMetadata = nil
+                  clearCurrentMetadata()
                 }
                 contentItems.append(contentItem)
               }
@@ -263,7 +277,7 @@ extension ResponsesClient {
               {
                 items.append(parsed)
               } else if block.isResponseContent, let text = block.content, !text.isEmpty {
-                currentMetadata = nil
+                clearCurrentMetadata()
                 contentItems.append([
                   "type": ContentType.inputText,
                   "text": text,

@@ -58,6 +58,62 @@ struct MessageTests {
   }
 
   @Test
+  func `Patching orphaned tool calls treats later matching results as satisfied`() {
+    let toolCall = ToolCall(
+      name: "search",
+      id: "call_late",
+      parameters: ["query": .string("history")],
+    )
+    let lateResult = ToolResult(
+      name: "search",
+      id: "call_late",
+      content: [.text("Late result")],
+    )
+
+    let messages = [
+      Message(role: .assistant, content: [
+        .text("Let me check that."),
+        .toolCall(toolCall),
+      ]),
+      Message(role: .user, content: "Still waiting"),
+      Message(role: .tool, content: [
+        .toolResult(lateResult),
+      ]),
+    ]
+
+    #expect(Message.patchingOrphanedToolCalls(messages) == messages)
+  }
+
+  @Test
+  func `Patching orphaned tool calls accepts matching results spread across consecutive tool messages`() {
+    let firstCall = ToolCall(
+      name: "search",
+      id: "call_1",
+      parameters: ["query": .string("history")],
+    )
+    let secondCall = ToolCall(
+      name: "lookup",
+      id: "call_2",
+      parameters: ["id": .string("42")],
+    )
+
+    let messages = [
+      Message(role: .assistant, content: [
+        .toolCall(firstCall),
+        .toolCall(secondCall),
+      ]),
+      Message(role: .tool, content: [
+        .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Result 1"))),
+      ]),
+      Message(role: .tool, content: [
+        .toolResult(ToolResult(name: "lookup", id: "call_2", content: .text("Result 2"))),
+      ]),
+    ]
+
+    #expect(Message.patchingOrphanedToolCalls(messages) == messages)
+  }
+
+  @Test
   func `Collapsing tool calls preserves visible replayable text and attachments`() throws {
     let toolCall = ToolCall(
       name: "search",
@@ -155,5 +211,12 @@ struct MessageTests {
     }
 
     #expect(collapsedAttachment == attachment)
+  }
+}
+
+private extension Message.Content {
+  var toolResult: ToolResult? {
+    guard case let .toolResult(toolResult) = self else { return nil }
+    return toolResult
   }
 }

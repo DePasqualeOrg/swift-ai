@@ -1509,10 +1509,14 @@ struct ResponsesClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
-    let assistantMessage = try #require(input.first(where: {
-      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    let replayedMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: {
+        $0["type"] as? String == "input_text" && $0["text"] as? String == "Fetched article body."
+      }) == true
     }))
-    let content = try #require(assistantMessage["content"] as? [[String: Any]])
+    let content = try #require(replayedMessage["content"] as? [[String: Any]])
     #expect(content.contains(where: {
       $0["type"] as? String == "input_text" && $0["text"] as? String == "Fetched article body."
     }))
@@ -1566,10 +1570,14 @@ struct ResponsesClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
-    let assistantMessage = try #require(input.first(where: {
-      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    let replayedMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: {
+        $0["type"] as? String == "input_text" && $0["text"] as? String == "Search snippet"
+      }) == true
     }))
-    let content = try #require(assistantMessage["content"] as? [[String: Any]])
+    let content = try #require(replayedMessage["content"] as? [[String: Any]])
     #expect(content.contains(where: {
       $0["type"] as? String == "input_text" && $0["text"] as? String == "Search snippet"
     }))
@@ -1626,10 +1634,12 @@ struct ResponsesClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
-    let assistantMessage = try #require(input.first(where: {
-      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    let replayedMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: { $0["type"] as? String == "input_file" && $0["filename"] as? String == "context.pdf" }) == true
     }))
-    let content = try #require(assistantMessage["content"] as? [[String: Any]])
+    let content = try #require(replayedMessage["content"] as? [[String: Any]])
 
     #expect(content.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "Keep these results in mind." }))
     let imageContent = try #require(content.first(where: { $0["type"] as? String == "input_image" }))
@@ -1697,12 +1707,11 @@ struct ResponsesClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
-    let assistantMessages = input.filter {
-      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
-    }
-    #expect(assistantMessages.count == 2)
-
-    let replayedOutputMessage = assistantMessages[0]
+    let replayedOutputMessage = try #require(input.first(where: { item in
+      item["type"] as? String == "message"
+        && item["role"] as? String == "assistant"
+        && item["id"] as? String == "msg_123"
+    }))
     #expect(replayedOutputMessage["id"] as? String == "msg_123")
     #expect(replayedOutputMessage["status"] as? String == "completed")
     #expect(replayedOutputMessage["phase"] as? String == "commentary")
@@ -1711,10 +1720,14 @@ struct ResponsesClientTests {
     #expect(replayedOutputContent[0]["type"] as? String == "output_text")
     #expect(replayedOutputContent[0]["text"] as? String == "Earlier answer.")
 
-    let downgradedAssistantMessage = assistantMessages[1]
-    #expect(downgradedAssistantMessage["id"] == nil)
-    #expect(downgradedAssistantMessage["phase"] as? String == "commentary")
-    let downgradedContent = try #require(downgradedAssistantMessage["content"] as? [[String: Any]])
+    let downgradedUserMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: { $0["type"] as? String == "input_file" && $0["filename"] as? String == "notes.pdf" }) == true
+    }))
+    #expect(downgradedUserMessage["id"] == nil)
+    #expect(downgradedUserMessage["phase"] == nil)
+    let downgradedContent = try #require(downgradedUserMessage["content"] as? [[String: Any]])
     #expect(downgradedContent[0]["type"] as? String == "input_file")
     #expect(downgradedContent[0]["filename"] as? String == "notes.pdf")
     #expect(downgradedContent[1]["type"] as? String == "input_text")
@@ -1858,11 +1871,15 @@ struct ResponsesClientTests {
     #expect(summary[0]["type"] as? String == "summary_text")
     #expect(summary[0]["text"] as? String == "Let me think step by step.")
 
-    // Manually constructed assistant messages (without message_metadata) use input_text
-    let assistantMsg = try #require(input.first(where: {
-      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    // Manually constructed assistant messages (without message_metadata) downgrade to a legal user input message.
+    let replayedMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: {
+        $0["type"] as? String == "input_text" && $0["text"] as? String == "The answer is 42."
+      }) == true
     }))
-    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    let content = try #require(replayedMessage["content"] as? [[String: Any]])
     #expect(content.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "The answer is 42." }))
   }
 
@@ -1927,10 +1944,14 @@ struct ResponsesClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
-    let assistantMsg = try #require(input.first(where: {
-      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    let replayedMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: {
+        $0["type"] as? String == "input_text" && $0["text"] as? String == "See this source."
+      }) == true
     }))
-    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    let content = try #require(replayedMessage["content"] as? [[String: Any]])
 
     // Without metadata, annotated text should become plain input_text without annotations
     let annotatedItem = try #require(content.first(where: { $0["text"] as? String == "See this source." }))
@@ -1998,10 +2019,14 @@ struct ResponsesClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
-    let assistantMsg = try #require(input.first(where: {
-      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    let replayedMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: {
+        $0["type"] as? String == "input_text" && $0["text"] as? String == "Cited answer."
+      }) == true
     }))
-    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    let content = try #require(replayedMessage["content"] as? [[String: Any]])
     let texts = content.compactMap { $0["text"] as? String }
     #expect(texts == ["Cited answer.", citationNotes])
   }

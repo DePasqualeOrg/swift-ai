@@ -1103,10 +1103,14 @@ struct ChatCompletionsClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedResponsesBody)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
-    let assistantMsg = try #require(input.first(where: {
-      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    let replayedMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: {
+        $0["type"] as? String == "input_text" && $0["text"] as? String == "I can't assist with that."
+      }) == true
     }))
-    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    let content = try #require(replayedMessage["content"] as? [[String: Any]])
     let refusalItem = try #require(content.first(where: { $0["text"] as? String == "I can't assist with that." }))
     #expect(refusalItem["type"] as? String == "input_text")
   }

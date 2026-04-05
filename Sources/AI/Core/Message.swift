@@ -143,7 +143,6 @@ public extension Message {
     for message in messages {
       result.append(message)
 
-      // Collect orphaned tool calls in this message
       var orphanedResults: [Content] = []
       for item in message.content {
         guard case let .toolCall(toolCall) = item, orphanedIds.contains(toolCall.id) else { continue }
