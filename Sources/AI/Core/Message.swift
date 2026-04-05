@@ -147,6 +147,18 @@ public extension Message {
 // MARK: - Tool Collapsing Utilities
 
 public extension Message {
+  private func collapsedVisibleText() -> String {
+    content.compactMap { item -> String? in
+      switch item {
+        case let .text(text): text
+        case let .endnotes(endnotes): endnotes
+        case let .providerOpaque(opaque) where opaque.isResponseContent:
+          opaque.content
+        default: nil
+      }
+    }.joined(separator: "\n\n")
+  }
+
   /// Returns a new message with tool_use content collapsed to descriptive text.
   /// Used when a provider can't satisfy metadata requirements for historical tool turns.
   func collapsingToolCalls() -> Message {
@@ -154,13 +166,7 @@ public extension Message {
       guard case let .attachment(attachment) = item else { return nil }
       return attachment
     }
-    var text = content.compactMap { item -> String? in
-      switch item {
-        case let .text(text): text
-        case let .endnotes(endnotes): endnotes
-        default: nil
-      }
-    }.joined(separator: "\n\n")
+    var text = collapsedVisibleText()
     for item in content {
       guard case let .toolCall(toolCall) = item else { continue }
       let paramsJSON: String = if let data = toolCall.parametersToData(),
@@ -188,13 +194,7 @@ public extension Message {
       guard case let .attachment(attachment) = item else { return nil }
       return attachment
     }
-    var text = content.compactMap { item -> String? in
-      switch item {
-        case let .text(text): text
-        case let .endnotes(endnotes): endnotes
-        default: nil
-      }
-    }.joined(separator: "\n\n")
+    var text = collapsedVisibleText()
 
     for item in content {
       guard case let .toolResult(toolResult) = item else { continue }

@@ -564,6 +564,111 @@ struct AnthropicClientTests {
   }
 
   @Test
+  func `Thinking fallback preserves visible opaque response text when collapsing tool history`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let toolCall = ToolCall(
+      name: "search",
+      id: "toolu_hist_1",
+      parameters: ["query": .string("history")],
+    )
+    let toolResult = ToolResult(
+      name: "search",
+      id: "toolu_hist_1",
+      content: [.text("Search result summary")],
+    )
+
+    let client = AnthropicClient(
+      session: makeMockSession(),
+      messagesEndpoint: testEndpoint,
+    )
+
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: "annotated_output_text",
+            content: "Cited preface.",
+            data: "[]",
+            isResponseContent: true,
+          )),
+          .providerOpaque(OpaqueBlock(
+            provider: "anthropic",
+            type: "web_fetch_tool_result",
+            content: "Fetched excerpt.",
+            isResponseContent: true,
+          )),
+          .toolCall(toolCall),
+        ]),
+        Message(role: .tool, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "gemini",
+            type: "codeExecutionResult",
+            content: "Execution output: 42",
+            isResponseContent: true,
+          )),
+          .toolResult(toolResult),
+        ]),
+        Message(role: .user, content: "Try again"),
+      ],
+      maxTokens: 2048,
+      apiKey: "test-key",
+      configuration: .init(maxThinkingTokens: 1024),
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let thinking = try #require(body?["thinking"] as? [String: Any])
+    #expect(thinking["type"] as? String == "enabled")
+
+    let requestMessages = try #require(body?["messages"] as? [[String: Any]])
+
+    let assistantMessage = try #require(requestMessages.first(where: { ($0["role"] as? String) == "assistant" }))
+    let assistantContent = try #require(assistantMessage["content"] as? [[String: Any]])
+    let assistantText = assistantContent.compactMap { $0["text"] as? String }.joined(separator: "\n")
+    #expect(assistantText.contains("Cited preface."))
+    #expect(assistantText.contains("Fetched excerpt."))
+    #expect(assistantText.contains(#"[Called tool "search" with: {"query":"history"}]"#))
+
+    let collapsedToolResultMessage = try #require(requestMessages.first(where: { message in
+      guard (message["role"] as? String) == "user",
+            let content = message["content"] as? [[String: Any]]
+      else {
+        return false
+      }
+      return content.compactMap { $0["text"] as? String }.joined(separator: "\n").contains("Execution output: 42")
+    }))
+    let collapsedToolResultContent = try #require(collapsedToolResultMessage["content"] as? [[String: Any]])
+    let collapsedToolResultText = collapsedToolResultContent.compactMap { $0["text"] as? String }.joined(separator: "\n")
+    #expect(collapsedToolResultText.contains("Execution output: 42"))
+    #expect(collapsedToolResultText.contains(#"[Result from tool "search": Search result summary]"#))
+  }
+
+  @Test
   func `System prompt preserves replayable text and attachment fallbacks from history`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
