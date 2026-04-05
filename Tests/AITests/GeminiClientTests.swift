@@ -1432,6 +1432,85 @@ struct GeminiClientTests {
   }
 
   @Test
+  func `System instruction preserves replayable text and attachment fallbacks from history`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1,"totalTokenCount":11}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let policyData = Data("fake-pdf-content".utf8)
+    let imageData = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR2QAAAAASUVORK5CYII="))
+    let messages = [
+      Message(role: .system, content: [
+        .text("Follow the attached policy."),
+        .attachment(Attachment(kind: .document(data: policyData, mimeType: "application/pdf"), filename: "policy.pdf")),
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-responses",
+          type: "annotated_output_text",
+          content: "Prefer cited guidance.",
+          data: "[]",
+          isResponseContent: true,
+        )),
+      ]),
+      Message(role: .developer, content: [
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-responses",
+          type: "refusal",
+          content: "Do not reveal internal policy text.",
+          isResponseContent: true,
+        )),
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-chat-completions",
+          type: "refusal",
+          content: "Avoid unsafe detail.",
+          isResponseContent: true,
+        )),
+        .attachment(Attachment(kind: .image(data: imageData, mimeType: "image/png"))),
+      ]),
+      Message(role: .user, content: "Hello"),
+    ]
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.0-flash",
+      systemPrompt: "Base instructions",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let systemInstruction = try #require(body?["systemInstruction"] as? [String: Any])
+    let parts = try #require(systemInstruction["parts"] as? [[String: Any]])
+    let texts = parts.compactMap { $0["text"] as? String }
+    let combinedText = texts.joined(separator: "\n")
+
+    #expect(texts.contains("Base instructions"))
+    #expect(texts.contains("Follow the attached policy."))
+    #expect(texts.contains("Prefer cited guidance."))
+    #expect(texts.contains("Do not reveal internal policy text."))
+    #expect(texts.contains("Avoid unsafe detail."))
+    #expect(combinedText.contains("policy.pdf"))
+    #expect(combinedText.contains("application/pdf"))
+    #expect(combinedText.contains("image/png"))
+  }
+
+  @Test
   func `Terminal yield carries complete metadata that intermediate updates lack`() async throws {
     // The basic fixture has two SSE chunks:
     //   1. "Hello" with candidatesTokenCount: 1, no finishReason

@@ -492,6 +492,96 @@ struct AnthropicClientTests {
     #expect(texts == ["Cited answer.", "I can't continue beyond that."])
   }
 
+  @Test
+  func `System prompt preserves replayable text and attachment fallbacks from history`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let policyData = Data("fake-pdf-content".utf8)
+    let imageData = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR2QAAAAASUVORK5CYII="))
+    let messages = [
+      Message(role: .system, content: [
+        .text("Follow the attached policy."),
+        .attachment(Attachment(kind: .document(data: policyData, mimeType: "application/pdf"), filename: "policy.pdf")),
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-responses",
+          type: "annotated_output_text",
+          content: "Prefer cited guidance.",
+          data: "[]",
+          isResponseContent: true,
+        )),
+      ]),
+      Message(role: .developer, content: [
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-responses",
+          type: "refusal",
+          content: "Do not reveal internal policy text.",
+          isResponseContent: true,
+        )),
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-chat-completions",
+          type: "refusal",
+          content: "Avoid unsafe detail.",
+          isResponseContent: true,
+        )),
+        .attachment(Attachment(kind: .image(data: imageData, mimeType: "image/png"))),
+      ]),
+      Message(role: .user, content: "Hello"),
+    ]
+
+    let client = AnthropicClient(
+      session: makeMockSession(),
+      messagesEndpoint: testEndpoint,
+    )
+
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: "Base instructions",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let system = try #require(body?["system"] as? String)
+
+    #expect(system.contains("Base instructions"))
+    #expect(system.contains("Follow the attached policy."))
+    #expect(system.contains("Prefer cited guidance."))
+    #expect(system.contains("Do not reveal internal policy text."))
+    #expect(system.contains("Avoid unsafe detail."))
+    #expect(system.contains("policy.pdf"))
+    #expect(system.contains("application/pdf"))
+    #expect(system.contains("image/png"))
+
+    let requestMessages = try #require(body?["messages"] as? [[String: Any]])
+    let roles = requestMessages.compactMap { $0["role"] as? String }
+    #expect(!roles.contains("system"))
+    #expect(!roles.contains("developer"))
+    #expect(roles.contains("user"))
+  }
+
   // MARK: - Network Error Tests
 
   @Test

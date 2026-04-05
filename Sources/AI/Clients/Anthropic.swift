@@ -1326,6 +1326,48 @@ public final class AnthropicClient: APIClient, Sendable {
     }
   }
 
+  private static func fallbackText(for attachment: Attachment) -> String {
+    switch attachment.kind {
+      case let .image(data, mimeType):
+        return ToolResult.Content.image(data, mimeType: mimeType).fallbackDescription
+      case let .audio(data, mimeType):
+        return ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription
+      case let .document(data, mimeType):
+        return ToolResult.Content.file(data, mimeType: mimeType, filename: attachment.filename).fallbackDescription
+      case let .video(data, mimeType):
+        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+        let filename = attachment.filename.map { "\($0) " } ?? ""
+        return "[Unsupported attachment: \(filename)\(mimeType), \(size)]"
+    }
+  }
+
+  private static func systemInstructionTexts(for message: Message) -> [String] {
+    var texts: [String] = []
+
+    for block in message.content {
+      let text: String? = switch block {
+        case let .text(text) where !text.isEmpty:
+          text
+        case let .providerOpaque(opaque) where opaque.provider == "openai-chat-completions" && opaque.type == "refusal":
+          opaque.content
+        case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "annotated_output_text":
+          opaque.content
+        case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
+          opaque.content
+        case let .attachment(attachment):
+          fallbackText(for: attachment)
+        default:
+          nil
+      }
+
+      if let text, !text.isEmpty {
+        texts.append(text)
+      }
+    }
+
+    return texts
+  }
+
   private func anthropicContentBlocks(for message: Message) async throws -> [AnthropicClient.ContentBlockParam] {
     var contentBlocks: [AnthropicClient.ContentBlockParam] = []
 
@@ -2410,13 +2452,7 @@ public extension AnthropicClient {
       var messageParams: [AnthropicClient.MessageParam] = []
       for message in processedMessages {
         if message.role == .system || message.role == .developer {
-          let text = message.content.compactMap { block -> String? in
-            if case let .text(text) = block { return text }
-            return nil
-          }.joined(separator: "\n")
-          if !text.isEmpty {
-            additionalSystemTexts.append(text)
-          }
+          additionalSystemTexts.append(contentsOf: Self.systemInstructionTexts(for: message))
           continue
         }
         let contentBlocks = try await anthropicContentBlocks(for: message)

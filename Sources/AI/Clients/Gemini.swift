@@ -295,6 +295,48 @@ public final class GeminiClient: APIClient, Sendable {
     return Message.assistantContent(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
   }
 
+  private static func fallbackText(for attachment: Attachment) -> String {
+    switch attachment.kind {
+      case let .image(data, mimeType):
+        return ToolResult.Content.image(data, mimeType: mimeType).fallbackDescription
+      case let .audio(data, mimeType):
+        return ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription
+      case let .document(data, mimeType):
+        return ToolResult.Content.file(data, mimeType: mimeType, filename: attachment.filename).fallbackDescription
+      case let .video(data, mimeType):
+        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+        let filename = attachment.filename.map { "\($0) " } ?? ""
+        return "[Unsupported attachment: \(filename)\(mimeType), \(size)]"
+    }
+  }
+
+  private static func systemInstructionParts(for message: Message) -> [[String: any Sendable]] {
+    var parts: [[String: any Sendable]] = []
+
+    for block in message.content {
+      let text: String? = switch block {
+        case let .text(text) where !text.isEmpty:
+          text
+        case let .providerOpaque(opaque) where opaque.provider == "openai-chat-completions" && opaque.type == "refusal":
+          opaque.content
+        case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "annotated_output_text":
+          opaque.content
+        case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
+          opaque.content
+        case let .attachment(attachment):
+          fallbackText(for: attachment)
+        default:
+          nil
+      }
+
+      if let text, !text.isEmpty {
+        parts.append(["text": text])
+      }
+    }
+
+    return parts
+  }
+
   private func requestParts(for message: Message, apiKey: String) async throws -> [[String: any Sendable]] {
     var parts: [[String: any Sendable]] = []
 
@@ -543,13 +585,7 @@ public final class GeminiClient: APIClient, Sendable {
     for message in patchedMessages {
       switch message.role {
         case .system, .developer:
-          let text = message.content.compactMap { block -> String? in
-            if case let .text(text) = block { return text }
-            return nil
-          }.joined(separator: "\n")
-          if !text.isEmpty {
-            additionalSystemParts.append(["text": text])
-          }
+          additionalSystemParts.append(contentsOf: Self.systemInstructionParts(for: message))
         case .assistant, .user, .tool:
           let parts = try await requestParts(for: message, apiKey: apiKey)
           guard !parts.isEmpty else { continue }
