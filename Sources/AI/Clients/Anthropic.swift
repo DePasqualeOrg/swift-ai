@@ -1408,6 +1408,9 @@ public final class AnthropicClient: APIClient, Sendable {
                   type: ContentBlockType(rawValue: blockType) ?? .serverToolUse,
                   rawValue: rawValue,
                 ))
+              } else if opaqueBlock.isResponseContent, let text = opaqueBlock.content, !text.isEmpty {
+                // If the native block lost its raw JSON, keep the visible output.
+                contentBlocks.append(.init(type: .text, text: text))
               }
             case ("openai-chat-completions", "refusal"):
               if let refusal = opaqueBlock.content, !refusal.isEmpty {

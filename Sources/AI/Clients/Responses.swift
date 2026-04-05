@@ -1068,6 +1068,14 @@ public final class ResponsesClient: APIClient, Sendable {
                  let parsed = try? JSONSerialization.jsonObject(with: jsonData) as? [String: any Sendable]
               {
                 items.append(parsed)
+              } else if block.isResponseContent, let text = block.content, !text.isEmpty {
+                // If a native Responses opaque block is missing raw JSON, downgrade it
+                // to plain assistant text instead of dropping the visible output.
+                currentMetadata = nil
+                contentItems.append([
+                  "type": ContentType.inputText,
+                  "text": text,
+                ])
               }
             default:
               break

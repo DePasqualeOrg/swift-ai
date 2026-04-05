@@ -511,6 +511,10 @@ public final class GeminiClient: APIClient, Sendable {
         && Self.roundTrippableOpaquePartTypes.contains(opaque.type):
           if let jsonObject = Self.geminiJSONObject(from: opaque) {
             parts.append([opaque.type: jsonObject])
+          } else if opaque.isResponseContent, let text = opaque.content, !text.isEmpty {
+            // If a manually constructed Gemini opaque block is missing raw JSON,
+            // preserve its visible output rather than dropping the history item.
+            parts.append(["text": text])
           }
 
         case let .providerOpaque(opaque) where opaque.provider == "openai-chat-completions" && opaque.type == "refusal":
