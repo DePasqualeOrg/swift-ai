@@ -16,7 +16,66 @@ struct GeminiStreamChunk {
 }
 
 struct GeminiPartialToolCallState {
-  var current: ToolCall?
+  private var activeToolCallsByID: [String: ToolCall] = [:]
+  private var activeToolCallOrder: [String] = []
+
+  var soleActiveToolCall: ToolCall? {
+    guard activeToolCallOrder.count == 1,
+          let activeToolCallID = activeToolCallOrder.first
+    else {
+      return nil
+    }
+    return activeToolCallsByID[activeToolCallID]
+  }
+
+  var mostRecentActiveToolCall: ToolCall? {
+    guard let activeToolCallID = activeToolCallOrder.last else {
+      return nil
+    }
+    return activeToolCallsByID[activeToolCallID]
+  }
+
+  var hasMultipleActiveToolCalls: Bool {
+    activeToolCallOrder.count > 1
+  }
+
+  func activeToolCall(id: String) -> ToolCall? {
+    activeToolCallsByID[id]
+  }
+
+  func uniqueActiveToolCall(named name: String) -> ToolCall? {
+    let matches: [ToolCall] = activeToolCallOrder.compactMap { toolCallID in
+      guard let toolCall = activeToolCallsByID[toolCallID], toolCall.name == name else {
+        return nil
+      }
+      return toolCall
+    }
+    guard matches.count == 1 else {
+      return nil
+    }
+    return matches[0]
+  }
+
+  func mostRecentActiveToolCall(named name: String) -> ToolCall? {
+    for toolCallID in activeToolCallOrder.reversed() {
+      guard let toolCall = activeToolCallsByID[toolCallID], toolCall.name == name else {
+        continue
+      }
+      return toolCall
+    }
+    return nil
+  }
+
+  mutating func setActive(_ toolCall: ToolCall) {
+    activeToolCallOrder.removeAll { $0 == toolCall.id }
+    activeToolCallOrder.append(toolCall.id)
+    activeToolCallsByID[toolCall.id] = toolCall
+  }
+
+  mutating func clearActive(id: String) {
+    activeToolCallsByID.removeValue(forKey: id)
+    activeToolCallOrder.removeAll { $0 == id }
+  }
 }
 
 enum GeminiJSONPathComponent {
@@ -450,21 +509,21 @@ enum GeminiStreamTransport {
     partialToolCallState: inout GeminiPartialToolCallState,
   ) throws -> ToolCall? {
     let thoughtSignature = part["thoughtSignature"] as? String
-    let existingToolCall = partialToolCallState.current
+    let explicitToolCallID = functionCall["id"] as? String
+    let explicitName = functionCall["name"] as? String
+    let continuationToolCall = resolveActiveToolCall(
+      id: explicitToolCallID,
+      name: explicitName,
+      partialToolCallState: partialToolCallState,
+    )
 
     if let args = functionCall["args"] as? [String: any Sendable] {
-      let explicitName = functionCall["name"] as? String
-      let name = explicitName ?? existingToolCall?.name
+      let name = explicitName ?? continuationToolCall?.name
       guard let name else {
         geminiTransportLogger.warning("Dropping Gemini functionCall chunk with args but no function name")
         return nil
       }
-      let continuationToolCall: ToolCall? = if explicitName == nil || explicitName == existingToolCall?.name {
-        existingToolCall
-      } else {
-        nil
-      }
-      let toolCallId = (functionCall["id"] as? String)
+      let toolCallId = explicitToolCallID
         ?? continuationToolCall?.id
         ?? generateShortId()
       let parameters = try args.mapValues { try Value.fromAny($0) }
@@ -477,22 +536,23 @@ enum GeminiStreamTransport {
           thoughtSignature: thoughtSignature,
         ),
       )
-      if let willContinue = functionCall["willContinue"] as? Bool, willContinue {
-        partialToolCallState.current = toolCall
-      } else {
-        partialToolCallState.current = nil
-      }
+      updateActiveToolCall(
+        &partialToolCallState,
+        toolCall: toolCall,
+        willContinue: functionCall["willContinue"] as? Bool,
+        defaultsToActive: false,
+      )
       return toolCall
     }
 
     if let partialArgs = functionCall["partialArgs"] as? [[String: any Sendable]] {
-      let name = (functionCall["name"] as? String) ?? existingToolCall?.name
+      let name = explicitName ?? continuationToolCall?.name
       guard let name else {
         geminiTransportLogger.warning("Dropping Gemini partial functionCall chunk with no active function name")
         return nil
       }
-      let toolCallId = (functionCall["id"] as? String) ?? existingToolCall?.id ?? generateShortId()
-      var toolCall = existingToolCall ?? ToolCall(
+      let toolCallId = explicitToolCallID ?? continuationToolCall?.id ?? generateShortId()
+      var toolCall = continuationToolCall ?? ToolCall(
         name: name,
         id: toolCallId,
         parameters: [:],
@@ -500,40 +560,92 @@ enum GeminiStreamTransport {
       )
       toolCall.name = name
       toolCall.providerMetadata = mergedProviderMetadata(
-        existing: existingToolCall?.providerMetadata,
+        existing: continuationToolCall?.providerMetadata,
         thoughtSignature: thoughtSignature,
       )
       try applyPartialArgs(partialArgs, to: &toolCall.parameters)
-      if let willContinue = functionCall["willContinue"] as? Bool, willContinue {
-        partialToolCallState.current = toolCall
-      } else {
-        partialToolCallState.current = nil
-      }
+      updateActiveToolCall(
+        &partialToolCallState,
+        toolCall: toolCall,
+        willContinue: functionCall["willContinue"] as? Bool,
+        defaultsToActive: false,
+      )
       return toolCall
     }
 
-    if let name = functionCall["name"] as? String {
-      let toolCallId = (functionCall["id"] as? String) ?? generateShortId()
-      let toolCall = ToolCall(
-        name: name,
+    if let explicitName {
+      // Name-only chunks without ids mark the start of a new streamed tool call.
+      let existingToolCall = explicitToolCallID.flatMap { partialToolCallState.activeToolCall(id: $0) }
+      let toolCallId = explicitToolCallID ?? generateShortId()
+      var toolCall = existingToolCall ?? ToolCall(
+        name: explicitName,
         id: toolCallId,
         parameters: [:],
-        providerMetadata: mergedProviderMetadata(existing: nil, thoughtSignature: thoughtSignature),
+        providerMetadata: nil,
       )
-      partialToolCallState.current = toolCall
+      toolCall.name = explicitName
+      toolCall.providerMetadata = mergedProviderMetadata(
+        existing: existingToolCall?.providerMetadata,
+        thoughtSignature: thoughtSignature,
+      )
+      updateActiveToolCall(
+        &partialToolCallState,
+        toolCall: toolCall,
+        willContinue: functionCall["willContinue"] as? Bool,
+        defaultsToActive: true,
+      )
       return toolCall
     }
 
-    if thoughtSignature != nil, var toolCall = partialToolCallState.current {
+    let thoughtSignatureToolCall =
+      if let explicitToolCallID {
+        partialToolCallState.activeToolCall(id: explicitToolCallID)
+      } else {
+        partialToolCallState.soleActiveToolCall
+      }
+
+    if thoughtSignature != nil, var toolCall = thoughtSignatureToolCall {
       toolCall.providerMetadata = mergedProviderMetadata(
         existing: toolCall.providerMetadata,
         thoughtSignature: thoughtSignature,
       )
-      partialToolCallState.current = toolCall
+      partialToolCallState.setActive(toolCall)
       return toolCall
+    } else if let explicitToolCallID, thoughtSignature != nil {
+      geminiTransportLogger.warning("Dropping Gemini thoughtSignature chunk with unknown function call id '\(explicitToolCallID)'")
+    } else if thoughtSignature != nil, partialToolCallState.hasMultipleActiveToolCalls {
+      geminiTransportLogger.warning("Dropping Gemini thoughtSignature chunk because multiple tool calls are active")
     }
 
     return nil
+  }
+
+  private static func resolveActiveToolCall(
+    id explicitToolCallID: String?,
+    name explicitName: String?,
+    partialToolCallState: GeminiPartialToolCallState,
+  ) -> ToolCall? {
+    if let explicitToolCallID {
+      return partialToolCallState.activeToolCall(id: explicitToolCallID)
+    }
+    if let explicitName {
+      return partialToolCallState.uniqueActiveToolCall(named: explicitName)
+        ?? partialToolCallState.mostRecentActiveToolCall(named: explicitName)
+    }
+    return partialToolCallState.soleActiveToolCall ?? partialToolCallState.mostRecentActiveToolCall
+  }
+
+  private static func updateActiveToolCall(
+    _ partialToolCallState: inout GeminiPartialToolCallState,
+    toolCall: ToolCall,
+    willContinue: Bool?,
+    defaultsToActive: Bool,
+  ) {
+    if willContinue ?? defaultsToActive {
+      partialToolCallState.setActive(toolCall)
+    } else {
+      partialToolCallState.clearActive(id: toolCall.id)
+    }
   }
 
   private static func mergedProviderMetadata(

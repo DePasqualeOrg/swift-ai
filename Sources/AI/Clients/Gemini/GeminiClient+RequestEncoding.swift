@@ -70,17 +70,10 @@ enum GeminiRequestEncoder {
             case .tool: "user"
             default: message.role.rawValue
           }
-          if let lastRole = processedMessages.last?["role"] as? String, lastRole == role,
-             var lastParts = processedMessages.last?["parts"] as? [[String: any Sendable]]
-          {
-            lastParts.append(contentsOf: parts)
-            processedMessages[processedMessages.count - 1]["parts"] = lastParts
-          } else {
-            processedMessages.append([
-              "role": role,
-              "parts": parts,
-            ])
-          }
+          processedMessages.append([
+            "role": role,
+            "parts": parts,
+          ])
       }
     }
 
@@ -92,6 +85,8 @@ enum GeminiRequestEncoder {
         thinkingBudget: configuration.thinkingBudget,
         thinkingLevel: configuration.thinkingLevel,
       ),
+      // Intentionally always send explicit safety settings. This client defaults to BLOCK_NONE so
+      // requests keep the library's established behavior instead of inheriting Gemini's server defaults.
       "safetySettings": [
         ["category": "HARM_CATEGORY_HARASSMENT", "threshold": configuration.safetyThreshold.rawValue],
         ["category": "HARM_CATEGORY_HATE_SPEECH", "threshold": configuration.safetyThreshold.rawValue],

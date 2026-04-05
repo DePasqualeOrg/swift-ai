@@ -624,6 +624,73 @@ struct GeminiClientTests {
   }
 
   @Test
+  func `Request body preserves separate tool-result and user turns`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(
+            name: "get_weather",
+            id: "call_weather_1",
+            parameters: ["location": .string("Paris")],
+          )),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(
+            name: "get_weather",
+            id: "call_weather_1",
+            content: [.text("Sunny")],
+          )),
+        ]),
+        Message(role: .user, content: "What about tomorrow?"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    #expect(contents.count == 3)
+
+    #expect(contents[0]["role"] as? String == "model")
+    let assistantParts = try #require(contents[0]["parts"] as? [[String: Any]])
+    let functionCall = try #require(assistantParts.first?["functionCall"] as? [String: Any])
+    #expect(functionCall["name"] as? String == "get_weather")
+
+    #expect(contents[1]["role"] as? String == "user")
+    let toolResultParts = try #require(contents[1]["parts"] as? [[String: Any]])
+    let functionResponse = try #require(toolResultParts.first?["functionResponse"] as? [String: Any])
+    let responsePayload = try #require(functionResponse["response"] as? [String: Any])
+    #expect(responsePayload["output"] as? String == "Sunny")
+
+    #expect(contents[2]["role"] as? String == "user")
+    let userParts = try #require(contents[2]["parts"] as? [[String: Any]])
+    #expect(userParts.first?["text"] as? String == "What about tomorrow?")
+  }
+
+  @Test
   func `Chat Completions refusals replay as plain text in Gemini requests`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
@@ -1446,6 +1513,273 @@ struct GeminiClientTests {
     let streamedToolCallStates = collector.updates.compactMap(\.toolCalls.first)
     #expect(streamedToolCallStates.count >= 2, "Expected incremental tool-call updates while partial args stream")
     #expect(streamedToolCallStates.last?.parameters == toolCall.parameters)
+  }
+
+  @Test
+  func `Streamed partial args with explicit ids update the matching active tool call`() async throws {
+    let sseData = """
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_paris","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":1,"totalTokenCount":26}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_london","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":2,"totalTokenCount":27}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_paris","partialArgs":[{"jsonPath":"$.location","stringValue":"Paris"}],"willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":3,"totalTokenCount":28}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_london","partialArgs":[{"jsonPath":"$.location","stringValue":"London"}],"willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":4,"totalTokenCount":29}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":5,"totalTokenCount":30}}
+
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-3-pro-preview",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    #expect(response.toolCalls.count == 2)
+    #expect(response.metadata?.finishReason == .toolUse)
+
+    let parisCall = try #require(response.toolCalls.first(where: { $0.id == "call_paris" }))
+    if case let .string(location) = parisCall.parameters["location"] {
+      #expect(location == "Paris")
+    } else {
+      Issue.record("Expected Paris partial args to stay attached to call_paris")
+    }
+
+    let londonCall = try #require(response.toolCalls.first(where: { $0.id == "call_london" }))
+    if case let .string(location) = londonCall.parameters["location"] {
+      #expect(location == "London")
+    } else {
+      Issue.record("Expected London partial args to stay attached to call_london")
+    }
+  }
+
+  @Test
+  func `Streamed thought signature with explicit id updates the matching active tool call`() async throws {
+    let sseData = """
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_paris","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":1,"totalTokenCount":26}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_london","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":2,"totalTokenCount":27}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_london"},"thoughtSignature":"sig_london"}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":3,"totalTokenCount":28}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"partialArgs":[{"jsonPath":"$.location","stringValue":"London"}],"willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":4,"totalTokenCount":29}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":5,"totalTokenCount":30}}
+
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-3-pro-preview",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    #expect(response.toolCalls.count == 2)
+    #expect(response.metadata?.finishReason == .toolUse)
+
+    let parisCall = try #require(response.toolCalls.first(where: { $0.id == "call_paris" }))
+    #expect(parisCall.providerMetadata == nil)
+    #expect(parisCall.parameters.isEmpty)
+
+    let londonCall = try #require(response.toolCalls.first(where: { $0.id == "call_london" }))
+    #expect(londonCall.providerMetadata?["thoughtSignature"] == "sig_london")
+    if case let .string(location) = londonCall.parameters["location"] {
+      #expect(location == "London")
+    } else {
+      Issue.record("Expected explicit-id thought signature updates to stay attached to call_london")
+    }
+  }
+
+  @Test
+  func `Anonymous thought signatures are dropped when multiple tool calls are active`() async throws {
+    let sseData = """
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_paris","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":1,"totalTokenCount":26}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_london","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":2,"totalTokenCount":27}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{},"thoughtSignature":"sig_ambiguous"}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":3,"totalTokenCount":28}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"partialArgs":[{"jsonPath":"$.location","stringValue":"London"}],"willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":4,"totalTokenCount":29}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":5,"totalTokenCount":30}}
+
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-3-pro-preview",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    #expect(response.toolCalls.count == 2)
+    #expect(response.metadata?.finishReason == .toolUse)
+
+    let parisCall = try #require(response.toolCalls.first(where: { $0.id == "call_paris" }))
+    #expect(parisCall.providerMetadata == nil)
+    #expect(parisCall.parameters.isEmpty)
+
+    let londonCall = try #require(response.toolCalls.first(where: { $0.id == "call_london" }))
+    #expect(londonCall.providerMetadata == nil)
+    if case let .string(location) = londonCall.parameters["location"] {
+      #expect(location == "London")
+    } else {
+      Issue.record("Expected ambiguous anonymous thought signatures to be dropped without affecting later partial args")
+    }
+  }
+
+  @Test
+  func `Streamed name-only starts without ids remain distinct tool calls`() async throws {
+    let sseData = """
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":1,"totalTokenCount":26}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":2,"totalTokenCount":27}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"partialArgs":[{"jsonPath":"$.location","stringValue":"London"}],"willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":3,"totalTokenCount":28}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":4,"totalTokenCount":29}}
+
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-3-pro-preview",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    #expect(response.toolCalls.count == 2)
+    #expect(response.metadata?.finishReason == .toolUse)
+
+    let firstCall = response.toolCalls[0]
+    let secondCall = response.toolCalls[1]
+    #expect(firstCall.name == "get_weather")
+    #expect(secondCall.name == "get_weather")
+    #expect(firstCall.id != secondCall.id)
+    #expect(firstCall.parameters.isEmpty)
+
+    if case let .string(location) = secondCall.parameters["location"] {
+      #expect(location == "London")
+    } else {
+      Issue.record("Expected the later same-name start to keep its own partial args")
+    }
+  }
+
+  @Test
+  func `Streamed partial args without ids reuse the most recent matching active tool call`() async throws {
+    let sseData = """
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_paris","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":1,"totalTokenCount":26}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_london","name":"get_weather","willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":2,"totalTokenCount":27}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"partialArgs":[{"jsonPath":"$.location","stringValue":"London"}],"willContinue":true}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":3,"totalTokenCount":28}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{}}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":4,"totalTokenCount":29}}
+
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-3-pro-preview",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What's the weather in Paris and London?")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    #expect(response.toolCalls.count == 2)
+    #expect(response.metadata?.finishReason == .toolUse)
+
+    let parisCall = try #require(response.toolCalls.first(where: { $0.id == "call_paris" }))
+    #expect(parisCall.parameters.isEmpty)
+
+    let londonCall = try #require(response.toolCalls.first(where: { $0.id == "call_london" }))
+    if case let .string(location) = londonCall.parameters["location"] {
+      #expect(location == "London")
+    } else {
+      Issue.record("Expected unnamed partial args to continue the most recent matching active call")
+    }
   }
 
   @Test
