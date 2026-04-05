@@ -1040,6 +1040,122 @@ struct ChatCompletionsClientTests {
   }
 
   @Test
+  func `Request body downgrades assistant attachments to plain text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"id":"test","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let imageData = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR2QAAAAASUVORK5CYII="))
+    let documentData = Data("Quarterly report".utf8)
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .attachment(Attachment(kind: .image(data: imageData, mimeType: "image/png"))),
+          .attachment(Attachment(kind: .document(data: documentData, mimeType: "application/pdf"), filename: "report.pdf")),
+        ]),
+        Message(role: .user, content: "Try again"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let assistantMessage = try #require(messages.first(where: { $0["role"] as? String == "assistant" }))
+    let assistantContent = try #require(assistantMessage["content"] as? String)
+
+    #expect((assistantMessage["content"] as? [[String: Any]]) == nil)
+    #expect(assistantContent.contains("image/png"))
+    #expect(assistantContent.contains("report.pdf"))
+    #expect(assistantContent.contains("application/pdf"))
+  }
+
+  @Test
+  func `Request body downgrades system and developer attachments to plain text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"id":"test","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let imageData = try #require(Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR2QAAAAASUVORK5CYII="))
+    let documentData = Data("Write robust tests".utf8)
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .system, content: [
+          .text("Follow the attached playbook."),
+          .attachment(Attachment(kind: .document(data: documentData, mimeType: "text/plain"), filename: "playbook.txt")),
+        ]),
+        Message(role: .developer, content: [
+          .text("Use the visual spec."),
+          .attachment(Attachment(kind: .image(data: imageData, mimeType: "image/png"))),
+        ]),
+        Message(role: .user, content: "Hello"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let systemMessage = try #require(messages.first(where: { $0["role"] as? String == "system" }))
+    let developerMessage = try #require(messages.first(where: { $0["role"] as? String == "developer" }))
+    let systemContent = try #require(systemMessage["content"] as? String)
+    let developerContent = try #require(developerMessage["content"] as? String)
+
+    #expect((systemMessage["content"] as? [[String: Any]]) == nil)
+    #expect(systemContent.contains("Follow the attached playbook."))
+    #expect(systemContent.contains("playbook.txt"))
+    #expect(systemContent.contains("text/plain"))
+
+    #expect((developerMessage["content"] as? [[String: Any]]) == nil)
+    #expect(developerContent.contains("Use the visual spec."))
+    #expect(developerContent.contains("image/png"))
+  }
+
+  @Test
   func `Request includes authorization header`() async throws {
     var capturedRequest: URLRequest?
     let testId = UUID().uuidString

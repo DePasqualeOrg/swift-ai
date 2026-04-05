@@ -202,6 +202,68 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     ]
   }
 
+  private static func fallbackText(for attachment: Attachment) -> String {
+    switch attachment.kind {
+      case let .image(data, mimeType):
+        return ToolResult.Content.image(data, mimeType: mimeType).fallbackDescription
+      case let .audio(data, mimeType):
+        return ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription
+      case let .document(data, mimeType):
+        return ToolResult.Content.file(data, mimeType: mimeType, filename: attachment.filename).fallbackDescription
+      case let .video(data, mimeType):
+        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+        let filename = attachment.filename.map { "\($0) " } ?? ""
+        return "[Unsupported attachment: \(filename)\(mimeType), \(size)]"
+    }
+  }
+
+  private static func serializedUserAttachment(_ attachment: Attachment) async throws -> [String: any Sendable]? {
+    switch attachment.kind {
+      case let .image(data, mimeType):
+        let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
+        return [
+          "type": "image_url",
+          "image_url": [
+            "url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: processedMimeType),
+          ],
+        ]
+      case let .audio(data, mimeType):
+        // Map MIME type to the format string expected by the API ("wav" or "mp3")
+        let format: String? = switch mimeType {
+          case "audio/wav", "audio/x-wav", "audio/wave": "wav"
+          case "audio/mpeg", "audio/mp3": "mp3"
+          default: nil
+        }
+        guard let format else {
+          openAILogger.warning("Audio format '\(mimeType)' is not supported by ChatCompletions (only wav and mp3). Attachment will be omitted.")
+          return nil
+        }
+        return [
+          "type": "input_audio",
+          "input_audio": [
+            "data": data.base64EncodedString(),
+            "format": format,
+          ] as [String: any Sendable],
+        ]
+      case .video:
+        openAILogger.warning("Video attachments are not supported by ChatCompletions and will be omitted.")
+        return nil
+      case let .document(data, mimeType):
+        // The API expects a data URL (e.g. "data:application/pdf;base64,...") for file_data,
+        // despite the OpenAI TS SDK describing it as "base64-encoded data".
+        var fileDict: [String: any Sendable] = [
+          "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
+        ]
+        if let filename = attachment.filename {
+          fileDict["filename"] = filename
+        }
+        return [
+          "type": "file",
+          "file": fileDict,
+        ]
+    }
+  }
+
   private static func requestMessages(for message: Message) async throws -> [[String: any Sendable]] {
     if message.role == .tool {
       return message.content.compactMap { block -> [String: any Sendable]? in
@@ -265,49 +327,17 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             }
           }
         case let .attachment(attachment):
-          hasNonTextContent = true
-          switch attachment.kind {
-            case let .image(data, mimeType):
-              let (processedImageData, processedMimeType) = try await MediaProcessor.resizeImageIfNeeded(data, mimeType: mimeType)
-              multimodalContent.append([
-                "type": "image_url",
-                "image_url": [
-                  "url": MediaProcessor.toBase64DataURL(processedImageData, mimeType: processedMimeType),
-                ],
-              ])
-            case let .audio(data, mimeType):
-              // Map MIME type to the format string expected by the API ("wav" or "mp3")
-              let format: String? = switch mimeType {
-                case "audio/wav", "audio/x-wav", "audio/wave": "wav"
-                case "audio/mpeg", "audio/mp3": "mp3"
-                default: nil
-              }
-              if let format {
-                multimodalContent.append([
-                  "type": "input_audio",
-                  "input_audio": [
-                    "data": data.base64EncodedString(),
-                    "format": format,
-                  ] as [String: any Sendable],
-                ])
-              } else {
-                openAILogger.warning("Audio format '\(mimeType)' is not supported by ChatCompletions (only wav and mp3). Attachment will be omitted.")
-              }
-            case .video:
-              openAILogger.warning("Video attachments are not supported by ChatCompletions and will be omitted.")
-            case let .document(data, mimeType):
-              // The API expects a data URL (e.g. "data:application/pdf;base64,...") for file_data,
-              // despite the OpenAI TS SDK describing it as "base64-encoded data".
-              var fileDict: [String: any Sendable] = [
-                "file_data": MediaProcessor.toBase64DataURL(data, mimeType: mimeType),
-              ]
-              if let filename = attachment.filename {
-                fileDict["filename"] = filename
-              }
-              multimodalContent.append([
-                "type": "file",
-                "file": fileDict,
-              ])
+          guard message.role == .user else {
+            openAILogger.warning("Attachments on \(message.role.rawValue) messages are not supported by ChatCompletions. Using fallback text.")
+            textParts.append(fallbackText(for: attachment))
+            continue
+          }
+
+          let serializedAttachment = try await serializedUserAttachment(attachment)
+
+          if let serializedAttachment {
+            hasNonTextContent = true
+            multimodalContent.append(serializedAttachment)
           }
         case let .toolCall(toolCall):
           try toolCalls.append(serializedToolCall(toolCall))
