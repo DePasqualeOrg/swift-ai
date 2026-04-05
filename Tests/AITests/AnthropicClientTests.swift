@@ -1019,6 +1019,69 @@ struct AnthropicClientTests {
     #expect(roles.contains("user"))
   }
 
+  @Test
+  func `Plain-text document attachments serialize as Anthropic text documents`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let playbook = "Escalate to the incident commander."
+    let client = AnthropicClient(
+      session: makeMockSession(),
+      messagesEndpoint: testEndpoint,
+    )
+
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .user, content: [
+          .text("Review this playbook."),
+          .attachment(Attachment(
+            kind: .document(data: Data(playbook.utf8), mimeType: "text/plain"),
+            filename: "playbook.txt",
+          )),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let requestMessages = try #require(body?["messages"] as? [[String: Any]])
+    let userMessage = try #require(requestMessages.first { ($0["role"] as? String) == "user" })
+    let content = try #require(userMessage["content"] as? [[String: Any]])
+
+    let textBlock = try #require(content.first { ($0["type"] as? String) == "text" })
+    #expect(textBlock["text"] as? String == "Review this playbook.")
+
+    let documentBlock = try #require(content.first { ($0["type"] as? String) == "document" })
+    let source = try #require(documentBlock["source"] as? [String: Any])
+    #expect(source["type"] as? String == "text")
+    #expect(source["media_type"] as? String == "text/plain")
+    #expect(source["data"] as? String == playbook)
+  }
+
   // MARK: - Network Error Tests
 
   @Test

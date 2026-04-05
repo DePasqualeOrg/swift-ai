@@ -1645,6 +1645,19 @@ public final class AnthropicClient: APIClient, Sendable {
                   url: nil,
                 ),
               ))
+            case let .document(data, mimeType) where mimeType == "text/plain":
+              guard let text = String(data: data, encoding: .utf8) else {
+                throw AIError.invalidRequest(message: "Plain text document attachments must be valid UTF-8 for Anthropic")
+              }
+              contentBlocks.append(.init(
+                type: .document,
+                source: .init(
+                  type: "text",
+                  mediaType: mimeType,
+                  data: text,
+                  url: nil,
+                ),
+              ))
             case .video, .audio, .document:
               anthropicLogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported by Anthropic and will be omitted.")
           }
