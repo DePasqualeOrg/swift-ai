@@ -95,6 +95,81 @@ struct AnthropicClientTests {
   }
 
   @Test
+  func `Parses structured tool_result content without failing decode`() async throws {
+    let imageData = Data("image-bytes".utf8)
+    let sseData = """
+    event: message_start
+    data: {"type":"message_start","message":{"id":"msg_tool_result","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+    event: content_block_start
+    data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_result","tool_use_id":"toolu_struct_1","content":[{"type":"text","text":"Search summary"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"\(imageData.base64EncodedString())"}},{"type":"document","source":{"type":"text","media_type":"text/plain","data":"Policy text"}},{"type":"search_result","source":"https://example.com/docs","title":"Example Docs","content":[{"type":"text","text":"Snippet from docs"}]},{"type":"tool_reference","tool_name":"web_search"}],"is_error":false}}
+
+    event: content_block_stop
+    data: {"type":"content_block_stop","index":0}
+
+    event: message_delta
+    data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}
+
+    event: message_stop
+    data: {"type":"message_stop"}
+
+    """
+    let (client, cleanup) = makeTestClient(sseData: sseData)
+    defer { cleanup() }
+
+    let response = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Show me the tool result")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    let toolResult = try #require(response.content.compactMap { block -> ToolResult? in
+      guard case let .toolResult(toolResult) = block else { return nil }
+      return toolResult
+    }.first)
+
+    #expect(toolResult.id == "toolu_struct_1")
+    #expect(toolResult.isError == false)
+    #expect(toolResult.content.count == 5)
+
+    if case let .text(text) = toolResult.content[0] {
+      #expect(text == "Search summary")
+    } else {
+      Issue.record("Expected first tool result item to be text")
+    }
+
+    if case let .image(data, mimeType) = toolResult.content[1] {
+      #expect(data == imageData)
+      #expect(mimeType == "image/png")
+    } else {
+      Issue.record("Expected second tool result item to be an image")
+    }
+
+    if case let .file(data, mimeType, _) = toolResult.content[2] {
+      #expect(data == Data("Policy text".utf8))
+      #expect(mimeType == "text/plain")
+    } else {
+      Issue.record("Expected third tool result item to be a file")
+    }
+
+    if case let .text(text) = toolResult.content[3] {
+      #expect(text.contains("Example Docs"))
+      #expect(text.contains("https://example.com/docs"))
+      #expect(text.contains("Snippet from docs"))
+    } else {
+      Issue.record("Expected fourth tool result item to degrade search_result to text")
+    }
+
+    if case let .text(text) = toolResult.content[4] {
+      #expect(text == "[Tool reference: web_search]")
+    } else {
+      Issue.record("Expected fifth tool result item to degrade tool_reference to text")
+    }
+  }
+
+  @Test
   func `Extracts token usage metadata`() async throws {
     let fixture = try loadFixture("basic_response.txt")
     let (client, cleanup) = makeTestClient(sseData: fixture)

@@ -104,7 +104,7 @@ extension AnthropicClient {
           toolUse = ToolUseBlock(id: id, name: name, input: input)
         case .toolResult:
           let toolUseId = try container.decode(String.self, forKey: .toolUseId)
-          let content = try container.decode(String.self, forKey: .content)
+          let content = try container.decode(ToolResultContent.self, forKey: .content)
           let isError = try container.decodeIfPresent(Bool.self, forKey: .isError)
           toolResult = ToolResultBlock(toolUseId: toolUseId, content: content, isError: isError)
         case .image, .document:
@@ -326,6 +326,20 @@ extension AnthropicClient {
       case mediaType = "media_type"
       case data
       case url
+    }
+
+    init(type: String, mediaType: String, data: String?, url: String?) {
+      self.type = type
+      self.mediaType = mediaType
+      self.data = data
+      self.url = url
+    }
+
+    init(raw: [String: Value]) {
+      type = raw["type"]?.stringValue ?? "base64"
+      mediaType = raw["media_type"]?.stringValue ?? "application/octet-stream"
+      data = raw["data"]?.stringValue
+      url = raw["url"]?.stringValue
     }
   }
 
@@ -665,7 +679,7 @@ extension AnthropicClient {
                   return ContentBlockParam(type: .toolUse, toolUse: ToolUseBlockParam(id: toolUse.id, name: toolUse.name, input: toolUse.input))
                 case .toolResult:
                   guard let toolResult = block.toolResult else { return nil }
-                  return ContentBlockParam(type: .toolResult, toolResult: ToolResultBlockParam(toolUseId: toolResult.toolUseId, content: .text(toolResult.content), isError: toolResult.isError))
+                  return ContentBlockParam(type: .toolResult, toolResult: ToolResultBlockParam(toolUseId: toolResult.toolUseId, content: toolResult.content, isError: toolResult.isError))
                 default:
                   return nil
               }
@@ -1155,6 +1169,100 @@ public final class AnthropicClient: APIClient, Sendable {
     return blocks
   }
 
+  private static func toolResultContents(from content: ToolResultContent) -> [ToolResult.Content] {
+    switch content {
+      case let .text(text):
+        [.text(text)]
+      case let .blocks(blocks):
+        blocks.flatMap(toolResultContents(from:))
+    }
+  }
+
+  private static func toolResultContents(from block: ToolResultContentBlock) -> [ToolResult.Content] {
+    switch block.type {
+      case "text":
+        if let text = block.text {
+          return [.text(text)]
+        }
+      case "image":
+        if let source = block.source {
+          switch source.type {
+            case "base64":
+              if let data = source.data.flatMap({ Data(base64Encoded: $0) }) {
+                return [.image(data, mimeType: source.mediaType)]
+              }
+            case "url":
+              if let url = source.url, !url.isEmpty {
+                return [.text("[Image URL: \(url)]")]
+              }
+            default:
+              break
+          }
+        }
+      case "document":
+        if let source = block.source {
+          switch source.type {
+            case "base64":
+              if let data = source.data.flatMap({ Data(base64Encoded: $0) }) {
+                return [.file(data, mimeType: source.mediaType)]
+              }
+            case "text":
+              if let data = source.data?.data(using: .utf8) {
+                return [.file(data, mimeType: source.mediaType)]
+              }
+            case "url":
+              if let url = source.url, !url.isEmpty {
+                return [.text("[Document URL: \(url)]")]
+              }
+            default:
+              break
+          }
+        }
+      case "search_result":
+        var parts: [String] = []
+        if let title = block.title, !title.isEmpty {
+          parts.append(title)
+        }
+        if let source = block.searchResultSource, !source.isEmpty {
+          parts.append(source)
+        }
+        let snippets = block.contentBlocks?
+          .compactMap(\.text)
+          .filter { !$0.isEmpty }
+          .joined(separator: "\n\n")
+        if let snippets, !snippets.isEmpty {
+          parts.append(snippets)
+        }
+        if !parts.isEmpty {
+          return [.text(parts.joined(separator: "\n"))]
+        }
+      case "tool_reference":
+        if let toolName = block.toolName, !toolName.isEmpty {
+          return [.text("[Tool reference: \(toolName)]")]
+        }
+        return [.text("[Tool reference]")]
+      default:
+        break
+    }
+
+    if let text = block.text, !text.isEmpty {
+      return [.text(text)]
+    }
+    if let jsonString = toolResultBlockJSONString(from: block.raw) {
+      return [.text(jsonString)]
+    }
+    return []
+  }
+
+  private static func toolResultBlockJSONString(from raw: [String: Value]) -> String? {
+    guard let data = try? JSONSerialization.data(withJSONObject: Value.toSendable(raw)),
+          let jsonString = String(data: data, encoding: .utf8)
+    else {
+      return nil
+    }
+    return jsonString
+  }
+
   private static func blocks(from message: APIMessage) -> [Message.Content] {
     var blocks: [Message.Content] = []
     var citationURLs: [String] = []
@@ -1193,7 +1301,7 @@ public final class AnthropicClient: APIClient, Sendable {
             blocks.append(.toolResult(.init(
               name: "",
               id: toolResult.toolUseId,
-              content: [.text(toolResult.content)],
+              content: toolResultContents(from: toolResult.content),
               isError: toolResult.isError,
             )))
           }
@@ -1660,23 +1768,7 @@ public final class AnthropicClient: APIClient, Sendable {
                   case let .text(text):
                     blockDict["content"] = .string(text)
                   case let .blocks(contentBlocks):
-                    blockDict["content"] = .array(contentBlocks.map { contentBlock -> Value in
-                      var contentBlockDict: [String: Value] = ["type": .string(contentBlock.type)]
-                      if let text = contentBlock.text {
-                        contentBlockDict["text"] = .string(text)
-                      }
-                      if let source = contentBlock.source {
-                        var sourceDict: [String: Value] = [
-                          "type": .string(source.type),
-                          "media_type": .string(source.mediaType),
-                        ]
-                        if let data = source.data {
-                          sourceDict["data"] = .string(data)
-                        }
-                        contentBlockDict["source"] = .object(sourceDict)
-                      }
-                      return .object(contentBlockDict)
-                    })
+                    blockDict["content"] = .array(contentBlocks.map { .object($0.raw) })
                 }
                 if let isError = toolResult.isError {
                   blockDict["is_error"] = .bool(isError)
@@ -1989,28 +2081,77 @@ extension AnthropicClient {
 
   /// A content block within a tool result (text or image)
   struct ToolResultContentBlock: Codable {
-    let type: String
-    let text: String?
-    let source: ContentBlockSource?
+    let raw: [String: Value]
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    func encode(to encoder: Encoder) throws {
+      var container = encoder.singleValueContainer()
+      try container.encode(raw)
+    }
+
+    var type: String {
+      raw["type"]?.stringValue ?? "text"
+    }
+
+    var text: String? {
+      raw["text"]?.stringValue
+    }
+
+    var source: ContentBlockSource? {
+      raw["source"]?.objectValue.map(ContentBlockSource.init(raw:))
+    }
+
+    var searchResultSource: String? {
+      raw["source"]?.stringValue
+    }
+
+    var title: String? {
+      raw["title"]?.stringValue
+    }
+
+    var contentBlocks: [ToolResultContentBlock]? {
+      raw["content"]?.arrayValue?.compactMap(\.objectValue).map(ToolResultContentBlock.init(raw:))
+    }
+
+    var toolName: String? {
+      raw["tool_name"]?.stringValue
+    }
 
     static func text(_ text: String) -> ToolResultContentBlock {
-      ToolResultContentBlock(type: "text", text: text, source: nil)
+      ToolResultContentBlock(raw: [
+        "type": .string("text"),
+        "text": .string(text),
+      ])
     }
 
     static func image(mediaType: String, data: String) -> ToolResultContentBlock {
-      ToolResultContentBlock(
-        type: "image",
-        text: nil,
-        source: ContentBlockSource(type: "base64", mediaType: mediaType, data: data, url: nil),
-      )
+      ToolResultContentBlock(raw: [
+        "type": .string("image"),
+        "source": .object([
+          "type": .string("base64"),
+          "media_type": .string(mediaType),
+          "data": .string(data),
+        ]),
+      ])
     }
 
     static func document(mediaType: String, data: String, sourceType: String = "base64") -> ToolResultContentBlock {
-      ToolResultContentBlock(
-        type: "document",
-        text: nil,
-        source: ContentBlockSource(type: sourceType, mediaType: mediaType, data: data, url: nil),
-      )
+      ToolResultContentBlock(raw: [
+        "type": .string("document"),
+        "source": .object([
+          "type": .string(sourceType),
+          "media_type": .string(mediaType),
+          "data": .string(data),
+        ]),
+      ])
     }
   }
 
@@ -2777,7 +2918,7 @@ extension AnthropicClient {
 
   struct ToolResultBlock: Codable {
     let toolUseId: String
-    let content: String
+    let content: ToolResultContent
     let isError: Bool?
 
     enum CodingKeys: String, CodingKey {
