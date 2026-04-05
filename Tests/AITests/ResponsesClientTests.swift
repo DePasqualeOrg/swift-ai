@@ -1272,7 +1272,7 @@ struct ResponsesClientTests {
   }
 
   @Test
-  func `Audio attachment is omitted from Responses input`() async throws {
+  func `Audio attachment serializes as Responses input_audio`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -1319,10 +1319,14 @@ struct ResponsesClientTests {
     let firstInput = try #require(input.first)
     let content = try #require(firstInput["content"] as? [[String: Any]])
 
-    // Audio is not supported by the Responses API, so only the text should be present
-    #expect(content.count == 1)
+    #expect(content.count == 2)
     #expect(content[0]["type"] as? String == "input_text")
     #expect(content[0]["text"] as? String == "Describe this audio")
+
+    let audioContent = try #require(content[1]["input_audio"] as? [String: Any])
+    #expect(content[1]["type"] as? String == "input_audio")
+    #expect(audioContent["data"] as? String == audioData.base64EncodedString())
+    #expect(audioContent["format"] as? String == "wav")
   }
 
   @Test

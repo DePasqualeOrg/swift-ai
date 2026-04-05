@@ -80,6 +80,7 @@ public final class ResponsesClient: APIClient, Sendable {
   private enum ContentType {
     static let inputText = "input_text"
     static let inputImage = "input_image"
+    static let inputAudio = "input_audio"
     static let inputFile = "input_file"
     static let outputText = "output_text"
     static let message = "message"
@@ -1109,7 +1110,24 @@ public final class ResponsesClient: APIClient, Sendable {
             contentItem["filename"] = fileName
           }
           return contentItem
-        case .audio, .video:
+        case let .audio(data, mimeType):
+          let format: String? = switch mimeType {
+            case "audio/wav", "audio/x-wav", "audio/wave": "wav"
+            case "audio/mpeg", "audio/mp3": "mp3"
+            default: nil
+          }
+          guard let format else {
+            openAIResponsesLogger.warning("Audio format '\(mimeType)' is not supported by Responses (only wav and mp3). Attachment will be omitted.")
+            return nil
+          }
+          return [
+            "type": ContentType.inputAudio,
+            "input_audio": [
+              "data": data.base64EncodedString(),
+              "format": format,
+            ] as [String: any Sendable],
+          ]
+        case .video:
           openAIResponsesLogger.warning("Attachment type '\(attachment.kind.mimeType)' is not supported in Responses message content and will be omitted.")
           return nil
       }
