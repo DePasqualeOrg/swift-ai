@@ -106,6 +106,11 @@ public enum Model {
     case chatCompletions(String, endpoint: URL = ChatCompletionsClient.Endpoint.openAI.url)
     case responses(String, endpoint: URL = ResponsesClient.Endpoint.openAI.url)
 }
+
+public enum ResponsesProvider {
+    case openAI
+    case xAI
+}
 ```
 
 The top-level `generateText` and `streamText` functions provide common options:
@@ -117,8 +122,11 @@ let response = try await generateText(
     apiKey: apiKey,
     webSearch: true,  // Defaults to false
     reasoning: false  // Defaults to true; applies to Anthropic and Gemini
-)
+) 
 ```
+
+When using `webSearch` with a custom Responses endpoint, also pass `responsesProvider`
+so the correct provider-specific tool format is used.
 
 For provider-specific control, pass a `ProviderConfiguration`. When provided, it takes precedence and the `reasoning` and `webSearch` parameters are ignored:
 
@@ -964,6 +972,15 @@ let response = try await generateText(
     model: .chatCompletions("llama-3", endpoint: URL(string: "http://localhost:8080/v1/chat/completions")!),
     messages: messages,
     apiKey: nil  // Local endpoints may not need a key
+)
+
+// Custom Responses endpoint with built-in web search
+let searchedResponse = try await generateText(
+    model: .responses("my-proxied-model", endpoint: URL(string: "https://your-endpoint/v1/responses")!),
+    messages: messages,
+    apiKey: apiKey,
+    webSearch: true,
+    responsesProvider: .xAI
 )
 
 // ChatCompletionsClient with custom endpoint and session

@@ -27,6 +27,16 @@ public enum Model: Sendable {
   }
 }
 
+/// The provider family behind a Responses API-compatible endpoint.
+///
+/// This is used by the top-level `generateText` and `streamText` helpers when built-in
+/// server-side tools like `webSearch` need provider-specific wire formats for custom
+/// Responses endpoints.
+public enum ResponsesProvider: Sendable, Equatable {
+  case openAI
+  case xAI
+}
+
 /// Provider-specific configuration for use with top-level generation functions.
 ///
 /// Each case wraps the corresponding provider client's `Configuration` type.
@@ -72,6 +82,9 @@ public enum ProviderConfiguration: Sendable {
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
 ///     Ignored when an explicit `configuration` is provided.
+///   - responsesProvider: The provider family for custom Responses endpoints when using
+///     built-in Responses tools such as `webSearch`. Ignored for non-Responses models and
+///     when an explicit `configuration` is provided.
 ///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
 ///     Ignored when an explicit `configuration` is provided.
 ///   - configuration: Optional provider-specific configuration. When provided, takes precedence
@@ -86,6 +99,7 @@ public func generateText(
   temperature: Float? = nil,
   apiKey: String?,
   webSearch: Bool = false,
+  responsesProvider: ResponsesProvider? = nil,
   reasoning: Bool = true,
   configuration: ProviderConfiguration? = nil,
 ) async throws -> GenerationResponse {
@@ -150,8 +164,10 @@ public func generateText(
     case let .responses(modelId, endpoint):
       let client = ResponsesClient(endpoint: endpoint)
       let config: ResponsesClient.Configuration = try extractConfiguration(configuration, expected: .responses) {
-        ResponsesClient.Configuration(
-          serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
+        try defaultResponsesConfiguration(
+          webSearch: webSearch,
+          endpoint: endpoint,
+          provider: responsesProvider,
         )
       }
       return try await client.generateText(
@@ -182,6 +198,9 @@ public func generateText(
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
 ///     Ignored when an explicit `configuration` is provided.
+///   - responsesProvider: The provider family for custom Responses endpoints when using
+///     built-in Responses tools such as `webSearch`. Ignored for non-Responses models and
+///     when an explicit `configuration` is provided.
 ///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
 ///     Ignored when an explicit `configuration` is provided.
 ///   - configuration: Optional provider-specific configuration. When provided, takes precedence
@@ -196,6 +215,7 @@ public func streamText(
   temperature: Float? = nil,
   apiKey: String?,
   webSearch: Bool = false,
+  responsesProvider: ResponsesProvider? = nil,
   reasoning: Bool = true,
   configuration: ProviderConfiguration? = nil,
 ) -> AsyncThrowingStream<GenerationResponse, Error> {
@@ -277,8 +297,10 @@ public func streamText(
       let config: ResponsesClient.Configuration
       do {
         config = try extractConfiguration(configuration, expected: .responses) {
-          ResponsesClient.Configuration(
-            serverSideTools: webSearch ? responsesWebSearchTools(modelId: modelId) : [],
+          try defaultResponsesConfiguration(
+            webSearch: webSearch,
+            endpoint: endpoint,
+            provider: responsesProvider,
           )
         }
       } catch {
@@ -324,6 +346,9 @@ public func streamText(
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
 ///     Ignored when an explicit `configuration` is provided.
+///   - responsesProvider: The provider family for custom Responses endpoints when using
+///     built-in Responses tools such as `webSearch`. Ignored for non-Responses models and
+///     when an explicit `configuration` is provided.
 ///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
 ///     Ignored when an explicit `configuration` is provided.
 ///   - configuration: Optional provider-specific configuration. When provided, takes precedence
@@ -338,6 +363,7 @@ public func generateText(
   temperature: Float? = nil,
   apiKey: String?,
   webSearch: Bool = false,
+  responsesProvider: ResponsesProvider? = nil,
   reasoning: Bool = true,
   configuration: ProviderConfiguration? = nil,
 ) async throws -> GenerationResponse {
@@ -350,6 +376,7 @@ public func generateText(
     temperature: temperature,
     apiKey: apiKey,
     webSearch: webSearch,
+    responsesProvider: responsesProvider,
     reasoning: reasoning,
     configuration: configuration,
   )
@@ -370,6 +397,9 @@ public func generateText(
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
 ///     Ignored when an explicit `configuration` is provided.
+///   - responsesProvider: The provider family for custom Responses endpoints when using
+///     built-in Responses tools such as `webSearch`. Ignored for non-Responses models and
+///     when an explicit `configuration` is provided.
 ///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
 ///     Ignored when an explicit `configuration` is provided.
 ///   - configuration: Optional provider-specific configuration. When provided, takes precedence
@@ -384,6 +414,7 @@ public func streamText(
   temperature: Float? = nil,
   apiKey: String?,
   webSearch: Bool = false,
+  responsesProvider: ResponsesProvider? = nil,
   reasoning: Bool = true,
   configuration: ProviderConfiguration? = nil,
 ) -> AsyncThrowingStream<GenerationResponse, Error> {
@@ -396,6 +427,7 @@ public func streamText(
     temperature: temperature,
     apiKey: apiKey,
     webSearch: webSearch,
+    responsesProvider: responsesProvider,
     reasoning: reasoning,
     configuration: configuration,
   )
@@ -403,13 +435,74 @@ public func streamText(
 
 // MARK: - Helpers
 
+func defaultResponsesConfiguration(
+  webSearch: Bool,
+  endpoint: URL,
+  provider: ResponsesProvider?,
+) throws -> ResponsesClient.Configuration {
+  try ResponsesClient.Configuration(
+    serverSideTools: webSearch ? responsesWebSearchTools(endpoint: endpoint, provider: provider) : [],
+  )
+}
+
 /// Returns the appropriate web search server-side tools for a Responses API model.
-/// xAI (Grok) uses a different tool format than OpenAI.
-private func responsesWebSearchTools(modelId: String) -> [ResponsesClient.ServerSideTool] {
-  if modelId.hasPrefix("grok-") {
-    [.xAI.webSearch()]
-  } else {
-    [.OpenAI.webSearch(contextSize: .medium)]
+/// Custom endpoints must provide an explicit provider because the OpenAI and xAI
+/// Responses APIs use different tool formats.
+func responsesWebSearchTools(
+  endpoint: URL,
+  provider: ResponsesProvider?,
+) throws -> [ResponsesClient.ServerSideTool] {
+  let resolvedProvider = try resolvedResponsesProvider(for: endpoint, provider: provider)
+
+  return switch resolvedProvider {
+    case .openAI:
+      [ResponsesClient.ServerSideTool.OpenAI.webSearch(contextSize: .medium)]
+    case .xAI:
+      [ResponsesClient.ServerSideTool.xAI.webSearch()]
+  }
+}
+
+private func resolvedResponsesProvider(
+  for endpoint: URL,
+  provider: ResponsesProvider?,
+) throws -> ResponsesProvider {
+  if let inferredProvider = inferredResponsesProvider(for: endpoint) {
+    if let provider, provider != inferredProvider {
+      throw AIError.invalidRequest(message:
+        "responsesProvider \(provider.argumentName) conflicts with the built-in Responses endpoint for " +
+          "\(inferredProvider.argumentName). Omit responsesProvider for known OpenAI/xAI endpoints, " +
+          "or set it to \(inferredProvider.argumentName).")
+    }
+    return inferredProvider
+  }
+
+  guard let provider else {
+    throw AIError.invalidRequest(message:
+      "Custom Responses endpoints require an explicit responsesProvider when using webSearch. " +
+        "Pass `.openAI` or `.xAI`, or provide an explicit `.responses` configuration.")
+  }
+  return provider
+}
+
+private func inferredResponsesProvider(for endpoint: URL) -> ResponsesProvider? {
+  switch endpoint.host {
+    case ResponsesClient.Endpoint.openAI.url.host:
+      .openAI
+    case ResponsesClient.Endpoint.xAI.url.host:
+      .xAI
+    default:
+      nil
+  }
+}
+
+private extension ResponsesProvider {
+  var argumentName: String {
+    switch self {
+      case .openAI:
+        "`.openAI`"
+      case .xAI:
+        "`.xAI`"
+    }
   }
 }
 
@@ -428,10 +521,10 @@ private enum Provider: String {
 private func extractConfiguration<T>(
   _ configuration: ProviderConfiguration?,
   expected: Provider,
-  default defaultConfig: () -> T,
+  default defaultConfig: () throws -> T,
 ) throws -> T {
   guard let configuration else {
-    return defaultConfig()
+    return try defaultConfig()
   }
 
   switch (configuration, expected) {

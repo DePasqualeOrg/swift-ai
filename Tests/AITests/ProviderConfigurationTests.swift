@@ -127,4 +127,87 @@ struct ProviderConfigurationTests {
       // Non-AIError failures (network, etc.) are expected
     }
   }
+
+  @Test
+  func `Default Responses configuration infers provider from built in endpoints`() throws {
+    #expect(
+      try defaultResponsesConfiguration(
+        webSearch: true,
+        endpoint: ResponsesClient.Endpoint.xAI.url,
+        provider: nil,
+      ).serverSideTools == [.xAI.webSearch()],
+    )
+
+    #expect(
+      try defaultResponsesConfiguration(
+        webSearch: true,
+        endpoint: ResponsesClient.Endpoint.openAI.url,
+        provider: nil,
+      ).serverSideTools == [.OpenAI.webSearch(contextSize: .medium)],
+    )
+  }
+
+  @Test
+  func `Default Responses configuration rejects conflicting provider for built in endpoints`() {
+    do {
+      _ = try defaultResponsesConfiguration(
+        webSearch: true,
+        endpoint: ResponsesClient.Endpoint.xAI.url,
+        provider: .openAI,
+      )
+      Issue.record("Expected conflicting provider for built-in Responses endpoint to throw")
+    } catch let error as AIError {
+      guard case let .invalidRequest(message) = error else {
+        Issue.record("Expected invalidRequest but got \(error)")
+        return
+      }
+      #expect(message.contains("conflicts"))
+      #expect(message.contains("`.xAI`"))
+    } catch {
+      Issue.record("Expected AIError.invalidRequest but got \(error)")
+    }
+  }
+
+  @Test
+  func `Default Responses configuration uses explicit provider for custom endpoints`() throws {
+    let customEndpoint = try #require(URL(string: "https://proxy.example.test/v1/responses"))
+
+    #expect(
+      try defaultResponsesConfiguration(
+        webSearch: true,
+        endpoint: customEndpoint,
+        provider: .xAI,
+      ).serverSideTools == [.xAI.webSearch()],
+    )
+
+    #expect(
+      try defaultResponsesConfiguration(
+        webSearch: true,
+        endpoint: customEndpoint,
+        provider: .openAI,
+      ).serverSideTools == [.OpenAI.webSearch(contextSize: .medium)],
+    )
+  }
+
+  @Test
+  func `Default Responses configuration rejects ambiguous custom webSearch endpoints`() throws {
+    let customEndpoint = try #require(URL(string: "https://proxy.example.test/v1/responses"))
+
+    do {
+      _ = try defaultResponsesConfiguration(
+        webSearch: true,
+        endpoint: customEndpoint,
+        provider: nil,
+      )
+      Issue.record("Expected custom Responses webSearch endpoint without provider to throw")
+    } catch let error as AIError {
+      guard case let .invalidRequest(message) = error else {
+        Issue.record("Expected invalidRequest but got \(error)")
+        return
+      }
+      #expect(message.contains("responsesProvider"))
+    } catch {
+      Issue.record("Expected AIError.invalidRequest but got \(error)")
+    }
+  }
 }
