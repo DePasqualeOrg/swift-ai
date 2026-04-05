@@ -910,7 +910,7 @@ struct GeminiClientTests {
       )!
 
       if requestCount == 1 {
-        let sseData = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I checked the URL.\"},{\"toolCall\":{\"id\":\"server_tool_1\",\"toolType\":\"URL_CONTEXT\",\"args\":{\"url\":\"https://example.com\"}}},{\"toolResponse\":{\"id\":\"server_tool_1\",\"toolType\":\"URL_CONTEXT\",\"response\":{\"status\":\"ok\"}}}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0,\"urlContextMetadata\":{\"urlMetadata\":[{\"retrievedUrl\":\"https://example.com\",\"urlRetrievalStatus\":\"URL_RETRIEVAL_STATUS_SUCCESS\"}]}}],\"usageMetadata\":{\"promptTokenCount\":20,\"candidatesTokenCount\":9,\"totalTokenCount\":29}}\n\n"
+        let sseData = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"I checked the URL.\"},{\"toolCall\":{\"id\":\"server_tool_1\",\"toolType\":\"URL_CONTEXT\",\"args\":{\"url\":\"https://example.com\"}}},{\"toolResponse\":{\"id\":\"server_tool_1\",\"toolType\":\"URL_CONTEXT\",\"response\":{\"status\":\"ok\"}}},{\"text\":\"It returned successfully.\"}],\"role\":\"model\"},\"finishReason\":\"STOP\",\"index\":0,\"urlContextMetadata\":{\"urlMetadata\":[{\"retrievedUrl\":\"https://example.com\",\"urlRetrievalStatus\":\"URL_RETRIEVAL_STATUS_SUCCESS\"}]}}],\"usageMetadata\":{\"promptTokenCount\":20,\"candidatesTokenCount\":9,\"totalTokenCount\":29}}\n\n"
         return (response, sseData.data(using: .utf8)!)
       }
 
@@ -933,6 +933,35 @@ struct GeminiClientTests {
     let opaqueBlocks = firstResponse.content.compactMap { item -> OpaqueBlock? in
       guard case let .providerOpaque(block) = item else { return nil }
       return block
+    }
+    #expect(firstResponse.content.count == 5)
+    if case let .text(text) = firstResponse.content[0] {
+      #expect(text == "I checked the URL.")
+    } else {
+      Issue.record("Expected leading text content")
+    }
+    if case let .providerOpaque(block) = firstResponse.content[1] {
+      #expect(block.provider == "gemini")
+      #expect(block.type == "toolCall")
+    } else {
+      Issue.record("Expected toolCall block in second position")
+    }
+    if case let .providerOpaque(block) = firstResponse.content[2] {
+      #expect(block.provider == "gemini")
+      #expect(block.type == "toolResponse")
+    } else {
+      Issue.record("Expected toolResponse block in third position")
+    }
+    if case let .text(text) = firstResponse.content[3] {
+      #expect(text == "It returned successfully.")
+    } else {
+      Issue.record("Expected trailing text content")
+    }
+    if case let .providerOpaque(block) = firstResponse.content[4] {
+      #expect(block.provider == "gemini")
+      #expect(block.type == "urlContextMetadata")
+    } else {
+      Issue.record("Expected urlContextMetadata block at the end")
     }
     #expect(opaqueBlocks.contains { $0.provider == "gemini" && $0.type == "toolCall" })
     #expect(opaqueBlocks.contains { $0.provider == "gemini" && $0.type == "toolResponse" })
@@ -959,14 +988,13 @@ struct GeminiClientTests {
     let modelMessage = try #require(contents.first { ($0["role"] as? String) == "model" })
     let parts = try #require(modelMessage["parts"] as? [[String: Any]])
 
-    #expect(parts.contains { part in
-      let toolCall = part["toolCall"] as? [String: Any]
-      return toolCall?["id"] as? String == "server_tool_1"
-    })
-    #expect(parts.contains { part in
-      let toolResponse = part["toolResponse"] as? [String: Any]
-      return toolResponse?["id"] as? String == "server_tool_1"
-    })
+    #expect(parts.count == 4)
+    #expect(parts[0]["text"] as? String == "I checked the URL.")
+    let toolCall = try #require(parts[1]["toolCall"] as? [String: Any])
+    #expect(toolCall["id"] as? String == "server_tool_1")
+    let toolResponse = try #require(parts[2]["toolResponse"] as? [String: Any])
+    #expect(toolResponse["id"] as? String == "server_tool_1")
+    #expect(parts[3]["text"] as? String == "It returned successfully.")
     #expect(parts.allSatisfy { $0["urlContextMetadata"] == nil })
   }
 

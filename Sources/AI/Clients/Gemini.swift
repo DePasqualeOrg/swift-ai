@@ -295,6 +295,19 @@ public final class GeminiClient: APIClient, Sendable {
     return Message.assistantContent(reasoningText: reasoningText, responseText: responseText, notesText: notesText, toolCalls: toolCalls)
   }
 
+  private static func finalizedContent(
+    orderedContent: [Message.Content],
+    notesText: String?,
+    metadataOpaqueBlocks: [OpaqueBlock],
+  ) -> [Message.Content] {
+    var content = orderedContent
+    if let notesText, !notesText.isEmpty {
+      content.append(.endnotes(notesText))
+    }
+    content.append(contentsOf: metadataOpaqueBlocks.map(Message.Content.providerOpaque))
+    return content
+  }
+
   private static func fallbackText(for attachment: Attachment) -> String {
     switch attachment.kind {
       case let .image(data, mimeType):
@@ -1486,12 +1499,11 @@ public final class GeminiClient: APIClient, Sendable {
       isGenerating = true
     }
     let task = Task<GenerationResponse, Error> {
-      var fullReasoningText = ""
-      var reasoningSignature: String?
-      var fullResponseText = ""
+      var orderedContent: [Message.Content] = []
+      var toolCallIndicesByID: [String: Int] = [:]
+      var pendingThinkingSignature: String?
       var notesText: String?
-      var toolCalls: [ToolCall] = []
-      var opaqueBlocks: [OpaqueBlock] = []
+      var metadataOpaqueBlocks: [OpaqueBlock] = []
       var usageMetadata: UsageMetadata?
       var finishReason: FinishReason?
 
@@ -1527,7 +1539,11 @@ public final class GeminiClient: APIClient, Sendable {
             nil
           }
           // Gemini sends finishReason STOP even when the response contains function calls
-          let effectiveFinishReason = if !toolCalls.isEmpty { GenerationResponse.FinishReason.toolUse } else { generationFinishReason }
+          let effectiveFinishReason = if orderedContent.contains(where: { if case .toolCall = $0 { true } else { false } }) {
+            GenerationResponse.FinishReason.toolUse
+          } else {
+            generationFinishReason
+          }
           return GenerationResponse.Metadata(
             finishReason: effectiveFinishReason,
             inputTokens: usageMetadata?.promptTokenCount,
@@ -1538,25 +1554,102 @@ public final class GeminiClient: APIClient, Sendable {
           )
         }
 
-        func upsertToolCall(_ toolCall: ToolCall) {
-          if let existingIndex = toolCalls.firstIndex(where: { $0.id == toolCall.id }) {
-            toolCalls[existingIndex] = toolCall
+        func updateLastGeminiThinking(_ transform: (OpaqueBlock) -> OpaqueBlock) {
+          guard let index = orderedContent.indices.reversed().first(where: { index in
+            guard case let .providerOpaque(block) = orderedContent[index] else { return false }
+            return block.provider == "gemini" && block.type == "thinking"
+          }) else {
+            return
+          }
+          guard case let .providerOpaque(block) = orderedContent[index] else { return }
+          orderedContent[index] = .providerOpaque(transform(block))
+        }
+
+        func appendThinkingText(_ text: String, signature: String? = nil) {
+          let resolvedSignature = signature ?? pendingThinkingSignature
+          pendingThinkingSignature = nil
+
+          if let lastIndex = orderedContent.indices.last,
+             case let .providerOpaque(block) = orderedContent[lastIndex],
+             block.provider == "gemini",
+             block.type == "thinking"
+          {
+            orderedContent[lastIndex] = .providerOpaque(OpaqueBlock(
+              provider: block.provider,
+              type: block.type,
+              content: (block.content ?? "") + text,
+              signature: resolvedSignature ?? block.signature,
+              data: block.data,
+              isResponseContent: block.isResponseContent,
+            ))
           } else {
-            toolCalls.append(toolCall)
+            orderedContent.append(.providerOpaque(OpaqueBlock(
+              provider: "gemini",
+              type: "thinking",
+              content: text,
+              signature: resolvedSignature,
+            )))
+          }
+        }
+
+        func updateThinkingSignature(_ signature: String) {
+          if orderedContent.contains(where: { item in
+            guard case let .providerOpaque(block) = item else { return false }
+            return block.provider == "gemini" && block.type == "thinking"
+          }) {
+            updateLastGeminiThinking { block in
+              OpaqueBlock(
+                provider: block.provider,
+                type: block.type,
+                content: block.content,
+                signature: signature,
+                data: block.data,
+                isResponseContent: block.isResponseContent,
+              )
+            }
+          } else {
+            pendingThinkingSignature = signature
+          }
+        }
+
+        func appendResponseText(_ text: String) {
+          if let lastIndex = orderedContent.indices.last,
+             case let .text(existingText) = orderedContent[lastIndex]
+          {
+            orderedContent[lastIndex] = .text(existingText + text)
+          } else {
+            orderedContent.append(.text(text))
+          }
+        }
+
+        func upsertToolCall(_ toolCall: ToolCall) {
+          if let existingIndex = toolCallIndicesByID[toolCall.id] {
+            orderedContent[existingIndex] = .toolCall(toolCall)
+          } else {
+            toolCallIndicesByID[toolCall.id] = orderedContent.count
+            orderedContent.append(.toolCall(toolCall))
+          }
+        }
+
+        func appendOpaqueBlock(_ opaqueBlock: OpaqueBlock) {
+          if opaqueBlock.provider == "gemini", opaqueBlock.type == "urlContextMetadata" {
+            metadataOpaqueBlocks.append(opaqueBlock)
+          } else {
+            orderedContent.append(.providerOpaque(opaqueBlock))
           }
         }
 
         let sendUpdate = {
-          let blocks = Self.assistantContent(
-            reasoningText: fullReasoningText,
-            reasoningSignature: reasoningSignature,
-            responseText: fullResponseText,
-            notesText: notesText,
-            toolCalls: toolCalls,
-          ) + opaqueBlocks.map(Message.Content.providerOpaque)
           let metadata = buildMetadata()
           await MainActor.run {
-            update(.init(content: blocks, metadata: metadata))
+            update(.init(
+              content: Self.finalizedContent(
+                orderedContent: orderedContent,
+                notesText: notesText,
+                metadataOpaqueBlocks: metadataOpaqueBlocks,
+              ),
+              metadata: metadata,
+            ))
           }
         }
 
@@ -1572,19 +1665,16 @@ public final class GeminiClient: APIClient, Sendable {
           }
 
           // Handle text chunks
-          if let text = chunk.text {
+          if let text = chunk.text, !text.isEmpty {
             if let isThinkingText = chunk.thought, isThinkingText {
-              fullReasoningText += text
-              if let signature = chunk.thoughtSignature {
-                reasoningSignature = signature
-              }
+              appendThinkingText(text, signature: chunk.thoughtSignature)
             } else {
-              fullResponseText += text
+              appendResponseText(text)
             }
             await sendUpdate()
           } else if let signature = chunk.thoughtSignature {
             // Standalone thoughtSignature part (no text)
-            reasoningSignature = signature
+            updateThinkingSignature(signature)
           }
 
           // Handle function calls
@@ -1595,7 +1685,7 @@ public final class GeminiClient: APIClient, Sendable {
 
           // Handle opaque blocks (code execution parts)
           if let opaqueBlock = chunk.opaqueBlock {
-            opaqueBlocks.append(opaqueBlock)
+            appendOpaqueBlock(opaqueBlock)
             await sendUpdate()
           }
 
@@ -1615,13 +1705,11 @@ public final class GeminiClient: APIClient, Sendable {
 
         // Return the final state
         return .init(
-          content: Self.assistantContent(
-            reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
-            reasoningSignature: reasoningSignature,
-            responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+          content: Self.finalizedContent(
+            orderedContent: orderedContent,
             notesText: notesText,
-            toolCalls: toolCalls,
-          ) + opaqueBlocks.map(Message.Content.providerOpaque),
+            metadataOpaqueBlocks: metadataOpaqueBlocks,
+          ),
           metadata: buildMetadata(),
         )
       } catch let error as GeminiError {
@@ -1637,12 +1725,11 @@ public final class GeminiClient: APIClient, Sendable {
           )
           // Return partial results without throwing an error
           return .init(
-            content: Self.assistantContent(
-              reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
-              reasoningSignature: reasoningSignature,
-              responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+            content: Self.finalizedContent(
+              orderedContent: orderedContent,
               notesText: notesText,
-            ) + opaqueBlocks.map(Message.Content.providerOpaque),
+              metadataOpaqueBlocks: metadataOpaqueBlocks,
+            ),
             metadata: partialMetadata,
           )
         }
@@ -1668,13 +1755,11 @@ public final class GeminiClient: APIClient, Sendable {
             reasoningTokens: usageMetadata?.thoughtsTokenCount,
           )
           return .init(
-            content: Self.assistantContent(
-              reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
-              reasoningSignature: reasoningSignature,
-              responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+            content: Self.finalizedContent(
+              orderedContent: orderedContent,
               notesText: notesText,
-              toolCalls: toolCalls,
-            ) + opaqueBlocks.map(Message.Content.providerOpaque),
+              metadataOpaqueBlocks: metadataOpaqueBlocks,
+            ),
             metadata: partialMetadata,
           )
         } else {
