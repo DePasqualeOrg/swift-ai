@@ -631,6 +631,71 @@ struct AnthropicClientTests {
   }
 
   @Test
+  func `Anthropic replay omits synthesized endnotes when native citation blocks are present`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: testEndpoint,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      event: message_start
+      data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+      event: message_stop
+      data: {"type":"message_stop"}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let nativeToolResult = #"{"type":"web_fetch_tool_result","content":{"type":"web_fetch_result","url":"https://example.com/docs","title":"Example Docs","content":{"type":"text","text":"Fetched excerpt"}}}"#
+    let citationNotes = """
+    - https://example.com/docs
+    """
+    let client = AnthropicClient(
+      session: makeMockSession(),
+      messagesEndpoint: testEndpoint,
+    )
+
+    _ = try await consumeStream(client.streamText(
+      modelId: "claude-sonnet-4-20250514",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .providerOpaque(OpaqueBlock(
+            provider: "anthropic",
+            type: "web_fetch_tool_result",
+            content: "Fetched excerpt",
+            data: nativeToolResult,
+            isResponseContent: true,
+          )),
+          .endnotes(citationNotes),
+        ]),
+        Message(role: .user, content: "Try again"),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let assistantMessage = try #require(messages.first { ($0["role"] as? String) == "assistant" })
+    let content = try #require(assistantMessage["content"] as? [[String: Any]])
+    #expect(content.count == 1)
+    let toolResult = try #require(content.first)
+    #expect(toolResult["type"] as? String == "web_fetch_tool_result")
+    #expect(toolResult["text"] == nil)
+  }
+
+  @Test
   func `Foreign response-content opaque blocks replay as text blocks in Anthropic requests`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString

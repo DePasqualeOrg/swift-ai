@@ -1484,6 +1484,11 @@ public final class AnthropicClient: APIClient, Sendable {
 
   private func anthropicContentBlocks(for message: Message) async throws -> [AnthropicClient.ContentBlockParam] {
     var contentBlocks: [AnthropicClient.ContentBlockParam] = []
+    let hasNativeCitationBlocks = message.content.contains { block in
+      guard case let .providerOpaque(opaque) = block else { return false }
+      guard opaque.provider == "anthropic" else { return false }
+      return opaque.type == "web_search_tool_result" || opaque.type == "web_fetch_tool_result"
+    }
 
     for block in message.content {
       switch block {
@@ -1543,6 +1548,10 @@ public final class AnthropicClient: APIClient, Sendable {
         case let .text(text) where !text.isEmpty:
           contentBlocks.append(.init(type: .text, text: text))
         case let .endnotes(text) where !text.isEmpty:
+          // Endnotes are synthesized from native Anthropic citation-bearing blocks during
+          // parsing. When replaying back into Anthropic, omit them if the same turn still
+          // has native citation history so URLs are not duplicated as assistant text.
+          guard !hasNativeCitationBlocks else { break }
           contentBlocks.append(.init(type: .text, text: text))
         case let .toolCall(toolCall):
           contentBlocks.append(.init(
