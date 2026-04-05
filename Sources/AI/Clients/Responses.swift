@@ -103,6 +103,7 @@ public final class ResponsesClient: APIClient, Sendable {
   }
 
   private struct StreamingResponseState {
+    private static let annotatedOutputTextType = "annotated_output_text"
     var indexedContent: [ContentKey: Message.Content] = [:]
     var fallbackContent: [Message.Content] = []
     var toolCallArgumentBuffers: [String: String] = [:]
@@ -134,20 +135,27 @@ public final class ResponsesClient: APIClient, Sendable {
           merged[key] = .thinking(text: summary, signature: nil)
         }
       }
-      return merged.keys.sorted().compactMap { merged[$0] } + fallbackContent
+      var orderedContent = merged.keys.sorted().compactMap { merged[$0] } + fallbackContent
+      if !orderedContent.contains(where: {
+        if case .endnotes = $0 { return true }
+        return false
+      }), let endnotes = Self.formattedEndnotes(from: orderedContent) {
+        orderedContent.append(.endnotes(endnotes))
+      }
+      return orderedContent
     }
 
     mutating func appendTextDelta(_ delta: String, outputIndex: Int?, contentIndex: Int?) {
-      append(delta: delta, outputIndex: outputIndex, contentIndex: contentIndex, as: { .text($0) })
+      guard !delta.isEmpty else { return }
+      updateTextBlock(outputIndex: outputIndex, contentIndex: contentIndex, createText: delta) { existingText in
+        existingText + delta
+      }
     }
 
     mutating func setFinalizedText(_ text: String, outputIndex: Int?, contentIndex: Int?) {
-      guard let outputIndex else {
-        appendFallback(.text(text))
-        return
+      updateTextBlock(outputIndex: outputIndex, contentIndex: contentIndex, createText: text) { _ in
+        text
       }
-      let k = key(outputIndex: outputIndex, contentIndex: contentIndex)
-      indexedContent[k] = .text(text)
     }
 
     mutating func setFinalizedReasoningText(_ text: String, outputIndex: Int?) {
@@ -195,6 +203,45 @@ public final class ResponsesClient: APIClient, Sendable {
         return
       }
       summaryContent[outputIndex] = text
+    }
+
+    mutating func addTextAnnotation(
+      _ annotation: [String: Value],
+      outputIndex: Int?,
+      contentIndex: Int?,
+      annotationIndex: Int?,
+    ) {
+      updateTextBlock(
+        outputIndex: outputIndex,
+        contentIndex: contentIndex,
+        createText: "",
+        transformText: { $0 },
+        transformOpaque: { existingOpaque in
+          var annotations = Self.decodeAnnotationsData(existingOpaque.data)
+          if let annotationIndex, annotationIndex <= annotations.count {
+            annotations.insert(annotation, at: annotationIndex)
+          } else {
+            annotations.append(annotation)
+          }
+          return .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: Self.annotatedOutputTextType,
+            content: existingOpaque.content,
+            data: Self.encodeAnnotationsData(annotations),
+            isResponseContent: true,
+          ))
+        },
+        transformTextBlock: { existingText in
+          let annotations = [annotation]
+          return .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: Self.annotatedOutputTextType,
+            content: existingText,
+            data: Self.encodeAnnotationsData(annotations),
+            isResponseContent: true,
+          ))
+        },
+      )
     }
 
     mutating func setToolCall(_ toolCall: ToolCall, outputIndex: Int?, itemId: String? = nil) {
@@ -335,6 +382,158 @@ public final class ResponsesClient: APIClient, Sendable {
         default:
           fallbackContent.append(block)
       }
+    }
+
+    private mutating func updateTextBlock(
+      outputIndex: Int?,
+      contentIndex: Int?,
+      createText: String,
+      transformText: (String) -> String,
+      transformOpaque: ((OpaqueBlock) -> Message.Content)? = nil,
+      transformTextBlock: ((String) -> Message.Content)? = nil,
+    ) {
+      if let outputIndex {
+        let k = key(outputIndex: outputIndex, contentIndex: contentIndex)
+        indexedContent[k] = Self.updatedTextContent(
+          existing: indexedContent[k],
+          createText: createText,
+          transformText: transformText,
+          transformOpaque: transformOpaque,
+          transformTextBlock: transformTextBlock,
+        )
+        return
+      }
+
+      if let fallbackIndex = fallbackContent.lastIndex(where: Self.isTextLikeContent(_:)) {
+        fallbackContent[fallbackIndex] = Self.updatedTextContent(
+          existing: fallbackContent[fallbackIndex],
+          createText: createText,
+          transformText: transformText,
+          transformOpaque: transformOpaque,
+          transformTextBlock: transformTextBlock,
+        )
+      } else {
+        fallbackContent.append(Self.updatedTextContent(
+          existing: nil,
+          createText: createText,
+          transformText: transformText,
+          transformOpaque: transformOpaque,
+          transformTextBlock: transformTextBlock,
+        ))
+      }
+    }
+
+    private static func updatedTextContent(
+      existing: Message.Content?,
+      createText: String,
+      transformText: (String) -> String,
+      transformOpaque: ((OpaqueBlock) -> Message.Content)?,
+      transformTextBlock: ((String) -> Message.Content)?,
+    ) -> Message.Content {
+      switch existing {
+        case let .text(existingText)?:
+          let updatedText = transformText(existingText)
+          if let transformTextBlock {
+            return transformTextBlock(updatedText)
+          }
+          return .text(updatedText)
+        case let .providerOpaque(opaque)? where opaque.provider == "openai-responses" && opaque.type == annotatedOutputTextType:
+          if let transformOpaque {
+            return transformOpaque(opaque)
+          }
+          return .providerOpaque(OpaqueBlock(
+            provider: "openai-responses",
+            type: annotatedOutputTextType,
+            content: transformText(opaque.content ?? ""),
+            data: opaque.data,
+            isResponseContent: true,
+          ))
+        case let .providerOpaque(opaque)? where opaque.content != nil:
+          let updatedText = transformText(opaque.content ?? "")
+          if let transformTextBlock {
+            return transformTextBlock(updatedText)
+          }
+          return .text(updatedText)
+        default:
+          if let transformTextBlock {
+            return transformTextBlock(createText)
+          }
+          return .text(createText)
+      }
+    }
+
+    private static func isTextLikeContent(_ block: Message.Content) -> Bool {
+      switch block {
+        case .text:
+          true
+        case let .providerOpaque(opaque):
+          opaque.provider == "openai-responses" && opaque.type == annotatedOutputTextType
+        default:
+          false
+      }
+    }
+
+    private static func decodeAnnotationsData(_ data: String?) -> [[String: Value]] {
+      guard let data,
+            let jsonData = data.data(using: .utf8),
+            let value = try? Value.fromData(jsonData),
+            let annotations = value.arrayValue?.compactMap(\.objectValue)
+      else {
+        return []
+      }
+      return annotations
+    }
+
+    private static func encodeAnnotationsData(_ annotations: [[String: Value]]) -> String? {
+      guard let data = try? JSONSerialization.data(withJSONObject: annotations.map(Value.toSendable)),
+            let jsonString = String(data: data, encoding: .utf8)
+      else {
+        return nil
+      }
+      return jsonString
+    }
+
+    private static func formattedEndnotes(from blocks: [Message.Content]) -> String? {
+      let citations = blocks.reduce(into: [(label: String, url: String?, fileId: String?)]()) { result, block in
+        guard case let .providerOpaque(opaque) = block,
+              opaque.provider == "openai-responses",
+              opaque.type == annotatedOutputTextType
+        else {
+          return
+        }
+
+        for annotation in decodeAnnotationsData(opaque.data) {
+          switch annotation["type"]?.stringValue {
+            case "url_citation":
+              if let url = annotation["url"]?.stringValue {
+                result.append((label: annotation["title"]?.stringValue ?? url, url: url, fileId: nil))
+              }
+            case "file_citation", "container_file_citation":
+              if let filename = annotation["filename"]?.stringValue {
+                result.append((label: filename, url: nil, fileId: annotation["file_id"]?.stringValue))
+              }
+            default:
+              break
+          }
+        }
+      }
+
+      guard !citations.isEmpty else { return nil }
+
+      let uniqueCitations = citations.reduce(into: [(label: String, url: String?, fileId: String?)]()) { result, citation in
+        let key = citation.url ?? citation.fileId ?? citation.label
+        if !result.contains(where: { ($0.url ?? $0.fileId ?? $0.label) == key }) {
+          result.append(citation)
+        }
+      }
+
+      return uniqueCitations.map { citation in
+        if let url = citation.url {
+          "- [\(citation.label)](\(url))"
+        } else {
+          "- \(citation.label)"
+        }
+      }.joined(separator: "\n") + "\n"
     }
   }
 
@@ -1762,6 +1961,17 @@ public final class ResponsesClient: APIClient, Sendable {
       case StreamEventType.outputTextDone:
         if let text = event.text {
           streamingState.setFinalizedText(text, outputIndex: event.outputIndex, contentIndex: event.contentIndex)
+          yieldCurrentState()
+        }
+
+      case StreamEventType.outputTextAnnotationAdded:
+        if let annotation = event.annotation?.raw {
+          streamingState.addTextAnnotation(
+            annotation,
+            outputIndex: event.outputIndex,
+            contentIndex: event.contentIndex,
+            annotationIndex: event.annotationIndex,
+          )
           yieldCurrentState()
         }
 

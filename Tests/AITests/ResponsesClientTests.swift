@@ -763,6 +763,48 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Annotation added events emit streaming citation updates before completion`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_live_annotations","status":"in_progress","model":"gpt-4o"}}
+
+    event: response.output_item.added
+    data: {"type":"response.output_item.added","output_index":0,"item":{"id":"msg_live_annotations","type":"message","role":"assistant","status":"completed","content":[]}}
+
+    event: response.output_text.done
+    data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_live_annotations","text":"See docs"}
+
+    event: response.output_text.annotation.added
+    data: {"type":"response.output_text.annotation.added","output_index":0,"content_index":0,"item_id":"msg_live_annotations","annotation_index":0,"annotation":{"type":"url_citation","url":"https://example.com/live","title":"Live Docs"}}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let updates = UpdateCollector()
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [Message(role: .user, content: "Share the docs")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ), collecting: updates)
+
+    #expect(response.endnotesText?.contains("Live Docs") == true)
+    #expect(response.endnotesText?.contains("https://example.com/live") == true)
+    #expect(updates.updates.contains { update in
+      update.responseText == "See docs"
+        && update.endnotesText?.contains("https://example.com/live") == true
+        && update.content.contains { content in
+          guard case let .providerOpaque(block) = content else { return false }
+          return block.provider == "openai-responses" && block.type == "annotated_output_text"
+        }
+    })
+  }
+
+  @Test
   func `Clean EOF without any snapshot throws parsing error`() async throws {
     let (testId, endpoint) = setupMockHandler(sseData: "data: [DONE]\n\n")
     defer { MockURLProtocol.removeHandler(for: testId) }
