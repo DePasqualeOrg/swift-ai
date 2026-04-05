@@ -1546,6 +1546,61 @@ struct GeminiClientTests {
     #expect(streamedToolCallStates.last?.providerMetadata?["thoughtSignature"] == "sig_partial_1")
   }
 
+  @Test
+  func `Final function call args chunk without id keeps a different named call distinct`() async throws {
+    let sseData = """
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"call_partial_1","name":"get_weather","willContinue":true},"thoughtSignature":"sig_partial_1"}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":1,"totalTokenCount":26}}
+
+    data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"get_time","args":{"timezone":"UTC"}}}],"role":"model"},"index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":2,"totalTokenCount":27}}
+
+    data: {"candidates":[{"content":{"parts":[{"thoughtSignature":"sig_unrelated"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":25,"candidatesTokenCount":3,"totalTokenCount":28}}
+
+    """
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    let response = try await consumeStream(client.streamText(
+      modelId: "gemini-3-pro-preview",
+      tools: [
+        makeTestTool(name: "get_weather", description: "Get weather", paramName: "location"),
+        makeTestTool(name: "get_time", description: "Get time", paramName: "timezone"),
+      ],
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What's the time in UTC?")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    #expect(response.toolCalls.count == 2)
+    #expect(response.metadata?.finishReason == .toolUse)
+
+    let partialToolCall = try #require(response.toolCalls.first(where: { $0.id == "call_partial_1" }))
+    #expect(partialToolCall.name == "get_weather")
+    #expect(partialToolCall.providerMetadata?["thoughtSignature"] == "sig_partial_1")
+    #expect(partialToolCall.parameters.isEmpty)
+
+    let distinctToolCall = try #require(response.toolCalls.first(where: { $0.name == "get_time" }))
+    #expect(distinctToolCall.id != "call_partial_1")
+    #expect(distinctToolCall.providerMetadata == nil)
+    if case let .string(timezone) = distinctToolCall.parameters["timezone"] {
+      #expect(timezone == "UTC")
+    } else {
+      Issue.record("Expected different named args chunk to remain a distinct tool call")
+    }
+  }
+
   // MARK: - Stream Cancellation Tests
 
   @Test

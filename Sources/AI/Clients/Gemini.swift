@@ -1058,8 +1058,13 @@ public final class GeminiClient: APIClient, Sendable {
         geminiLogger.warning("Dropping Gemini functionCall chunk with args but no function name")
         return nil
       }
+      let continuationToolCall: ToolCall? = if explicitName == nil || explicitName == existingToolCall?.name {
+        existingToolCall
+      } else {
+        nil
+      }
       let toolCallId = (functionCall["id"] as? String)
-        ?? existingToolCall?.id
+        ?? continuationToolCall?.id
         ?? generateShortId()
       let parameters = try args.mapValues { try Value.fromAny($0) }
       let toolCall = ToolCall(
@@ -1067,7 +1072,7 @@ public final class GeminiClient: APIClient, Sendable {
         id: toolCallId,
         parameters: parameters,
         providerMetadata: mergedProviderMetadata(
-          existing: existingToolCall?.providerMetadata,
+          existing: continuationToolCall?.providerMetadata,
           thoughtSignature: thoughtSignature,
         ),
       )
