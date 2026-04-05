@@ -257,21 +257,6 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     ]
   }
 
-  private static func fallbackText(for attachment: Attachment) -> String {
-    switch attachment.kind {
-      case let .image(data, mimeType):
-        return ToolResult.Content.image(data, mimeType: mimeType).fallbackDescription
-      case let .audio(data, mimeType):
-        return ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription
-      case let .document(data, mimeType):
-        return ToolResult.Content.file(data, mimeType: mimeType, filename: attachment.filename).fallbackDescription
-      case let .video(data, mimeType):
-        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
-        let filename = attachment.filename.map { "\($0) " } ?? ""
-        return "[Unsupported attachment: \(filename)\(mimeType), \(size)]"
-    }
-  }
-
   private static func serializedUserAttachment(_ attachment: Attachment) async throws -> [String: any Sendable]? {
     switch attachment.kind {
       case let .image(data, mimeType):
@@ -321,9 +306,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
 
   private static func requestMessages(for message: Message) async throws -> [[String: any Sendable]] {
     if message.role == .tool {
-      return message.content.compactMap { block -> [String: any Sendable]? in
-        guard case let .toolResult(toolResult) = block else { return nil }
-
+      func requestMessage(for toolResult: ToolResult) -> [String: any Sendable] {
         let resultContent = toolResult.content.map { content -> String in
           switch content {
             case let .text(text):
@@ -340,6 +323,28 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           "content": resultContent,
         ]
       }
+
+      var encodedMessages: [[String: any Sendable]] = []
+      var collapsedContent: [Message.Content] = []
+
+      func flushCollapsedContent() async throws {
+        guard !collapsedContent.isEmpty else { return }
+        let collapsedMessage = Message(role: .tool, content: collapsedContent).collapsingToolResults()
+        collapsedContent.removeAll(keepingCapacity: true)
+        try await encodedMessages.append(contentsOf: requestMessages(for: collapsedMessage))
+      }
+
+      for block in message.content {
+        if case let .toolResult(toolResult) = block {
+          try await flushCollapsedContent()
+          encodedMessages.append(requestMessage(for: toolResult))
+        } else {
+          collapsedContent.append(block)
+        }
+      }
+
+      try await flushCollapsedContent()
+      return encodedMessages
     }
 
     var textParts: [String] = []
@@ -403,7 +408,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
         case let .attachment(attachment):
           guard message.role == .user else {
             openAILogger.warning("Attachments on \(message.role.rawValue) messages are not supported by ChatCompletions. Using fallback text.")
-            textParts.append(fallbackText(for: attachment))
+            textParts.append(attachment.replayFallbackText)
             continue
           }
 
@@ -476,7 +481,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     if let apiKey {
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
-    let patchedMessages = ChatCompletionsReplaySupport.patchingOrphanedToolCalls(messages)
+    let replayPlan = ChatCompletionsReplayNormalizer.normalize(messages)
     var processedMessages: [[String: any Sendable]] = []
     if let systemPrompt, !systemPrompt.isEmpty {
       processedMessages.append([
@@ -484,7 +489,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
         "content": systemPrompt,
       ])
     }
-    for message in patchedMessages {
+    for message in replayPlan.messages {
       try await processedMessages.append(contentsOf: Self.requestMessages(for: message))
     }
     var body: [String: any Sendable] = [

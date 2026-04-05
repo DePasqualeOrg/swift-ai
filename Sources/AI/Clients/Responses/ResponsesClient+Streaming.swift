@@ -29,6 +29,18 @@ extension ResponsesClient {
     }
 
     let replayPlan = try await ResponsesReplayNormalizer.normalize(input)
+    let replayConfiguration = Configuration(
+      reasoningEffortLevel: reasoningEffortLevel,
+      verbosityLevel: verbosityLevel,
+      serverSideTools: serverSideTools,
+      backgroundMode: backgroundMode,
+      enableStrictModeForTools: enableStrictModeForTools,
+    )
+    let captureRequirements = ReplayCapturePolicy.requirements(for: .responses(
+      modelId: modelId,
+      configuration: replayConfiguration,
+      endpoint: endpoint,
+    ))
 
     var body: [String: any Sendable] = [
       "model": modelId,
@@ -95,7 +107,14 @@ extension ResponsesClient {
         "effort": reasoningEffortLevel.rawValue,
         "summary": "auto",
       ]
-      body["include"] = ["reasoning.encrypted_content"]
+    }
+
+    var includeFields: [String] = []
+    if captureRequirements.requiresOpenAIResponsesReasoningEncryptedContent {
+      includeFields.append("reasoning.encrypted_content")
+    }
+    if !includeFields.isEmpty {
+      body["include"] = includeFields
     }
 
     var textConfig: [String: any Sendable] = [:]

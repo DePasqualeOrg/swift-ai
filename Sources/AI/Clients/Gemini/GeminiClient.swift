@@ -216,23 +216,8 @@ public final class GeminiClient: APIClient, Sendable {
     return content
   }
 
-  private static func fallbackText(for attachment: Attachment) -> String {
-    switch attachment.kind {
-      case let .image(data, mimeType):
-        return ToolResult.Content.image(data, mimeType: mimeType).fallbackDescription
-      case let .audio(data, mimeType):
-        return ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription
-      case let .document(data, mimeType):
-        return ToolResult.Content.file(data, mimeType: mimeType, filename: attachment.filename).fallbackDescription
-      case let .video(data, mimeType):
-        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
-        let filename = attachment.filename.map { "\($0) " } ?? ""
-        return "[Unsupported attachment: \(filename)\(mimeType), \(size)]"
-    }
-  }
-
   static func systemInstructionParts(for message: Message) -> [[String: any Sendable]] {
-    message.replayableTextSegments(attachmentFallback: fallbackText(for:)).map { ["text": $0] }
+    message.replayableTextSegmentsWithAttachmentFallback().map { ["text": $0] }
   }
 
   func requestParts(for message: Message, apiKey: String) async throws -> [[String: any Sendable]] {

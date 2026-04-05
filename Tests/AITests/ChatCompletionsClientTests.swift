@@ -1445,6 +1445,122 @@ struct ChatCompletionsClientTests {
     #expect(authHeader == "Bearer sk-test-api-key")
   }
 
+  @Test
+  func `Chat Completions replay collapses late tool results after flushing pending calls`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"id":"test","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Ok"},"finish_reason":"stop"}]}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: ReplayFixtures.lateToolResultHistory(),
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    #expect(messages.count == 4)
+    #expect(messages[0]["role"] as? String == "assistant")
+
+    let syntheticResultMessage = messages[1]
+    #expect(syntheticResultMessage["role"] as? String == "tool")
+    #expect(syntheticResultMessage["tool_call_id"] as? String == "call_1")
+    let syntheticResultText = try #require(syntheticResultMessage["content"] as? String)
+    #expect(syntheticResultText.contains("Function call was not executed."))
+
+    #expect(messages[2]["role"] as? String == "user")
+
+    let collapsedLateResultMessage = messages[3]
+    #expect(collapsedLateResultMessage["role"] as? String == "user")
+    let collapsedLateResultText = try #require(collapsedLateResultMessage["content"] as? String)
+    #expect(collapsedLateResultText.contains(ReplayFixtures.lateToolResultText))
+  }
+
+  @Test
+  func `Chat Completions replay preserves mixed tool turn fallback text`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"id":"test","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Ok"},"finish_reason":"stop"}]}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ChatCompletionsClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
+          .toolCall(ToolCall(name: "lookup", id: "call_2", parameters: ["id": "42"])),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Matched result"))),
+          .providerOpaque(OpaqueBlock(
+            provider: "gemini",
+            type: "codeExecutionResult",
+            content: "Execution output: 42",
+            isResponseContent: true,
+          )),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    #expect(messages.count == 4)
+
+    let matchedResultMessage = messages[1]
+    #expect(matchedResultMessage["role"] as? String == "tool")
+    #expect(matchedResultMessage["tool_call_id"] as? String == "call_1")
+    #expect(matchedResultMessage["content"] as? String == "Matched result")
+
+    let syntheticResultMessage = messages[2]
+    #expect(syntheticResultMessage["role"] as? String == "tool")
+    #expect(syntheticResultMessage["tool_call_id"] as? String == "call_2")
+
+    let collapsedFallbackMessage = messages[3]
+    #expect(collapsedFallbackMessage["role"] as? String == "user")
+    let collapsedFallbackText = try #require(collapsedFallbackMessage["content"] as? String)
+    #expect(collapsedFallbackText.contains("Execution output: 42"))
+  }
+
   // MARK: - Cancellation Tests
 
   @Test

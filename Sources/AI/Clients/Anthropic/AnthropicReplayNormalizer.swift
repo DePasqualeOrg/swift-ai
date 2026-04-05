@@ -9,7 +9,13 @@ enum AnthropicReplayNormalizer {
   }
 
   static func normalize(_ messages: [Message], thinkingEnabled: Bool) async throws -> Plan {
-    let normalizedMessages = normalizedMessages(messages, thinkingEnabled: thinkingEnabled)
+    let profile = ReplayProviderProfile.forAnthropic(thinkingEnabled: thinkingEnabled)
+    let repairedMessages = ReplayNormalizer.normalize(messages, profile: profile).messages
+    let normalizedMessages = if profile.reasoning.collapsesToolExchangesWithoutNativeReasoning {
+      collapseThinkingHistory(in: repairedMessages)
+    } else {
+      repairedMessages
+    }
     var systemTexts: [String] = []
     var messageParams: [AnthropicClient.MessageParam] = []
 
@@ -30,72 +36,6 @@ enum AnthropicReplayNormalizer {
     }
 
     return Plan(systemTexts: systemTexts, messages: messageParams)
-  }
-
-  private static func normalizedMessages(_ messages: [Message], thinkingEnabled: Bool) -> [Message] {
-    let sanitizedMessages = sanitizeToolHistory(in: messages)
-    guard thinkingEnabled else { return sanitizedMessages }
-    return collapseThinkingHistory(in: sanitizedMessages)
-  }
-
-  private static func sanitizeToolHistory(in messages: [Message]) -> [Message] {
-    var normalizedMessages: [Message] = []
-    var pendingToolCalls: [ToolCall] = []
-
-    func flushPendingToolCalls() {
-      guard let syntheticResultMessage = ToolReplaySupport.syntheticToolResultMessage(for: pendingToolCalls) else { return }
-      normalizedMessages.append(syntheticResultMessage)
-      pendingToolCalls.removeAll()
-    }
-
-    for message in messages {
-      switch message.role {
-        case .assistant:
-          flushPendingToolCalls()
-          normalizedMessages.append(message)
-          pendingToolCalls = message.toolCalls
-
-        case .tool:
-          var remainingPendingIDs = Set(pendingToolCalls.map(\.id))
-          var matchedToolResults: [ToolResult] = []
-          var invalidContent: [Message.Content] = []
-
-          for item in message.content {
-            if case let .toolResult(toolResult) = item,
-               remainingPendingIDs.contains(toolResult.id)
-            {
-              matchedToolResults.append(toolResult)
-              remainingPendingIDs.remove(toolResult.id)
-            } else {
-              invalidContent.append(item)
-            }
-          }
-
-          if !matchedToolResults.isEmpty {
-            let matchedToolResultIDs = Set(matchedToolResults.map(\.id))
-            normalizedMessages.append(Message(
-              role: .tool,
-              content: matchedToolResults.map(Message.Content.toolResult),
-            ))
-            pendingToolCalls.removeAll { matchedToolResultIDs.contains($0.id) }
-          }
-
-          if !invalidContent.isEmpty {
-            flushPendingToolCalls()
-            let collapsedMessage = Message(role: .tool, content: invalidContent).collapsingToolResults()
-            if !collapsedMessage.content.isEmpty {
-              normalizedMessages.append(collapsedMessage)
-            }
-          }
-
-        case .system, .developer, .user:
-          flushPendingToolCalls()
-          normalizedMessages.append(message)
-      }
-    }
-
-    flushPendingToolCalls()
-    return normalizedMessages
   }
 
   private static func collapseThinkingHistory(in messages: [Message]) -> [Message] {

@@ -691,7 +691,7 @@ struct GeminiClientTests {
   }
 
   @Test
-  func `Gemini replay preserves late tool results without synthetic duplicates`() async throws {
+  func `Gemini replay collapses late tool results after flushing pending calls`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -716,23 +716,7 @@ struct GeminiClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gemini-2.5-flash",
       systemPrompt: nil,
-      messages: [
-        Message(role: .assistant, content: [
-          .toolCall(ToolCall(
-            name: "get_weather",
-            id: "call_weather_1",
-            parameters: ["location": .string("Paris")],
-          )),
-        ]),
-        Message(role: .user, content: "Still waiting"),
-        Message(role: .tool, content: [
-          .toolResult(ToolResult(
-            name: "get_weather",
-            id: "call_weather_1",
-            content: [.text("Sunny later")],
-          )),
-        ]),
-      ],
+      messages: ReplayFixtures.lateToolResultHistory(),
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -746,9 +730,15 @@ struct GeminiClientTests {
     #expect(functionResponseMessages.count == 1)
 
     let functionResponse = try #require((functionResponseMessages[0]["parts"] as? [[String: Any]])?.first?["functionResponse"] as? [String: Any])
-    #expect(functionResponse["id"] as? String == "call_weather_1")
+    #expect(functionResponse["id"] as? String == "call_1")
     let responsePayload = try #require(functionResponse["response"] as? [String: Any])
-    #expect(responsePayload["output"] as? String == "Sunny later")
+    #expect((responsePayload["error"] as? String)?.contains("Function call was not executed.") == true)
+
+    let collapsedLateTurn = try #require(contents.first(where: { content in
+      let parts = content["parts"] as? [[String: Any]]
+      return parts?.contains(where: { ($0["text"] as? String)?.contains(ReplayFixtures.lateToolResultText) == true }) == true
+    }))
+    #expect(collapsedLateTurn["role"] as? String == "user")
   }
 
   @Test
@@ -777,15 +767,7 @@ struct GeminiClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gemini-2.5-flash",
       systemPrompt: nil,
-      messages: [
-        Message(role: .assistant, content: [
-          .toolCall(ToolCall(
-            name: "get_weather",
-            id: "call_weather_1",
-            parameters: ["location": .string("Paris")],
-          )),
-        ]),
-      ],
+      messages: ReplayFixtures.trailingUnresolvedToolCallHistory(),
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -796,11 +778,11 @@ struct GeminiClientTests {
 
     #expect(contents[0]["role"] as? String == "model")
     let functionCall = try #require((contents[0]["parts"] as? [[String: Any]])?.first?["functionCall"] as? [String: Any])
-    #expect(functionCall["id"] as? String == "call_weather_1")
+    #expect(functionCall["id"] as? String == "call_1")
 
     #expect(contents[1]["role"] as? String == "user")
     let functionResponse = try #require((contents[1]["parts"] as? [[String: Any]])?.first?["functionResponse"] as? [String: Any])
-    #expect(functionResponse["id"] as? String == "call_weather_1")
+    #expect(functionResponse["id"] as? String == "call_1")
     let responsePayload = try #require(functionResponse["response"] as? [String: Any])
     #expect((responsePayload["error"] as? String)?.contains("Function call was not executed.") == true)
   }
@@ -1018,33 +1000,7 @@ struct GeminiClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "gemini-2.5-flash",
       systemPrompt: nil,
-      messages: [
-        Message(role: .assistant, content: [
-          .toolCall(ToolCall(
-            name: "get_weather",
-            id: "call_weather_1",
-            parameters: ["location": .string("Paris")],
-          )),
-          .toolCall(ToolCall(
-            name: "lookup_timezone",
-            id: "call_timezone_1",
-            parameters: ["city": .string("Paris")],
-          )),
-        ]),
-        Message(role: .tool, content: [
-          .toolResult(ToolResult(
-            name: "get_weather",
-            id: "call_weather_1",
-            content: [.text("Sunny")],
-          )),
-          .toolResult(ToolResult(
-            name: "stale",
-            id: "call_stray",
-            content: [.text("Stray result")],
-          )),
-        ]),
-        Message(role: .user, content: "What about tomorrow?"),
-      ],
+      messages: ReplayFixtures.mixedToolTurnHistory(),
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -1057,17 +1013,17 @@ struct GeminiClientTests {
     }
     #expect(functionResponses.count == 2)
 
-    let matchedResponse = try #require(functionResponses.first { $0["id"] as? String == "call_weather_1" })
+    let matchedResponse = try #require(functionResponses.first { $0["id"] as? String == "call_1" })
     let matchedPayload = try #require(matchedResponse["response"] as? [String: Any])
-    #expect(matchedPayload["output"] as? String == "Sunny")
+    #expect(matchedPayload["output"] as? String == ReplayFixtures.matchedToolResultText)
 
-    let syntheticResponse = try #require(functionResponses.first { $0["id"] as? String == "call_timezone_1" })
+    let syntheticResponse = try #require(functionResponses.first { $0["id"] as? String == "call_2" })
     let syntheticPayload = try #require(syntheticResponse["response"] as? [String: Any])
     #expect((syntheticPayload["error"] as? String)?.contains("Function call was not executed.") == true)
 
     let collapsedStrayTurn = try #require(contents.first(where: { content in
       let parts = content["parts"] as? [[String: Any]]
-      return parts?.contains(where: { ($0["text"] as? String)?.contains("Stray result") == true }) == true
+      return parts?.contains(where: { ($0["text"] as? String)?.contains(ReplayFixtures.strayToolResultText) == true }) == true
     }))
     #expect(collapsedStrayTurn["role"] as? String == "user")
   }

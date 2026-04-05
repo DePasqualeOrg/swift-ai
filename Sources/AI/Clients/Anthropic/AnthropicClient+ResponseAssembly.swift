@@ -8,7 +8,7 @@ extension AnthropicClient {
   }
 
   static func systemInstructionTexts(for message: Message) -> [String] {
-    message.replayableTextSegments(attachmentFallback: fallbackText(for:))
+    message.replayableTextSegmentsWithAttachmentFallback()
   }
 
   private static func metadata(from message: APIMessage?) -> GenerationResponse.Metadata? {
@@ -324,21 +324,6 @@ extension AnthropicClient {
     }
 
     return blocks
-  }
-
-  private static func fallbackText(for attachment: Attachment) -> String {
-    switch attachment.kind {
-      case let .image(data, mimeType):
-        return ToolResult.Content.image(data, mimeType: mimeType).fallbackDescription
-      case let .audio(data, mimeType):
-        return ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription
-      case let .document(data, mimeType):
-        return ToolResult.Content.file(data, mimeType: mimeType, filename: attachment.filename).fallbackDescription
-      case let .video(data, mimeType):
-        let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
-        let filename = attachment.filename.map { "\($0) " } ?? ""
-        return "[Unsupported attachment: \(filename)\(mimeType), \(size)]"
-    }
   }
 
   private static func formatEndnotesList(urlStrings: [String]) -> String? {

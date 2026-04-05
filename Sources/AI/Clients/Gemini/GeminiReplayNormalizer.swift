@@ -20,7 +20,8 @@ enum GeminiReplayNormalizer {
     }
 
     var contents: [[String: any Sendable]] = []
-    for message in NonAnthropicToolReplaySupport.normalizedMessages(messages) {
+    let replayPlan = ReplayNormalizer.normalize(messages, profile: .gemini)
+    for message in replayPlan.messages {
       switch message.role {
         case .system, .developer:
           systemParts.append(contentsOf: GeminiClient.systemInstructionParts(for: message))

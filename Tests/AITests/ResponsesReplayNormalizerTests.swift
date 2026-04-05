@@ -7,24 +7,14 @@ import Testing
 struct ResponsesReplayNormalizerTests {
   @Test
   func `Responses normalizer emits request ready items for mixed tool history`() async throws {
-    let messages = [
-      Message(role: .assistant, content: [
-        .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
-        .toolCall(ToolCall(name: "lookup", id: "call_2", parameters: ["id": "42"])),
-      ]),
-      Message(role: .tool, content: [
-        .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Matched result"))),
-        .toolResult(ToolResult(name: "stale", id: "call_stray", content: .text("Stray result"))),
-      ]),
-      Message(role: .user, content: "Continue"),
-    ]
+    let messages = ReplayFixtures.mixedToolTurnHistory()
 
     let plan = try await ResponsesReplayNormalizer.normalize(messages)
     let functionCallOutputs = plan.inputItems.filter { $0["type"] as? String == "function_call_output" }
     #expect(functionCallOutputs.count == 2)
 
     let matchedOutput = try #require(functionCallOutputs.first { $0["call_id"] as? String == "call_1" })
-    #expect(matchedOutput["output"] as? String == "Matched result")
+    #expect(matchedOutput["output"] as? String == ReplayFixtures.matchedToolResultText)
 
     let syntheticOutput = try #require(functionCallOutputs.first { $0["call_id"] as? String == "call_2" })
     let syntheticError = try #require(syntheticOutput["output"] as? String)
@@ -33,7 +23,7 @@ struct ResponsesReplayNormalizerTests {
     let collapsedStrayMessage = try #require(plan.inputItems.first(where: { item in
       guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
       let content = item["content"] as? [[String: Any]]
-      return content?.contains(where: { ($0["text"] as? String)?.contains("Stray result") == true }) == true
+      return content?.contains(where: { ($0["text"] as? String)?.contains(ReplayFixtures.strayToolResultText) == true }) == true
     }))
     #expect(collapsedStrayMessage["id"] == nil)
   }

@@ -759,15 +759,7 @@ struct AnthropicClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "claude-sonnet-4-20250514",
       systemPrompt: nil,
-      messages: [
-        Message(role: .assistant, content: [
-          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
-        ]),
-        Message(role: .user, content: "Continue"),
-        Message(role: .tool, content: [
-          .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Late result body"))),
-        ]),
-      ],
+      messages: ReplayFixtures.lateToolResultHistory(),
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -785,7 +777,7 @@ struct AnthropicClientTests {
 
     let collapsedLateResultMessage = messages[3]
     let collapsedLateResultContent = try #require(collapsedLateResultMessage["content"] as? [[String: Any]])
-    #expect(collapsedLateResultContent.first?["text"] as? String == "\n\n[Result from tool \"search\": Late result body]")
+    #expect(collapsedLateResultContent.first?["text"] as? String == "\n\n[Result from tool \"search\": \(ReplayFixtures.lateToolResultText)]")
   }
 
   @Test
@@ -818,17 +810,7 @@ struct AnthropicClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "claude-sonnet-4-20250514",
       systemPrompt: nil,
-      messages: [
-        Message(role: .assistant, content: [
-          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
-          .toolCall(ToolCall(name: "lookup", id: "call_2", parameters: ["id": "42"])),
-        ]),
-        Message(role: .tool, content: [
-          .toolResult(ToolResult(name: "stale", id: "call_stray", content: .text("Stray result"))),
-          .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Matched result"))),
-        ]),
-        Message(role: .user, content: "Continue"),
-      ],
+      messages: ReplayFixtures.mixedToolTurnHistory(),
       maxTokens: 1024,
       apiKey: "test-key",
     ))
@@ -842,7 +824,7 @@ struct AnthropicClientTests {
     let matchedResult = try #require(matchedContent.first)
     #expect(matchedResult["type"] as? String == "tool_result")
     #expect(matchedResult["tool_use_id"] as? String == "call_1")
-    #expect(matchedResult["content"] as? String == "Matched result")
+    #expect(matchedResult["content"] as? String == ReplayFixtures.matchedToolResultText)
 
     let syntheticResultMessage = messages[2]
     let syntheticContent = try #require(syntheticResultMessage["content"] as? [[String: Any]])
@@ -853,7 +835,7 @@ struct AnthropicClientTests {
 
     let collapsedStrayMessage = messages[3]
     let collapsedStrayContent = try #require(collapsedStrayMessage["content"] as? [[String: Any]])
-    #expect(collapsedStrayContent.first?["text"] as? String == "\n\n[Result from tool \"stale\": Stray result]")
+    #expect(collapsedStrayContent.first?["text"] as? String == "\n\n[Result from tool \"stale\": \(ReplayFixtures.strayToolResultText)]")
   }
 
   @Test
@@ -886,11 +868,7 @@ struct AnthropicClientTests {
     _ = try await consumeStream(client.streamText(
       modelId: "claude-sonnet-4-20250514",
       systemPrompt: nil,
-      messages: [
-        Message(role: .assistant, content: [
-          .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
-        ]),
-      ],
+      messages: ReplayFixtures.trailingUnresolvedToolCallHistory(),
       maxTokens: 1024,
       apiKey: "test-key",
     ))

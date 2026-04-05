@@ -1806,7 +1806,7 @@ struct ResponsesClientTests {
   }
 
   @Test
-  func `Responses replay preserves late tool results without synthetic duplicates`() async throws {
+  func `Responses replay collapses late tool results after flushing pending calls`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -1833,15 +1833,7 @@ struct ResponsesClientTests {
     }
     defer { MockURLProtocol.removeHandler(for: testId) }
 
-    let messages = [
-      Message(role: .assistant, content: [
-        .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
-      ]),
-      Message(role: .user, content: "Continue"),
-      Message(role: .tool, content: [
-        .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Late result body"))),
-      ]),
-    ]
+    let messages = ReplayFixtures.lateToolResultHistory()
 
     let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
     _ = try await consumeStream(client.streamText(
@@ -1856,7 +1848,17 @@ struct ResponsesClientTests {
     let functionCallOutputs = input.filter { $0["type"] as? String == "function_call_output" }
     #expect(functionCallOutputs.count == 1)
     #expect(functionCallOutputs[0]["call_id"] as? String == "call_1")
-    #expect(functionCallOutputs[0]["output"] as? String == "Late result body")
+    let syntheticError = try #require(functionCallOutputs[0]["output"] as? String)
+    #expect(syntheticError.contains("Function call was not executed."))
+
+    let collapsedLateResultMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      let content = item["content"] as? [[String: Any]]
+      return content?.contains(where: {
+        ($0["type"] as? String) == "input_text" && (($0["text"] as? String)?.contains(ReplayFixtures.lateToolResultText) == true)
+      }) == true
+    }))
+    #expect(collapsedLateResultMessage["id"] == nil)
   }
 
   @Test
@@ -1887,11 +1889,7 @@ struct ResponsesClientTests {
     }
     defer { MockURLProtocol.removeHandler(for: testId) }
 
-    let messages = [
-      Message(role: .assistant, content: [
-        .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
-      ]),
-    ]
+    let messages = ReplayFixtures.trailingUnresolvedToolCallHistory()
 
     let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
     _ = try await consumeStream(client.streamText(
@@ -2061,17 +2059,7 @@ struct ResponsesClientTests {
     }
     defer { MockURLProtocol.removeHandler(for: testId) }
 
-    let messages = [
-      Message(role: .assistant, content: [
-        .toolCall(ToolCall(name: "search", id: "call_1", parameters: ["query": "swift"])),
-        .toolCall(ToolCall(name: "lookup", id: "call_2", parameters: ["id": "42"])),
-      ]),
-      Message(role: .tool, content: [
-        .toolResult(ToolResult(name: "search", id: "call_1", content: .text("Matched result"))),
-        .toolResult(ToolResult(name: "stale", id: "call_stray", content: .text("Stray result"))),
-      ]),
-      Message(role: .user, content: "Continue"),
-    ]
+    let messages = ReplayFixtures.mixedToolTurnHistory()
 
     let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
     _ = try await consumeStream(client.streamText(
@@ -2087,7 +2075,7 @@ struct ResponsesClientTests {
     #expect(functionCallOutputs.count == 2)
 
     let matchedOutput = try #require(functionCallOutputs.first { $0["call_id"] as? String == "call_1" })
-    #expect(matchedOutput["output"] as? String == "Matched result")
+    #expect(matchedOutput["output"] as? String == ReplayFixtures.matchedToolResultText)
 
     let syntheticOutput = try #require(functionCallOutputs.first { $0["call_id"] as? String == "call_2" })
     let syntheticError = try #require(syntheticOutput["output"] as? String)
@@ -2097,7 +2085,7 @@ struct ResponsesClientTests {
       guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
-        ($0["type"] as? String) == "input_text" && (($0["text"] as? String)?.contains("Stray result") == true)
+        ($0["type"] as? String) == "input_text" && (($0["text"] as? String)?.contains(ReplayFixtures.strayToolResultText) == true)
       }) == true
     }))
     #expect(collapsedStrayMessage["id"] == nil)
@@ -2179,6 +2167,47 @@ struct ResponsesClientTests {
     }))
     let content = try #require(replayedMessage["content"] as? [[String: Any]])
     #expect(content.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "The answer is 42." }))
+  }
+
+  @Test
+  func `Responses requests encrypted reasoning capture by default for replayable transcripts`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"o3"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"o3","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "o3",
+      messages: [Message(role: .user, content: "Hello")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let include = try #require(body?["include"] as? [String])
+    #expect(include.contains("reasoning.encrypted_content"))
   }
 
   @Test
