@@ -447,6 +447,25 @@ struct ChatCompletionsClientTests {
     #expect(endnotes.contains("https://developer.apple.com/swift/"))
     #expect(endnotes.contains("Swift on GitHub"))
     #expect(endnotes.contains("https://github.com/apple/swift"))
+
+    let annotationBlock = response.content.compactMap { block -> OpaqueBlock? in
+      guard case let .providerOpaque(opaque) = block,
+            opaque.provider == "openai-chat-completions",
+            opaque.type == "annotations"
+      else {
+        return nil
+      }
+      return opaque
+    }.first
+    let annotationData = try #require(annotationBlock?.data?.data(using: .utf8))
+    let annotationObjects = try #require(JSONSerialization.jsonObject(with: annotationData) as? [[String: Any]])
+    let annotationURLs = Set(annotationObjects.compactMap { annotation -> String? in
+      (annotation["url_citation"] as? [String: Any])?["url"] as? String
+    })
+    #expect(annotationURLs == [
+      "https://developer.apple.com/swift/",
+      "https://github.com/apple/swift",
+    ])
   }
 
   @Test
@@ -1037,6 +1056,80 @@ struct ChatCompletionsClientTests {
 
     #expect(assistantMessage["content"] as? String == "Cited answer.")
     #expect(assistantMessage["refusal"] as? String == "I can't continue beyond that.")
+  }
+
+  @Test
+  func `Chat Completions annotations replay through Chat Completions`() async throws {
+    let fixture = try loadFixture("openai_annotations_response.json")
+
+    let parseId = UUID().uuidString
+    let parseEndpoint = try #require(URL(string: "https://mock.test/\(parseId)"))
+    MockURLProtocol.setHandler(for: parseId) { request in
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      return (response, fixture.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: parseId) }
+
+    let parsingClient = ChatCompletionsClient(endpoint: parseEndpoint, session: makeMockSession())
+    let parsedResponse = try await parsingClient.generateText(
+      modelId: "gpt-4o",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "What is Swift?")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    )
+
+    var capturedBodyData: Data?
+    let replayId = UUID().uuidString
+    let replayEndpoint = try #require(URL(string: "https://mock.test/\(replayId)"))
+    MockURLProtocol.setHandler(for: replayId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"id":"test","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":1,"total_tokens":11}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: replayId) }
+
+    let replayClient = ChatCompletionsClient(endpoint: replayEndpoint, session: makeMockSession())
+    _ = try await consumeStream(replayClient.streamText(
+      modelId: "gpt-4o",
+      systemPrompt: nil,
+      messages: [parsedResponse.message, Message(role: .user, content: "Tell me more")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let messages = try #require(body?["messages"] as? [[String: Any]])
+    let assistantMessage = try #require(messages.first(where: { $0["role"] as? String == "assistant" }))
+
+    #expect(assistantMessage["content"] as? String == "Swift is a programming language developed by Apple.")
+
+    let annotations = try #require(assistantMessage["annotations"] as? [[String: Any]])
+    #expect(annotations.count == 2)
+
+    let urls = Set(annotations.compactMap { annotation -> String? in
+      (annotation["url_citation"] as? [String: Any])?["url"] as? String
+    })
+    #expect(urls == [
+      "https://developer.apple.com/swift/",
+      "https://github.com/apple/swift",
+    ])
   }
 
   @Test

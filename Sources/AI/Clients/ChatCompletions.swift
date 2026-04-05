@@ -65,6 +65,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
   public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text]
   private static let refusalOpaqueProvider = "openai-chat-completions"
   private static let refusalOpaqueType = "refusal"
+  private static let annotationsOpaqueType = "annotations"
 
   /// Predefined API endpoints for the Chat Completions API.
   public enum Endpoint {
@@ -114,6 +115,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     reasoningText: String? = nil,
     responseText: String? = nil,
     refusalText: String? = nil,
+    annotationsData: String? = nil,
     notesText: String? = nil,
     toolCalls: [AI.ToolCall] = [],
   ) -> [Message.Content] {
@@ -130,6 +132,13 @@ public final class ChatCompletionsClient: APIClient, Sendable {
         type: refusalOpaqueType,
         content: refusalText,
         isResponseContent: true,
+      )))
+    }
+    if let annotationsData, !annotationsData.isEmpty {
+      content.append(.providerOpaque(OpaqueBlock(
+        provider: refusalOpaqueProvider,
+        type: annotationsOpaqueType,
+        data: annotationsData,
       )))
     }
     if let notesText, !notesText.isEmpty {
@@ -151,16 +160,61 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     return refusalText
   }
 
-  private static func assistantSnapshot(from response: GenerationResponse) -> (reasoning: String?, response: String?, refusal: String?, notes: String?, toolCalls: [AI.ToolCall]) {
+  private static func annotationsData(from block: Message.Content) -> String? {
+    guard case let .providerOpaque(opaque) = block,
+          opaque.provider == refusalOpaqueProvider,
+          opaque.type == annotationsOpaqueType,
+          let annotationsData = opaque.data,
+          !annotationsData.isEmpty
+    else {
+      return nil
+    }
+    return annotationsData
+  }
+
+  private static func serializedAnnotations(_ annotations: [Annotation]?) -> String? {
+    guard let annotations, !annotations.isEmpty else { return nil }
+    let annotationsRaw = annotations.map { Value.toSendable($0.raw) }
+    guard let data = try? JSONSerialization.data(withJSONObject: annotationsRaw),
+          let jsonString = String(data: data, encoding: .utf8)
+    else {
+      return nil
+    }
+    return jsonString
+  }
+
+  private static func decodeSerializedAnnotations(_ annotationsData: String) -> [[String: any Sendable]]? {
+    guard let data = annotationsData.data(using: .utf8),
+          let value = try? Value.fromData(data),
+          let array = value.arrayValue
+    else {
+      return nil
+    }
+
+    var annotations: [[String: any Sendable]] = []
+    annotations.reserveCapacity(array.count)
+    for item in array {
+      guard let object = item.objectValue else { return nil }
+      annotations.append(Value.toSendable(object))
+    }
+    return annotations
+  }
+
+  private static func assistantSnapshot(from response: GenerationResponse) -> (reasoning: String?, response: String?, refusal: String?, annotations: String?, notes: String?, toolCalls: [AI.ToolCall]) {
     var reasoningParts: [String] = []
     var responseParts: [String] = []
     var refusalParts: [String] = []
+    var annotationsData: String?
     var notesParts: [String] = []
     var toolCalls: [AI.ToolCall] = []
 
     for block in response.content {
       if let refusalText = Self.refusalText(from: block) {
         refusalParts.append(refusalText)
+        continue
+      }
+      if let blockAnnotationsData = Self.annotationsData(from: block) {
+        annotationsData = blockAnnotationsData
         continue
       }
 
@@ -182,6 +236,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       reasoningParts.isEmpty ? nil : reasoningParts.joined(),
       responseParts.isEmpty ? nil : responseParts.joined(),
       refusalParts.isEmpty ? nil : refusalParts.joined(),
+      annotationsData,
       notesParts.isEmpty ? nil : notesParts.joined(),
       toolCalls,
     )
@@ -289,6 +344,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
 
     var textParts: [String] = []
     var refusalParts: [String] = []
+    var annotations: [[String: any Sendable]] = []
     var toolCalls: [[String: any Sendable]] = []
     var multimodalContent: [[String: any Sendable]] = []
     var hasNonTextContent = false
@@ -314,6 +370,15 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               "text": text,
             ])
           }
+        case let .providerOpaque(block) where block.provider == Self.refusalOpaqueProvider && block.type == Self.annotationsOpaqueType:
+          guard message.role == .assistant else { break }
+          guard let annotationsData = block.data,
+                let decodedAnnotations = Self.decodeSerializedAnnotations(annotationsData)
+          else {
+            openAILogger.warning("Failed to decode ChatCompletions annotations for assistant replay. Dropping annotations.")
+            break
+          }
+          annotations.append(contentsOf: decodedAnnotations)
         case let .providerOpaque(block) where block.provider == "openai-responses" && block.type == "refusal":
           if let refusal = block.content, !refusal.isEmpty {
             if message.role == .assistant {
@@ -388,6 +453,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
 
     if !refusalText.isEmpty {
       requestMessage["refusal"] = refusalText
+    }
+    if !annotations.isEmpty, message.role == .assistant {
+      requestMessage["annotations"] = annotations
     }
 
     if !hasSerializedContent, refusalText.isEmpty {
@@ -670,11 +738,13 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             // Citations: Perplexity uses top-level `citations`, OpenAI uses `message.annotations`
             let notesText = formatCitations(completionResponse.citations)
               ?? Self.formatAnnotations(message.annotations)
+            let annotationsData = Self.serializedAnnotations(message.annotations)
             continuation.yield(.init(
               content: Self.assistantContent(
                 reasoningText: reasoningText,
                 responseText: responseText,
                 refusalText: refusalText,
+                annotationsData: annotationsData,
                 notesText: notesText,
                 toolCalls: toolCalls,
               ),
@@ -876,6 +946,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       var fullReasoningText = ""
       var fullResponseText = ""
       var fullRefusalText = ""
+      var annotationsData: String?
       var notesText: String?
       var toolCalls: [AI.ToolCall] = []
       var finalMetadata: GenerationResponse.Metadata?
@@ -906,6 +977,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           if let refusalTextChunk = snapshot.refusal {
             fullRefusalText += refusalTextChunk
           }
+          if let chunkAnnotationsData = snapshot.annotations {
+            annotationsData = chunkAnnotationsData
+          }
           if let notes = snapshot.notes {
             notesText = notes
           }
@@ -928,6 +1002,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
                 reasoningText: fullReasoningTextCopy.isEmpty ? nil : fullReasoningTextCopy,
                 responseText: fullResponseTextCopy.isEmpty ? nil : fullResponseTextCopy,
                 refusalText: fullRefusalTextCopy.isEmpty ? nil : fullRefusalTextCopy,
+                annotationsData: annotationsData,
                 notesText: notesTextCopy,
                 toolCalls: toolCallsCopy,
               ),
@@ -940,6 +1015,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
             responseText: fullResponseText.isEmpty ? nil : fullResponseText,
             refusalText: fullRefusalText.isEmpty ? nil : fullRefusalText,
+            annotationsData: annotationsData,
             notesText: notesText,
             toolCalls: toolCalls,
           ),
@@ -952,6 +1028,7 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
               responseText: fullResponseText.isEmpty ? nil : fullResponseText,
               refusalText: fullRefusalText.isEmpty ? nil : fullRefusalText,
+              annotationsData: annotationsData,
               notesText: notesText,
               toolCalls: toolCalls,
             ),
@@ -1111,18 +1188,41 @@ public final class ChatCompletionsClient: APIClient, Sendable {
   }
 
   struct Annotation: Decodable {
-    let type: String?
-    let urlCitation: URLCitation?
+    let raw: [String: Value]
 
-    enum CodingKeys: String, CodingKey {
-      case type
-      case urlCitation = "url_citation"
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    var type: String? {
+      raw["type"]?.stringValue
+    }
+
+    var urlCitation: URLCitation? {
+      raw["url_citation"]?.objectValue.map(URLCitation.init(raw:))
     }
   }
 
   struct URLCitation: Decodable {
-    let title: String?
-    let url: String?
+    let raw: [String: Value]
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      raw = try container.decode([String: Value].self)
+    }
+
+    init(raw: [String: Value]) {
+      self.raw = raw
+    }
+
+    var title: String? {
+      raw["title"]?.stringValue
+    }
+
+    var url: String? {
+      raw["url"]?.stringValue
+    }
   }
 
   struct ToolCall: Decodable {
