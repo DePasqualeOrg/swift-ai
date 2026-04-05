@@ -317,6 +317,8 @@ public final class GeminiClient: APIClient, Sendable {
       let text: String? = switch block {
         case let .text(text) where !text.isEmpty:
           text
+        case let .endnotes(text) where !text.isEmpty:
+          text
         case let .providerOpaque(opaque) where opaque.provider == "openai-chat-completions" && opaque.type == "refusal":
           opaque.content
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "annotated_output_text":
@@ -521,6 +523,9 @@ public final class GeminiClient: APIClient, Sendable {
           if let refusal = opaque.content, !refusal.isEmpty {
             parts.append(["text": refusal])
           }
+
+        case let .endnotes(text) where !text.isEmpty:
+          parts.append(["text": text])
 
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "annotated_output_text":
           if let text = opaque.content, !text.isEmpty {

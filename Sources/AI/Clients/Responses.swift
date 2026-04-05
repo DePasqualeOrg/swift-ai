@@ -1119,6 +1119,8 @@ public final class ResponsesClient: APIClient, Sendable {
       let text: String? = switch block {
         case let .text(text) where !text.isEmpty:
           text
+        case let .endnotes(text) where !text.isEmpty:
+          text
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "annotated_output_text":
           opaque.content
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "refusal":
@@ -1146,6 +1148,11 @@ public final class ResponsesClient: APIClient, Sendable {
         for block in message.content {
           switch block {
             case let .text(text) where !text.isEmpty:
+              contentItems.append([
+                "type": ContentType.inputText,
+                "text": text,
+              ])
+            case let .endnotes(text) where !text.isEmpty:
               contentItems.append([
                 "type": ContentType.inputText,
                 "text": text,
@@ -1220,6 +1227,15 @@ public final class ResponsesClient: APIClient, Sendable {
                 currentPhase = nil
               }
             case let .text(text) where !text.isEmpty:
+              var item: [String: any Sendable] = [
+                "type": textContentType,
+                "text": text,
+              ]
+              if currentMetadata != nil {
+                item["annotations"] = [[String: any Sendable]]()
+              }
+              contentItems.append(item)
+            case let .endnotes(text) where !text.isEmpty:
               var item: [String: any Sendable] = [
                 "type": textContentType,
                 "text": text,

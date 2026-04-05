@@ -1456,6 +1456,8 @@ public final class AnthropicClient: APIClient, Sendable {
       let text: String? = switch block {
         case let .text(text) where !text.isEmpty:
           text
+        case let .endnotes(text) where !text.isEmpty:
+          text
         case let .providerOpaque(opaque) where opaque.provider == "openai-chat-completions" && opaque.type == "refusal":
           opaque.content
         case let .providerOpaque(opaque) where opaque.provider == "openai-responses" && opaque.type == "annotated_output_text":
@@ -1539,6 +1541,8 @@ public final class AnthropicClient: APIClient, Sendable {
               break
           }
         case let .text(text) where !text.isEmpty:
+          contentBlocks.append(.init(type: .text, text: text))
+        case let .endnotes(text) where !text.isEmpty:
           contentBlocks.append(.init(type: .text, text: text))
         case let .toolCall(toolCall):
           contentBlocks.append(.init(

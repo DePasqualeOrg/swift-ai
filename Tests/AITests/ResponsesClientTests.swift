@@ -1909,6 +1909,70 @@ struct ResponsesClientTests {
   }
 
   @Test
+  func `Chat Completions citation endnotes replay as plain text in Responses requests`() async throws {
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.created","response":{"id":"test","status":"in_progress","model":"gpt-4o"}}
+
+      data: {"type":"response.output_text.delta","delta":"Ok"}
+
+      data: {"type":"response.completed","response":{"id":"test","status":"completed","model":"gpt-4o","created_at":1700000000,"output":[{"type":"message","content":[{"type":"output_text","text":"Ok"}]}],"usage":{"input_tokens":10,"output_tokens":1,"total_tokens":11}}}
+
+      data: [DONE]
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let citationNotes = """
+    Sources:
+    [1] Example Docs
+        URL: https://example.com/docs
+    """
+    let messages = [
+      Message(role: .assistant, content: [
+        .text("Cited answer."),
+        .providerOpaque(OpaqueBlock(
+          provider: "openai-chat-completions",
+          type: "annotations",
+          data: #"[{"type":"url_citation","url_citation":{"url":"https://example.com/docs","title":"Example Docs"}}]"#,
+        )),
+        .endnotes(citationNotes),
+      ]),
+      Message(role: .user, content: "Follow up"),
+    ]
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    _ = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      messages: messages,
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let input = try #require(body?["input"] as? [[String: Any]])
+    let assistantMsg = try #require(input.first(where: {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    }))
+    let content = try #require(assistantMsg["content"] as? [[String: Any]])
+    let texts = content.compactMap { $0["text"] as? String }
+    #expect(texts == ["Cited answer.", citationNotes])
+  }
+
+  @Test
   func `Assistant message with metadata emits output_text annotations array`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
