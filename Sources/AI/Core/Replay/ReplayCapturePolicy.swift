@@ -24,7 +24,7 @@ struct ReplayCaptureRequirements {
 
 enum ReplayRequestTarget {
   case anthropic(modelId: String, configuration: AnthropicClient.Configuration)
-  case responses(modelId: String, configuration: ResponsesClient.Configuration, endpoint: URL)
+  case responses(modelId: String, backend: ResolvedResponsesBackend?)
   case chatCompletions(modelId: String, configuration: ChatCompletionsClient.Configuration)
   case gemini(modelId: String, configuration: GeminiClient.Configuration)
 }
@@ -32,15 +32,10 @@ enum ReplayRequestTarget {
 enum ReplayCapturePolicy {
   static func requirements(for target: ReplayRequestTarget) -> ReplayCaptureRequirements {
     switch target {
-      case let .responses(_, _, endpoint) where shouldCaptureOpenAIResponsesReasoning(for: endpoint):
+      case let .responses(_, backend?) where backend.requiresEncryptedReasoningCapture:
         ReplayCaptureRequirements(requiredFields: [.openAIResponsesReasoningEncryptedContent])
       case .anthropic, .responses, .chatCompletions, .gemini:
         ReplayCaptureRequirements()
     }
-  }
-
-  private static func shouldCaptureOpenAIResponsesReasoning(for endpoint: URL) -> Bool {
-    let host = endpoint.host?.lowercased()
-    return host != ResponsesClient.Endpoint.xAI.url.host?.lowercased()
   }
 }

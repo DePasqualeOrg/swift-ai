@@ -245,6 +245,7 @@ public final class ResponsesClient: APIClient, Sendable {
           verbosityLevel: configuration.verbosityLevel,
           serverSideTools: configuration.serverSideTools,
           backgroundMode: configuration.backgroundMode,
+          provider: configuration.provider,
           tools: tools,
           enableStrictModeForTools: configuration.enableStrictModeForTools,
         )
@@ -440,6 +441,13 @@ public extension ResponsesClient {
     /// Enable background mode for long-running requests.
     public var backgroundMode: Bool
 
+    /// The provider family for custom Responses-compatible endpoints.
+    ///
+    /// Built-in OpenAI and xAI endpoints infer this automatically. Set it when using
+    /// a custom endpoint and you need provider-specific request behavior, such as
+    /// reasoning replay capture for OpenAI-compatible backends.
+    public var provider: ResponsesProvider?
+
     /// When true, tool schemas are rewritten for OpenAI strict mode compliance and sent
     /// with `strict: true`. This ensures the model's output exactly matches the schema,
     /// but requires all properties to be in `required` and optional properties to be nullable.
@@ -454,7 +462,24 @@ public extension ResponsesClient {
     ///   - verbosityLevel: Response verbosity level.
     ///   - serverSideTools: Server-side tools to enable.
     ///   - backgroundMode: Enable background mode for long requests.
+    ///   - provider: Provider family for custom Responses-compatible endpoints.
     ///   - enableStrictModeForTools: Rewrite tool schemas for strict mode compliance.
+    public init(
+      reasoningEffortLevel: ResponsesClient.ReasoningEffortLevel? = nil,
+      verbosityLevel: ResponsesClient.VerbosityLevel? = nil,
+      serverSideTools: [ServerSideTool] = [],
+      backgroundMode: Bool = false,
+      provider: ResponsesProvider?,
+      enableStrictModeForTools: Bool = true,
+    ) {
+      self.reasoningEffortLevel = reasoningEffortLevel
+      self.verbosityLevel = verbosityLevel
+      self.serverSideTools = serverSideTools
+      self.backgroundMode = backgroundMode
+      self.provider = provider
+      self.enableStrictModeForTools = enableStrictModeForTools
+    }
+
     public init(
       reasoningEffortLevel: ResponsesClient.ReasoningEffortLevel? = nil,
       verbosityLevel: ResponsesClient.VerbosityLevel? = nil,
@@ -462,11 +487,14 @@ public extension ResponsesClient {
       backgroundMode: Bool = false,
       enableStrictModeForTools: Bool = true,
     ) {
-      self.reasoningEffortLevel = reasoningEffortLevel
-      self.verbosityLevel = verbosityLevel
-      self.serverSideTools = serverSideTools
-      self.backgroundMode = backgroundMode
-      self.enableStrictModeForTools = enableStrictModeForTools
+      self.init(
+        reasoningEffortLevel: reasoningEffortLevel,
+        verbosityLevel: verbosityLevel,
+        serverSideTools: serverSideTools,
+        backgroundMode: backgroundMode,
+        provider: nil,
+        enableStrictModeForTools: enableStrictModeForTools,
+      )
     }
   }
 

@@ -82,9 +82,10 @@ public enum ProviderConfiguration: Sendable {
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
 ///     Ignored when an explicit `configuration` is provided.
-///   - responsesProvider: The provider family for custom Responses endpoints when using
-///     built-in Responses tools such as `webSearch`. Ignored for non-Responses models and
-///     when an explicit `configuration` is provided.
+///   - responsesProvider: The provider family for custom Responses endpoints when provider-specific
+///     request behavior is needed, such as built-in Responses tools like `webSearch` or
+///     replay-capture requirements. Ignored for non-Responses models and when an explicit
+///     `configuration` is provided.
 ///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
 ///     Ignored when an explicit `configuration` is provided.
 ///   - configuration: Optional provider-specific configuration. When provided, takes precedence
@@ -162,7 +163,7 @@ public func generateText(
       )
 
     case let .responses(modelId, endpoint):
-      let client = ResponsesClient(endpoint: endpoint)
+      let client = makeTopLevelResponsesClient(endpoint: endpoint)
       let config: ResponsesClient.Configuration = try extractConfiguration(configuration, expected: .responses) {
         try defaultResponsesConfiguration(
           webSearch: webSearch,
@@ -198,9 +199,10 @@ public func generateText(
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
 ///     Ignored when an explicit `configuration` is provided.
-///   - responsesProvider: The provider family for custom Responses endpoints when using
-///     built-in Responses tools such as `webSearch`. Ignored for non-Responses models and
-///     when an explicit `configuration` is provided.
+///   - responsesProvider: The provider family for custom Responses endpoints when provider-specific
+///     request behavior is needed, such as built-in Responses tools like `webSearch` or
+///     replay-capture requirements. Ignored for non-Responses models and when an explicit
+///     `configuration` is provided.
 ///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
 ///     Ignored when an explicit `configuration` is provided.
 ///   - configuration: Optional provider-specific configuration. When provided, takes precedence
@@ -293,7 +295,7 @@ public func streamText(
       )
 
     case let .responses(modelId, endpoint):
-      let client = ResponsesClient(endpoint: endpoint)
+      let client = makeTopLevelResponsesClient(endpoint: endpoint)
       let config: ResponsesClient.Configuration
       do {
         config = try extractConfiguration(configuration, expected: .responses) {
@@ -346,9 +348,10 @@ public func streamText(
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
 ///     Ignored when an explicit `configuration` is provided.
-///   - responsesProvider: The provider family for custom Responses endpoints when using
-///     built-in Responses tools such as `webSearch`. Ignored for non-Responses models and
-///     when an explicit `configuration` is provided.
+///   - responsesProvider: The provider family for custom Responses endpoints when provider-specific
+///     request behavior is needed, such as built-in Responses tools like `webSearch` or
+///     replay-capture requirements. Ignored for non-Responses models and when an explicit
+///     `configuration` is provided.
 ///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
 ///     Ignored when an explicit `configuration` is provided.
 ///   - configuration: Optional provider-specific configuration. When provided, takes precedence
@@ -397,9 +400,10 @@ public func generateText(
 ///   - apiKey: The API key for authentication. Can be nil for local endpoints.
 ///   - webSearch: Enable web search if supported by the provider. Defaults to false.
 ///     Ignored when an explicit `configuration` is provided.
-///   - responsesProvider: The provider family for custom Responses endpoints when using
-///     built-in Responses tools such as `webSearch`. Ignored for non-Responses models and
-///     when an explicit `configuration` is provided.
+///   - responsesProvider: The provider family for custom Responses endpoints when provider-specific
+///     request behavior is needed, such as built-in Responses tools like `webSearch` or
+///     replay-capture requirements. Ignored for non-Responses models and when an explicit
+///     `configuration` is provided.
 ///   - reasoning: Enable reasoning/thinking for Anthropic and Gemini models. Defaults to true.
 ///     Ignored when an explicit `configuration` is provided.
 ///   - configuration: Optional provider-specific configuration. When provided, takes precedence
@@ -434,77 +438,6 @@ public func streamText(
 }
 
 // MARK: - Helpers
-
-func defaultResponsesConfiguration(
-  webSearch: Bool,
-  endpoint: URL,
-  provider: ResponsesProvider?,
-) throws -> ResponsesClient.Configuration {
-  try ResponsesClient.Configuration(
-    serverSideTools: webSearch ? responsesWebSearchTools(endpoint: endpoint, provider: provider) : [],
-  )
-}
-
-/// Returns the appropriate web search server-side tools for a Responses API model.
-/// Custom endpoints must provide an explicit provider because the OpenAI and xAI
-/// Responses APIs use different tool formats.
-func responsesWebSearchTools(
-  endpoint: URL,
-  provider: ResponsesProvider?,
-) throws -> [ResponsesClient.ServerSideTool] {
-  let resolvedProvider = try resolvedResponsesProvider(for: endpoint, provider: provider)
-
-  return switch resolvedProvider {
-    case .openAI:
-      [ResponsesClient.ServerSideTool.OpenAI.webSearch(contextSize: .medium)]
-    case .xAI:
-      [ResponsesClient.ServerSideTool.xAI.webSearch()]
-  }
-}
-
-private func resolvedResponsesProvider(
-  for endpoint: URL,
-  provider: ResponsesProvider?,
-) throws -> ResponsesProvider {
-  if let inferredProvider = inferredResponsesProvider(for: endpoint) {
-    if let provider, provider != inferredProvider {
-      throw AIError.invalidRequest(message:
-        "responsesProvider \(provider.argumentName) conflicts with the built-in Responses endpoint for " +
-          "\(inferredProvider.argumentName). Omit responsesProvider for known OpenAI/xAI endpoints, " +
-          "or set it to \(inferredProvider.argumentName).")
-    }
-    return inferredProvider
-  }
-
-  guard let provider else {
-    throw AIError.invalidRequest(message:
-      "Custom Responses endpoints require an explicit responsesProvider when using webSearch. " +
-        "Pass `.openAI` or `.xAI`, or provide an explicit `.responses` configuration.")
-  }
-  return provider
-}
-
-private func inferredResponsesProvider(for endpoint: URL) -> ResponsesProvider? {
-  switch endpoint.host {
-    case ResponsesClient.Endpoint.openAI.url.host:
-      .openAI
-    case ResponsesClient.Endpoint.xAI.url.host:
-      .xAI
-    default:
-      nil
-  }
-}
-
-private extension ResponsesProvider {
-  var argumentName: String {
-    switch self {
-      case .openAI:
-        "`.openAI`"
-      case .xAI:
-        "`.xAI`"
-    }
-  }
-}
 
 /// The provider family, used for configuration mismatch error messages.
 private enum Provider: String {

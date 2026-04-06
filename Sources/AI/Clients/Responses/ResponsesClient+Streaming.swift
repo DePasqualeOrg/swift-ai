@@ -1,6 +1,7 @@
 // Copyright © Anthony DePasquale
 
 import Foundation
+import os
 import SSE
 
 extension ResponsesClient {
@@ -16,6 +17,7 @@ extension ResponsesClient {
     verbosityLevel: VerbosityLevel?,
     serverSideTools: [ServerSideTool],
     backgroundMode: Bool,
+    provider: ResponsesProvider?,
     textFormat: ResponseFormat? = nil,
     tools: [Tool] = [],
     enableStrictModeForTools: Bool = true,
@@ -28,18 +30,17 @@ extension ResponsesClient {
       request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
     }
 
+    let resolvedBackend = try resolveResponsesBackend(for: endpoint, provider: provider)
+    if resolvedBackend == nil, replayContainsReasoningHistory(input) {
+      emitResponsesReplayWarning(
+        "Custom Responses endpoint is missing responsesProvider; replay may omit provider-specific reasoning capture. Pass `.openAI` or `.xAI` when the backend family is known.",
+      )
+    }
+
     let replayPlan = try await ResponsesReplayNormalizer.normalize(input)
-    let replayConfiguration = Configuration(
-      reasoningEffortLevel: reasoningEffortLevel,
-      verbosityLevel: verbosityLevel,
-      serverSideTools: serverSideTools,
-      backgroundMode: backgroundMode,
-      enableStrictModeForTools: enableStrictModeForTools,
-    )
     let captureRequirements = ReplayCapturePolicy.requirements(for: .responses(
       modelId: modelId,
-      configuration: replayConfiguration,
-      endpoint: endpoint,
+      backend: resolvedBackend,
     ))
 
     var body: [String: any Sendable] = [
@@ -883,4 +884,39 @@ extension ResponsesClient {
     await cleanUpGeneration()
     return try result.get()
   }
+}
+
+private func replayContainsReasoningHistory(_ messages: [Message]) -> Bool {
+  messages.contains { message in
+    message.content.contains { item in
+      switch item {
+        case .thinking, .redactedThinking:
+          true
+        case let .providerOpaque(opaque):
+          switch (opaque.provider, opaque.type) {
+            case (OpaqueBlock.ProviderID.anthropic, OpaqueBlock.AnthropicType.thinking),
+                 (OpaqueBlock.ProviderID.anthropic, OpaqueBlock.AnthropicType.redactedThinking),
+                 (OpaqueBlock.ProviderID.openAIResponses, OpaqueBlock.OpenAIResponsesType.reasoning),
+                 (OpaqueBlock.ProviderID.gemini, OpaqueBlock.GeminiType.thinking):
+              true
+            default:
+              false
+          }
+        default:
+          false
+      }
+    }
+  }
+}
+
+private let responsesReplayWarningObserver = OSAllocatedUnfairLock(initialState: (@Sendable (String) -> Void)?.none)
+
+func setResponsesReplayWarningObserver(_ observer: (@Sendable (String) -> Void)?) {
+  responsesReplayWarningObserver.withLock { $0 = observer }
+}
+
+private func emitResponsesReplayWarning(_ message: String) {
+  openAIResponsesLogger.warning("\(message, privacy: .public)")
+  let observer = responsesReplayWarningObserver.withLock { $0 }
+  observer?(message)
 }

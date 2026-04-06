@@ -29,7 +29,7 @@ struct ResponsesReplayNormalizerTests {
   }
 
   @Test
-  func `Responses normalizer downgrades assistant segments that require input only content`() async throws {
+  func `Responses normalizer preserves assistant role when output metadata falls back to input content`() async throws {
     let attachment = Attachment(
       kind: .document(data: Data("notes".utf8), mimeType: "application/pdf"),
       filename: "notes.pdf",
@@ -49,7 +49,7 @@ struct ResponsesReplayNormalizerTests {
 
     let plan = try await ResponsesReplayNormalizer.normalize(messages)
     let messageItem = try #require(plan.inputItems.first)
-    #expect(messageItem["role"] as? String == "user")
+    #expect(messageItem["role"] as? String == "assistant")
     #expect(messageItem["id"] == nil)
     #expect(messageItem["phase"] == nil)
   }

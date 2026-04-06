@@ -130,21 +130,21 @@ struct ProviderConfigurationTests {
 
   @Test
   func `Default Responses configuration infers provider from built in endpoints`() throws {
-    #expect(
-      try defaultResponsesConfiguration(
-        webSearch: true,
-        endpoint: ResponsesClient.Endpoint.xAI.url,
-        provider: nil,
-      ).serverSideTools == [.xAI.webSearch()],
+    let xAIConfiguration = try defaultResponsesConfiguration(
+      webSearch: true,
+      endpoint: ResponsesClient.Endpoint.xAI.url,
+      provider: nil,
     )
+    #expect(xAIConfiguration.serverSideTools == [.xAI.webSearch()])
+    #expect(xAIConfiguration.provider == .xAI)
 
-    #expect(
-      try defaultResponsesConfiguration(
-        webSearch: true,
-        endpoint: ResponsesClient.Endpoint.openAI.url,
-        provider: nil,
-      ).serverSideTools == [.OpenAI.webSearch(contextSize: .medium)],
+    let openAIConfiguration = try defaultResponsesConfiguration(
+      webSearch: true,
+      endpoint: ResponsesClient.Endpoint.openAI.url,
+      provider: nil,
     )
+    #expect(openAIConfiguration.serverSideTools == [.OpenAI.webSearch(contextSize: .medium)])
+    #expect(openAIConfiguration.provider == .openAI)
   }
 
   @Test
@@ -172,21 +172,21 @@ struct ProviderConfigurationTests {
   func `Default Responses configuration uses explicit provider for custom endpoints`() throws {
     let customEndpoint = try #require(URL(string: "https://proxy.example.test/v1/responses"))
 
-    #expect(
-      try defaultResponsesConfiguration(
-        webSearch: true,
-        endpoint: customEndpoint,
-        provider: .xAI,
-      ).serverSideTools == [.xAI.webSearch()],
+    let xAIConfiguration = try defaultResponsesConfiguration(
+      webSearch: true,
+      endpoint: customEndpoint,
+      provider: .xAI,
     )
+    #expect(xAIConfiguration.serverSideTools == [.xAI.webSearch()])
+    #expect(xAIConfiguration.provider == .xAI)
 
-    #expect(
-      try defaultResponsesConfiguration(
-        webSearch: true,
-        endpoint: customEndpoint,
-        provider: .openAI,
-      ).serverSideTools == [.OpenAI.webSearch(contextSize: .medium)],
+    let openAIConfiguration = try defaultResponsesConfiguration(
+      webSearch: true,
+      endpoint: customEndpoint,
+      provider: .openAI,
     )
+    #expect(openAIConfiguration.serverSideTools == [.OpenAI.webSearch(contextSize: .medium)])
+    #expect(openAIConfiguration.provider == .openAI)
   }
 
   @Test
@@ -209,5 +209,35 @@ struct ProviderConfigurationTests {
     } catch {
       Issue.record("Expected AIError.invalidRequest but got \(error)")
     }
+  }
+
+  @Test
+  func `Default Responses configuration rejects built in overrides and preserves custom provider when webSearch is disabled`() throws {
+    do {
+      _ = try defaultResponsesConfiguration(
+        webSearch: false,
+        endpoint: ResponsesClient.Endpoint.openAI.url,
+        provider: .xAI,
+      )
+      Issue.record("Expected conflicting provider for built-in Responses endpoint to throw")
+    } catch let error as AIError {
+      guard case let .invalidRequest(message) = error else {
+        Issue.record("Expected invalidRequest but got \(error)")
+        return
+      }
+      #expect(message.contains("conflicts"))
+      #expect(message.contains("`.openAI`"))
+    } catch {
+      Issue.record("Expected AIError.invalidRequest but got \(error)")
+    }
+
+    let customEndpoint = try #require(URL(string: "https://proxy.example.test/v1/responses"))
+    let customConfiguration = try defaultResponsesConfiguration(
+      webSearch: false,
+      endpoint: customEndpoint,
+      provider: .openAI,
+    )
+    #expect(customConfiguration.serverSideTools.isEmpty)
+    #expect(customConfiguration.provider == .openAI)
   }
 }

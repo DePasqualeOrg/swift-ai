@@ -2400,6 +2400,92 @@ struct GeminiClientTests {
   }
 
   @Test
+  func `Custom Gemini endpoints preserve existing query parameters`() async throws {
+    var capturedURL: URL?
+    let testId = UUID().uuidString
+    let modelsEndpoint = try #require(URL(string: "https://mock.test/\(testId)/v1beta/models?route=proxy&version=2026-04-06&alt=proxy-format"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedURL = request.url
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1,"totalTokenCount":11}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: modelsEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.0-flash",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Hello")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let requestURL = try #require(capturedURL)
+    let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: true))
+    let queryItems = components.queryItems ?? []
+
+    #expect(queryItems.contains(where: { $0.name == "route" && $0.value == "proxy" }))
+    #expect(queryItems.contains(where: { $0.name == "version" && $0.value == "2026-04-06" }))
+    #expect(queryItems.contains(where: { $0.name == "key" && $0.value == "test-key" }))
+    #expect(queryItems.contains(where: { $0.name == "alt" && $0.value == "proxy-format" }))
+    #expect(queryItems.contains(where: { $0.name == "alt" && $0.value == "sse" }))
+    #expect(queryItems.count(where: { $0.name == "key" }) == 1)
+    #expect(queryItems.count(where: { $0.name == "alt" }) == 2)
+  }
+
+  @Test
+  func `Custom Gemini non streaming endpoints preserve existing alt parameters`() async throws {
+    var capturedURL: URL?
+    let testId = UUID().uuidString
+    let modelsEndpoint = try #require(URL(string: "https://mock.test/\(testId)/v1beta/models?route=proxy&alt=proxy-format"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedURL = request.url
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "application/json"],
+      )!
+      let body = """
+      {"candidates":[{"content":{"parts":[{"text":"Hi"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1,"totalTokenCount":11}}
+      """
+      return try (response, #require(body.data(using: .utf8)))
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: modelsEndpoint)
+    _ = try await client.generateText(
+      modelId: "gemini-2.0-flash",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: "Hello")],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    )
+
+    let requestURL = try #require(capturedURL)
+    let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: true))
+    let queryItems = components.queryItems ?? []
+
+    #expect(queryItems.contains(where: { $0.name == "route" && $0.value == "proxy" }))
+    #expect(queryItems.contains(where: { $0.name == "alt" && $0.value == "proxy-format" }))
+    #expect(queryItems.contains(where: { $0.name == "key" && $0.value == "test-key" }))
+    #expect(queryItems.contains(where: { $0.name == "alt" && $0.value == "sse" }) == false)
+    #expect(queryItems.count(where: { $0.name == "key" }) == 1)
+    #expect(queryItems.count(where: { $0.name == "alt" }) == 1)
+  }
+
+  @Test
   func `System instruction preserves replayable text and attachment fallbacks from history`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString

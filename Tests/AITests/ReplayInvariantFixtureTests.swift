@@ -324,6 +324,38 @@ struct ReplayInvariantFixtureTests {
     #expect(geminiParts(in: geminiPlan).allSatisfy { $0["executableCode"] == nil && $0["codeExecutionResult"] == nil && $0["toolCall"] == nil && $0["toolResponse"] == nil })
   }
 
+  @Test
+  func `Cross-provider reasoning falls back to assistant text in Responses when native payload is unavailable`() async throws {
+    let messages = [
+      Message(role: .assistant, content: [
+        .thinking(text: "Signed Anthropic reasoning", signature: "anthropic_sig_1"),
+        .providerOpaque(OpaqueBlock(
+          provider: OpaqueBlock.ProviderID.gemini,
+          type: OpaqueBlock.GeminiType.thinking,
+          content: "Signed Gemini reasoning",
+          signature: "gemini_sig_1",
+        )),
+        .text("Visible answer."),
+      ]),
+      Message(role: .user, content: "Follow up"),
+    ]
+
+    let responsesPlan = try await ResponsesReplayNormalizer.normalize(messages)
+
+    let assistantMessage = try #require(responsesPlan.inputItems.first {
+      $0["type"] as? String == "message" && $0["role"] as? String == "assistant"
+    })
+    let assistantContent = try #require(assistantMessage["content"] as? [[String: Any]])
+    let assistantTexts = assistantContent.compactMap { $0["text"] as? String }
+
+    #expect(assistantTexts == [
+      "Signed Anthropic reasoning",
+      "Signed Gemini reasoning",
+      "Visible answer.",
+    ])
+    #expect(responsesPlan.inputItems.allSatisfy { $0["type"] as? String != "reasoning" })
+  }
+
   private func geminiPlan(for messages: [Message]) async throws -> GeminiReplayNormalizer.Plan {
     let client = GeminiClient(
       session: makeMockSession(),

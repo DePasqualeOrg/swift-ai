@@ -21,10 +21,13 @@ enum GeminiRequestEncoder {
     guard var urlComponents = URLComponents(url: url, resolvingAgainstBaseURL: true) else {
       throw AIError.invalidRequest(message: "Failed to construct URL components for model: \(modelId)")
     }
-    urlComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-    if streaming {
-      urlComponents.queryItems?.append(URLQueryItem(name: "alt", value: "sse"))
+    var queryItems = urlComponents.queryItems ?? []
+    queryItems.removeAll { $0.name == "key" }
+    queryItems.append(URLQueryItem(name: "key", value: apiKey))
+    if streaming, !queryItems.contains(where: { $0.name == "alt" && $0.value == "sse" }) {
+      queryItems.append(URLQueryItem(name: "alt", value: "sse"))
     }
+    urlComponents.queryItems = queryItems
     guard let requestURL = urlComponents.url else {
       throw AIError.invalidRequest(message: "Failed to construct request URL for model: \(modelId)")
     }

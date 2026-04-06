@@ -1556,7 +1556,7 @@ struct ResponsesClientTests {
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
     let replayedMessage = try #require(input.first(where: { item in
-      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
         $0["type"] as? String == "input_text" && $0["text"] as? String == "Fetched article body."
@@ -1617,7 +1617,7 @@ struct ResponsesClientTests {
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
     let replayedMessage = try #require(input.first(where: { item in
-      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
         $0["type"] as? String == "input_text" && $0["text"] as? String == "Search snippet"
@@ -1681,7 +1681,7 @@ struct ResponsesClientTests {
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
     let replayedMessage = try #require(input.first(where: { item in
-      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: { $0["type"] as? String == "input_file" && $0["filename"] as? String == "context.pdf" }) == true
     }))
@@ -1696,7 +1696,7 @@ struct ResponsesClientTests {
   }
 
   @Test
-  func `Assistant metadata-backed replay downgrades attachment segment to EasyInputMessage`() async throws {
+  func `Assistant metadata-backed replay preserves role when attachment segment becomes EasyInputMessage`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -1766,14 +1766,14 @@ struct ResponsesClientTests {
     #expect(replayedOutputContent[0]["type"] as? String == "output_text")
     #expect(replayedOutputContent[0]["text"] as? String == "Earlier answer.")
 
-    let downgradedUserMessage = try #require(input.first(where: { item in
-      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+    let downgradedAssistantMessage = try #require(input.first(where: { item in
+      guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: { $0["type"] as? String == "input_file" && $0["filename"] as? String == "notes.pdf" }) == true
     }))
-    #expect(downgradedUserMessage["id"] == nil)
-    #expect(downgradedUserMessage["phase"] == nil)
-    let downgradedContent = try #require(downgradedUserMessage["content"] as? [[String: Any]])
+    #expect(downgradedAssistantMessage["id"] == nil)
+    #expect(downgradedAssistantMessage["phase"] == nil)
+    let downgradedContent = try #require(downgradedAssistantMessage["content"] as? [[String: Any]])
     #expect(downgradedContent[0]["type"] as? String == "input_file")
     #expect(downgradedContent[0]["filename"] as? String == "notes.pdf")
     #expect(downgradedContent[1]["type"] as? String == "input_text")
@@ -2204,9 +2204,10 @@ struct ResponsesClientTests {
     #expect(summary[0]["type"] as? String == "summary_text")
     #expect(summary[0]["text"] as? String == "Let me think step by step.")
 
-    // Manually constructed assistant messages (without message_metadata) downgrade to a legal user input message.
+    // Manually constructed assistant messages (without message_metadata) stay assistant turns
+    // and replay as EasyInputMessage content.
     let replayedMessage = try #require(input.first(where: { item in
-      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
         $0["type"] as? String == "input_text" && $0["text"] as? String == "The answer is 42."
@@ -2217,7 +2218,7 @@ struct ResponsesClientTests {
   }
 
   @Test
-  func `Responses requests encrypted reasoning capture by default for replayable transcripts`() async throws {
+  func `Responses requests encrypted reasoning capture for custom OpenAI-compatible endpoints when provider is explicit`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -2250,11 +2251,37 @@ struct ResponsesClientTests {
       messages: [Message(role: .user, content: "Hello")],
       maxTokens: 1024,
       apiKey: "test-key",
+      configuration: .init(provider: .openAI),
     ))
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let include = try #require(body?["include"] as? [String])
     #expect(include.contains("reasoning.encrypted_content"))
+  }
+
+  @Test
+  func `Built in Responses endpoints reject conflicting explicit provider before request`() async {
+    let client = ResponsesClient(endpoint: .openAI, session: makeMockSession())
+
+    do {
+      _ = try await consumeStream(client.streamText(
+        modelId: "o3",
+        messages: [Message(role: .user, content: "Hello")],
+        maxTokens: 1024,
+        apiKey: "test-key",
+        configuration: .init(provider: .xAI),
+      ))
+      Issue.record("Expected conflicting provider for built-in Responses endpoint to throw")
+    } catch let error as AIError {
+      guard case let .invalidRequest(message) = error else {
+        Issue.record("Expected invalidRequest but got \(error)")
+        return
+      }
+      #expect(message.contains("conflicts"))
+      #expect(message.contains("`.openAI`"))
+    } catch {
+      Issue.record("Expected AIError.invalidRequest but got \(error)")
+    }
   }
 
   @Test
@@ -2319,7 +2346,7 @@ struct ResponsesClientTests {
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
     let replayedMessage = try #require(input.first(where: { item in
-      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
         $0["type"] as? String == "input_text" && $0["text"] as? String == "See this source."
@@ -2394,7 +2421,7 @@ struct ResponsesClientTests {
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
     let replayedMessage = try #require(input.first(where: { item in
-      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
         $0["type"] as? String == "input_text" && $0["text"] as? String == "Cited answer."

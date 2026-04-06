@@ -136,7 +136,19 @@ extension ResponsesClient {
         }
 
         var currentMessageRole: String {
-          isReplayingOutputMessage ? "assistant" : "user"
+          "assistant"
+        }
+
+        func appendAssistantTextContent(_ text: String) {
+          guard !text.isEmpty else { return }
+          var item: [String: any Sendable] = [
+            "type": textContentType,
+            "text": text,
+          ]
+          if isReplayingOutputMessage {
+            item["annotations"] = [[String: any Sendable]]()
+          }
+          contentItems.append(item)
         }
 
         func clearCurrentMetadata() {
@@ -176,25 +188,13 @@ extension ResponsesClient {
                 currentMetadata = nil
                 currentPhase = nil
               }
+            case let .thinking(text, _) where !text.isEmpty:
+              appendAssistantTextContent(text)
             case let .text(text) where !text.isEmpty:
-              var item: [String: any Sendable] = [
-                "type": textContentType,
-                "text": text,
-              ]
-              if isReplayingOutputMessage {
-                item["annotations"] = [[String: any Sendable]]()
-              }
-              contentItems.append(item)
+              appendAssistantTextContent(text)
             case let .endnotes(text) where !text.isEmpty:
               guard !hasNativeAnnotatedOutputText else { break }
-              var item: [String: any Sendable] = [
-                "type": textContentType,
-                "text": text,
-              ]
-              if isReplayingOutputMessage {
-                item["annotations"] = [[String: any Sendable]]()
-              }
-              contentItems.append(item)
+              appendAssistantTextContent(text)
             case let .providerOpaque(block) where block.isOpenAIResponsesAnnotatedOutputText:
               if let text = block.content {
                 var item: [String: any Sendable] = [
@@ -257,16 +257,13 @@ extension ResponsesClient {
                 }
                 items.append(reasoningItem)
               }
+            case let .providerOpaque(block) where block.isAnthropicThinking || block.isGeminiThinking:
+              if let text = block.content, !text.isEmpty {
+                appendAssistantTextContent(text)
+              }
             case let .providerOpaque(block):
               if let text = block.replayDowngradeText(for: .responses) {
-                var item: [String: any Sendable] = [
-                  "type": textContentType,
-                  "text": text,
-                ]
-                if isReplayingOutputMessage {
-                  item["annotations"] = [[String: any Sendable]]()
-                }
-                contentItems.append(item)
+                appendAssistantTextContent(text)
               }
             case let .attachment(attachment):
               if let serializedAttachment = try await serializedAttachmentInput(for: attachment) {

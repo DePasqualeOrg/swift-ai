@@ -1104,7 +1104,7 @@ struct ChatCompletionsClientTests {
     let body = try JSONSerialization.jsonObject(with: #require(capturedResponsesBody)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
     let replayedMessage = try #require(input.first(where: { item in
-      guard item["type"] as? String == "message", item["role"] as? String == "user" else { return false }
+      guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
         $0["type"] as? String == "input_text" && $0["text"] as? String == "I can't assist with that."

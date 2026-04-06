@@ -125,8 +125,8 @@ let response = try await generateText(
 ) 
 ```
 
-When using `webSearch` with a custom Responses endpoint, also pass `responsesProvider`
-so the correct provider-specific tool format is used.
+When using a custom Responses endpoint, also pass `responsesProvider` whenever
+provider-specific behavior matters, such as `webSearch` tool wiring or reasoning replay capture.
 
 For provider-specific control, pass a `ProviderConfiguration`. When provided, it takes precedence and the `reasoning` and `webSearch` parameters are ignored:
 

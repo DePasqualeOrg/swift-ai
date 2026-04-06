@@ -15,7 +15,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       # Temporary: macos-latest defaults to Xcode 16.4 (Swift 6.0), but the
       # package requires Swift 6.1+. Remove this step once the default Xcode
