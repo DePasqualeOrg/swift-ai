@@ -503,6 +503,11 @@ enum GeminiStreamTransport {
     }
   }
 
+  // TODO: Remove @_optimize(none) when the Swift compiler bug is fixed.
+  // Swift 6.3 CopyPropagation SIL pass crashes on this function in release builds.
+  // https://github.com/swiftlang/swift/issues/88000
+  // https://github.com/swiftlang/swift/issues/87980
+  @_optimize(none)
   private static func parseToolCall(
     from functionCall: [String: any Sendable],
     part: [String: any Sendable],
