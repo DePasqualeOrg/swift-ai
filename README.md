@@ -8,6 +8,8 @@ AI API clients with tool use and MCP integration
 
 - [Quick Start](#quick-start)
 - [Top-Level API](#top-level-api)
+- [Replay and Persistence](#replay-and-persistence)
+- [Persistence and Replay Plan](docs/persistence-and-replay-plan.md)
 - [Provider-Specific Features](#provider-specific-features)
 - [Media Attachments](#media-attachments)
 - [Tools](#tools)
@@ -139,6 +141,71 @@ let response = try await generateText(
         reasoningEffortLevel: .medium,
         serverSideTools: [.OpenAI.webSearch(contextSize: .medium)]
     ))
+)
+```
+
+## Replay and Persistence
+
+When you pass conversation history into a new API call, Swift AI converts prior turns into the format each provider expects. This process — replay — handles tool calls, reasoning metadata, citations, and provider-specific structured output automatically. You can even switch providers mid-conversation; the library degrades gracefully when native metadata can't be preserved.
+
+### Storing Messages
+
+Append every `response.message` and tool result message to your message array:
+
+```swift
+let response = try await client.generateText(
+    modelId: modelId,
+    tools: tools,
+    systemPrompt: systemPrompt,
+    messages: messages,
+    apiKey: apiKey
+)
+
+messages.append(response.message)
+
+if !response.toolCalls.isEmpty {
+    let results = await tools.call(response.toolCalls)
+    messages.append(results.message)
+}
+```
+
+If you only need visible conversation text for display purposes, plain text is sufficient. But if you need multi-turn tool loops, reasoning continuity, or the ability to switch providers, store the full `Message` objects with their ordered `content` arrays.
+
+Flattening assistant output to plain text loses:
+
+- Tool call/result pairing across turns
+- Reasoning metadata (signed thinking, encrypted reasoning, thought signatures)
+- Citations, annotations, and server-side tool output
+- Provider-specific metadata needed for graceful cross-provider degradation
+
+### Custom Persistence
+
+If you serialize messages into your own storage model rather than keeping `Message` objects directly, preserve the full ordered `content` array and all fields on these types:
+
+- **`ToolCall`** (`Codable`): `id`, `name`, `parameters`, `providerMetadata`
+- **`ToolResult`**: `id`, `name`, `content`, `isError`
+- **`OpaqueBlock`** (`Codable`): `provider`, `type`, `content`, `signature`, `data`, `isResponseContent`
+
+`ToolCall` and `OpaqueBlock` are already `Codable`, so you can encode them directly. `OpaqueBlock` carries provider-specific metadata (reasoning tokens, cryptographic signatures, encrypted payloads) that can't be reconstructed from text. Dropping these fields degrades same-provider replay to plain text.
+
+### What Happens During Replay
+
+The library normalizes messages before each API call:
+
+- **Tool history repair**: Synthesizes missing tool results, reorders late results, and ensures the message sequence satisfies each provider's adjacency rules
+- **Same-provider replay**: Uses native metadata for lossless reconstruction — Anthropic signed/redacted thinking, OpenAI encrypted reasoning, Gemini thought signatures
+- **Cross-provider replay**: Falls back to visible text when native metadata can't be replayed by the target provider
+
+### Custom Responses Endpoints
+
+When using a custom OpenAI-compatible Responses endpoint, pass `responsesProvider: .openAI` so the library captures encrypted reasoning payloads. Without this hint, reasoning replay degrades to plain text.
+
+```swift
+let response = try await generateText(
+    model: .responses("gpt-5.1", endpoint: proxyURL),
+    messages: messages,
+    apiKey: apiKey,
+    responsesProvider: .openAI
 )
 ```
 
