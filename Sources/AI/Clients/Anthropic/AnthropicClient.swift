@@ -355,151 +355,183 @@ public extension AnthropicClient {
       throw AIError.authentication(message: "Missing API key")
     }
     await MainActor.run { isGenerating = true }
-    // Create a task that can be canceled and returns a result even when cancelled
-    let task = Task<(GenerationResponse, Bool), Error> {
-      var wasCancelled = false
-      var latestSnapshot: APIMessage?
-      var finalMessage: APIMessage?
-      // Compute the effective thinking config, accounting for maxTokens and budget minimum.
-      // Use the model default when the caller doesn't specify maxTokens, since
-      // buildMessagesRequest will inject it and budget_tokens must be less than max_tokens.
-      let effectiveMaxTokens = maxTokens ?? Self.defaultMaxTokens(for: modelId)
-      let effectiveThinking = configuration.effectiveThinkingConfig(maxTokens: effectiveMaxTokens)
-      let replayPlan = try await AnthropicReplayNormalizer.normalize(
-        messages,
-        thinkingEnabled: effectiveThinking != nil,
-      )
-      // Combine the explicit systemPrompt with any system/developer messages from history
-      let combinedSystemPrompt: String? = {
-        var parts: [String] = []
-        if let systemPrompt, !systemPrompt.isEmpty {
-          parts.append(systemPrompt)
-        }
-        parts.append(contentsOf: replayPlan.systemTexts)
-        return parts.isEmpty ? nil : parts.joined(separator: "\n")
-      }()
-      // Temperature must be set to 1 when thinking is enabled.
-      let adjustedTemperature = effectiveThinking != nil ? 1.0 : temperature
+    let taskHolder = OSAllocatedUnfairLock(initialState: Task<(GenerationResponse, Bool), Error>?.none)
+    let streamHolder = OSAllocatedUnfairLock(initialState: MessageStream?.none)
 
-      // Create parameters
-      var params = MessageCreateParams(
-        model: modelId,
-        messages: replayPlan.messages,
-        maxTokens: maxTokens,
-        system: combinedSystemPrompt,
-        temperature: adjustedTemperature,
-        thinking: effectiveThinking,
-        effort: configuration.effort,
-      )
-      for tool in tools {
-        if let baseSchemaBuildErrorMessage = tool.baseSchemaBuildErrorMessage {
-          throw AIError.invalidRequest(
-            message: "Tool '\(tool.name)' has an invalid input schema: \(baseSchemaBuildErrorMessage)",
+    do {
+      let taskResult = try await withTaskCancellationHandler {
+        try Task.checkCancellation()
+
+        // Create a task that can be canceled and returns a result even when cancelled
+        let task = Task<(GenerationResponse, Bool), Error> {
+          var wasCancelled = false
+          var latestSnapshot: APIMessage?
+          var finalMessage: APIMessage?
+          // Compute the effective thinking config, accounting for maxTokens and budget minimum.
+          // Use the model default when the caller doesn't specify maxTokens, since
+          // buildMessagesRequest will inject it and budget_tokens must be less than max_tokens.
+          let effectiveMaxTokens = maxTokens ?? Self.defaultMaxTokens(for: modelId)
+          let effectiveThinking = configuration.effectiveThinkingConfig(maxTokens: effectiveMaxTokens)
+          let replayPlan = try await AnthropicReplayNormalizer.normalize(
+            messages,
+            thinkingEnabled: effectiveThinking != nil,
           )
-        }
-      }
-      // Tools - rawInputSchema is always populated (either explicit or generated from parameters)
-      var anthropicTools = tools.map { tool -> AnthropicClient.APITool in
-        APITool.rawCustom(
-          name: tool.name,
-          description: tool.description,
-          rawInputSchema: tool.rawInputSchema,
-        )
-      }
-      // Web search
-      if configuration.webSearch {
-        anthropicTools.append(.webSearch)
-      }
+          // Combine the explicit systemPrompt with any system/developer messages from history
+          let combinedSystemPrompt: String? = {
+            var parts: [String] = []
+            if let systemPrompt, !systemPrompt.isEmpty {
+              parts.append(systemPrompt)
+            }
+            parts.append(contentsOf: replayPlan.systemTexts)
+            return parts.isEmpty ? nil : parts.joined(separator: "\n")
+          }()
+          // Temperature must be set to 1 when thinking is enabled.
+          let adjustedTemperature = effectiveThinking != nil ? 1.0 : temperature
 
-      // Web fetch
-      if configuration.webContent {
-        anthropicTools.append(.webFetch)
-      }
+          // Create parameters
+          var params = MessageCreateParams(
+            model: modelId,
+            messages: replayPlan.messages,
+            maxTokens: maxTokens,
+            system: combinedSystemPrompt,
+            temperature: adjustedTemperature,
+            thinking: effectiveThinking,
+            effort: configuration.effort,
+          )
+          for tool in tools {
+            if let baseSchemaBuildErrorMessage = tool.baseSchemaBuildErrorMessage {
+              throw AIError.invalidRequest(
+                message: "Tool '\(tool.name)' has an invalid input schema: \(baseSchemaBuildErrorMessage)",
+              )
+            }
+          }
+          // Tools - rawInputSchema is always populated (either explicit or generated from parameters)
+          var anthropicTools = tools.map { tool -> AnthropicClient.APITool in
+            APITool.rawCustom(
+              name: tool.name,
+              description: tool.description,
+              rawInputSchema: tool.rawInputSchema,
+            )
+          }
+          // Web search
+          if configuration.webSearch {
+            anthropicTools.append(.webSearch)
+          }
 
-      // Code execution
-      if configuration.codeExecution {
-        anthropicTools.append(.codeExecution)
-      }
+          // Web fetch
+          if configuration.webContent {
+            anthropicTools.append(.webFetch)
+          }
 
-      // Include tools if custom tools or web search tool are present
-      if !anthropicTools.isEmpty {
-        params.tools = anthropicTools
-        params.toolChoice = .auto
-      }
-      // Create message stream using the provided API key
-      let stream = await createMessageStream(params: params, apiKey: apiKey)
-      // Use AsyncStream for events
-      let events = await stream.events()
-      do {
-        for await event in events {
-          try Task.checkCancellation()
-          switch event {
-            case let .streamEvent(streamEvent, snapshot):
-              latestSnapshot = snapshot
-              switch streamEvent.type {
-                case .messageStart, .ping:
-                  break
-                case .messageDelta, .contentBlockStart, .contentBlockDelta, .contentBlockStop, .messageStop:
-                  await MainActor.run {
-                    update(Self.generationResponse(from: snapshot))
+          // Code execution
+          if configuration.codeExecution {
+            anthropicTools.append(.codeExecution)
+          }
+
+          // Include tools if custom tools or web search tool are present
+          if !anthropicTools.isEmpty {
+            params.tools = anthropicTools
+            params.toolChoice = .auto
+          }
+          // Create message stream using the provided API key
+          let stream = await createMessageStream(params: params, apiKey: apiKey)
+          streamHolder.withLock { $0 = stream }
+          if Task.isCancelled {
+            await stream.abort()
+          }
+          // Use AsyncStream for events
+          let events = await stream.events()
+          do {
+            for await event in events {
+              try Task.checkCancellation()
+              switch event {
+                case let .streamEvent(streamEvent, snapshot):
+                  latestSnapshot = snapshot
+                  switch streamEvent.type {
+                    case .messageStart, .ping:
+                      break
+                    case .messageDelta, .contentBlockStart, .contentBlockDelta, .contentBlockStop, .messageStop:
+                      await MainActor.run {
+                        update(Self.generationResponse(from: snapshot))
+                      }
+                      if streamEvent.type == .messageStop {
+                        finalMessage = snapshot
+                      }
+                    case .error:
+                      break
                   }
-                  if streamEvent.type == .messageStop {
-                    finalMessage = snapshot
-                  }
-                case .error:
-                  break
+                case let .finalMessage(message):
+                  finalMessage = message
+                  latestSnapshot = message
+                case let .error(error):
+                  throw error
+                case let .abort(error):
+                  wasCancelled = true
+                  throw error
+                case .end:
+                  let finalSnapshot = finalMessage ?? latestSnapshot
+                  return (finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(content: []), wasCancelled)
+                default:
+                  continue
               }
-            case let .finalMessage(message):
-              finalMessage = message
-              latestSnapshot = message
-            case let .error(error):
-              throw error
-            case let .abort(error):
+            }
+          } catch {
+            // Check if the error is due to user cancellation
+            if error is CancellationError {
+              // Abort the stream to stop the background processing task
+              await stream.abort()
               wasCancelled = true
-              throw error
-            case .end:
-              let finalSnapshot = finalMessage ?? latestSnapshot
-              return (finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(content: []), wasCancelled)
-            default:
-              continue
+            } else if let aiError = error as? AIError, case .cancelled = aiError {
+              // Don't show error in UI
+              wasCancelled = true
+            } else if let aiError = error as? AIError {
+              throw aiError
+            } else {
+              throw AIError.network(underlying: error)
+            }
+          }
+          let finalSnapshot = finalMessage ?? latestSnapshot
+          let result = finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(content: [])
+          return (result, wasCancelled)
+        }
+
+        taskHolder.withLock { $0 = task }
+        if Task.isCancelled {
+          task.cancel()
+        }
+        await MainActor.run {
+          currentTask = task
+        }
+        return await task.result
+      } onCancel: {
+        taskHolder.withLock { $0?.cancel() }
+        if let stream = streamHolder.withLock({ $0 }) {
+          Task {
+            await stream.abort()
           }
         }
-      } catch {
-        // Check if the error is due to user cancellation
-        if error is CancellationError {
-          // Abort the stream to stop the background processing task
-          await stream.abort()
-          wasCancelled = true
-        } else if let aiError = error as? AIError, case .cancelled = aiError {
-          // Don't show error in UI
-          wasCancelled = true
-        } else if let aiError = error as? AIError {
-          throw aiError
-        } else {
-          throw AIError.network(underlying: error)
-        }
       }
-      let finalSnapshot = finalMessage ?? latestSnapshot
-      let result = finalSnapshot.map(Self.generationResponse(from:)) ?? GenerationResponse(content: [])
-      return (result, wasCancelled)
-    }
-    // Store the task so we can cancel it
-    await MainActor.run {
-      currentTask = task
-    }
-    let taskResult = await task.result
-    await cleanUpGeneration()
-    switch taskResult {
-      case let .success((result, _)):
-        return result
-      case let .failure(error):
-        if let aiError = error as? AIError {
-          throw aiError
-        } else if error is CancellationError {
-          return .init(content: [])
-        } else {
-          throw AIError.network(underlying: error)
-        }
+
+      taskHolder.withLock { $0 = nil }
+      streamHolder.withLock { $0 = nil }
+      await cleanUpGeneration()
+      switch taskResult {
+        case let .success((result, _)):
+          return result
+        case let .failure(error):
+          if let aiError = error as? AIError {
+            throw aiError
+          } else if error is CancellationError {
+            return .init(content: [])
+          } else {
+            throw AIError.network(underlying: error)
+          }
+      }
+    } catch {
+      taskHolder.withLock { $0 = nil }
+      streamHolder.withLock { $0 = nil }
+      await cleanUpGeneration()
+      throw error
     }
   }
 

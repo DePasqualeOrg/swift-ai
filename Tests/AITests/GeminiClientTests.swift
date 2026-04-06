@@ -2433,6 +2433,53 @@ struct GeminiClientTests {
   }
 
   @Test
+  func `Dropping stream cancels underlying request`() async throws {
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+    let requestCancelled = OSAllocatedUnfairLock(initialState: false)
+
+    MockURLProtocol.setStreamHandler(for: testId) { request in
+      let response = try HTTPURLResponse(
+        url: #require(request.url),
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, AsyncStream { continuation in
+        continuation.onTermination = { _ in
+          requestCancelled.withLock { $0 = true }
+        }
+      })
+    }
+    defer { MockURLProtocol.removeStreamHandler(for: testId) }
+
+    let client = GeminiClient(
+      session: makeMockSession(),
+      modelsEndpoint: testEndpoint,
+    )
+    do {
+      let stream = client.streamText(
+        modelId: "gemini-2.0-flash",
+        systemPrompt: nil,
+        messages: [Message(role: .user, content: "Hello")],
+        maxTokens: 1024,
+        apiKey: "test-key",
+      )
+      try await Task.sleep(for: .milliseconds(50))
+      withExtendedLifetime(stream) {}
+    }
+
+    for _ in 0 ..< 40 {
+      if requestCancelled.withLock({ $0 }) {
+        break
+      }
+      try await Task.sleep(for: .milliseconds(25))
+    }
+
+    #expect(requestCancelled.withLock { $0 })
+  }
+
+  @Test
   func `System and developer messages in history are routed to system instruction`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString

@@ -18,18 +18,23 @@ import os
 /// // Use URL: https://mock.test/\(testId)
 /// ```
 final class MockURLProtocol: URLProtocol, @unchecked Sendable {
+  private struct UnsafeTransfer<Value>: @unchecked Sendable {
+    let value: Value
+  }
+
   private struct State: @unchecked Sendable {
     /// URL-keyed handlers for test isolation. The key is extracted from the URL path.
     var handlers: [String: (URLRequest) throws -> (HTTPURLResponse, Data)] = [:]
     /// URL-keyed streaming handlers for test isolation.
-    var streamHandlers: [String: (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>)] = [:]
+    var streamHandlers: [String: @Sendable (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>)] = [:]
     /// Global handler for non-URL-keyed requests.
     var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
     /// Handler for streaming responses that yields data chunks over time.
-    var streamHandler: ((URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))?
+    var streamHandler: (@Sendable (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))?
   }
 
   private static let state = OSAllocatedUnfairLock(initialState: State())
+  private var loadingTask: Task<Void, Never>?
 
   /// Thread-safe accessor for requestHandler.
   static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))? {
@@ -38,14 +43,14 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
   }
 
   /// Thread-safe accessor for streamHandler.
-  static var streamHandler: ((URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))? {
+  static var streamHandler: (@Sendable (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))? {
     get { state.withLockUnchecked { $0.streamHandler } }
     set { state.withLockUnchecked { $0.streamHandler = newValue } }
   }
 
   static func setStreamHandler(
     for testId: String,
-    handler: @escaping (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>),
+    handler: @escaping @Sendable (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>),
   ) {
     state.withLockUnchecked { $0.streamHandlers[testId] = handler }
   }
@@ -94,7 +99,7 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     }
   }
 
-  private func findStreamHandler(for request: URLRequest) -> ((URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))? {
+  private func findStreamHandler(for request: URLRequest) -> (@Sendable (URLRequest) async throws -> (HTTPURLResponse, AsyncStream<Data>))? {
     guard let path = request.url?.path else { return nil }
     let cleanPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
 
@@ -115,16 +120,26 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
 
   override func startLoading() {
     if let streamHandler = findStreamHandler(for: request) ?? MockURLProtocol.streamHandler {
-      Task {
+      let urlProtocol = UnsafeTransfer(value: self)
+      let protocolClient = UnsafeTransfer(value: client)
+      let request = request
+
+      loadingTask = Task { [streamHandler, urlProtocol, protocolClient, request] in
+        let urlProtocol = urlProtocol.value
+        let protocolClient = protocolClient.value
         do {
           let (response, dataStream) = try await streamHandler(request)
-          client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+          protocolClient?.urlProtocol(urlProtocol, didReceive: response, cacheStoragePolicy: .notAllowed)
           for await chunk in dataStream {
-            client?.urlProtocol(self, didLoad: chunk)
+            protocolClient?.urlProtocol(urlProtocol, didLoad: chunk)
           }
-          client?.urlProtocolDidFinishLoading(self)
+          protocolClient?.urlProtocolDidFinishLoading(urlProtocol)
+        } catch is CancellationError {
+          return
+        } catch let error as URLError where error.code == .cancelled {
+          return
         } catch {
-          client?.urlProtocol(self, didFailWithError: error)
+          protocolClient?.urlProtocol(urlProtocol, didFailWithError: error)
         }
       }
       return
@@ -159,7 +174,10 @@ final class MockURLProtocol: URLProtocol, @unchecked Sendable {
     }
   }
 
-  override func stopLoading() {}
+  override func stopLoading() {
+    loadingTask?.cancel()
+    loadingTask = nil
+  }
 }
 
 /// Creates a URLSession configured to use MockURLProtocol.

@@ -948,109 +948,130 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     update: @Sendable @escaping (GenerationResponse) -> Void,
   ) async throws -> GenerationResponse {
     await MainActor.run { isGenerating = true }
-    let task = Task<GenerationResponse, Error> {
-      var fullReasoningText = ""
-      var fullResponseText = ""
-      var fullRefusalText = ""
-      var annotationsData: String?
-      var notesText: String?
-      var toolCalls: [AI.ToolCall] = []
-      var finalMetadata: GenerationResponse.Metadata?
-      do {
-        let stream = try await streamResponse(
-          messages: messages,
-          systemPrompt: systemPrompt,
-          modelId: modelId,
-          apiKey: apiKey,
-          maxTokens: maxTokens,
-          temperature: temperature,
-          stream: stream,
-          tools: tools,
-          extraParameters: configuration.extraParameters,
-          useLegacyMaxTokensField: configuration.useLegacyMaxTokensField,
-          enableStrictModeForTools: configuration.enableStrictModeForTools,
-          endpoint: endpoint,
-        )
-        for try await chunk in stream {
-          try Task.checkCancellation()
-          let snapshot = Self.assistantSnapshot(from: chunk)
-          if let reasoningTextChunk = snapshot.reasoning {
-            fullReasoningText += reasoningTextChunk
-          }
-          if let responseTextChunk = snapshot.response {
-            fullResponseText += responseTextChunk
-          }
-          if let refusalTextChunk = snapshot.refusal {
-            fullRefusalText += refusalTextChunk
-          }
-          if let chunkAnnotationsData = snapshot.annotations {
-            annotationsData = chunkAnnotationsData
-          }
-          if let notes = snapshot.notes {
-            notesText = notes
-          }
-          if !snapshot.toolCalls.isEmpty {
-            toolCalls = snapshot.toolCalls
-          }
-          // Capture metadata from chunks (metadata accumulates, later values override)
-          if let chunkMetadata = chunk.metadata {
-            finalMetadata = chunkMetadata
-          }
-          let fullReasoningTextCopy = fullReasoningText
-          let fullResponseTextCopy = fullResponseText
-          let fullRefusalTextCopy = fullRefusalText
-          let notesTextCopy = notesText
-          let toolCallsCopy = toolCalls
-          let metadataCopy = finalMetadata
-          await MainActor.run {
-            update(.init(
+    let taskHolder = OSAllocatedUnfairLock(initialState: Task<GenerationResponse, Error>?.none)
+
+    do {
+      let result = try await withTaskCancellationHandler {
+        try Task.checkCancellation()
+
+        let task = Task<GenerationResponse, Error> {
+          var fullReasoningText = ""
+          var fullResponseText = ""
+          var fullRefusalText = ""
+          var annotationsData: String?
+          var notesText: String?
+          var toolCalls: [AI.ToolCall] = []
+          var finalMetadata: GenerationResponse.Metadata?
+          do {
+            let stream = try await streamResponse(
+              messages: messages,
+              systemPrompt: systemPrompt,
+              modelId: modelId,
+              apiKey: apiKey,
+              maxTokens: maxTokens,
+              temperature: temperature,
+              stream: stream,
+              tools: tools,
+              extraParameters: configuration.extraParameters,
+              useLegacyMaxTokensField: configuration.useLegacyMaxTokensField,
+              enableStrictModeForTools: configuration.enableStrictModeForTools,
+              endpoint: endpoint,
+            )
+            for try await chunk in stream {
+              try Task.checkCancellation()
+              let snapshot = Self.assistantSnapshot(from: chunk)
+              if let reasoningTextChunk = snapshot.reasoning {
+                fullReasoningText += reasoningTextChunk
+              }
+              if let responseTextChunk = snapshot.response {
+                fullResponseText += responseTextChunk
+              }
+              if let refusalTextChunk = snapshot.refusal {
+                fullRefusalText += refusalTextChunk
+              }
+              if let chunkAnnotationsData = snapshot.annotations {
+                annotationsData = chunkAnnotationsData
+              }
+              if let notes = snapshot.notes {
+                notesText = notes
+              }
+              if !snapshot.toolCalls.isEmpty {
+                toolCalls = snapshot.toolCalls
+              }
+              // Capture metadata from chunks (metadata accumulates, later values override)
+              if let chunkMetadata = chunk.metadata {
+                finalMetadata = chunkMetadata
+              }
+              let fullReasoningTextCopy = fullReasoningText
+              let fullResponseTextCopy = fullResponseText
+              let fullRefusalTextCopy = fullRefusalText
+              let notesTextCopy = notesText
+              let toolCallsCopy = toolCalls
+              let metadataCopy = finalMetadata
+              await MainActor.run {
+                update(.init(
+                  content: Self.assistantContent(
+                    reasoningText: fullReasoningTextCopy.isEmpty ? nil : fullReasoningTextCopy,
+                    responseText: fullResponseTextCopy.isEmpty ? nil : fullResponseTextCopy,
+                    refusalText: fullRefusalTextCopy.isEmpty ? nil : fullRefusalTextCopy,
+                    annotationsData: annotationsData,
+                    notesText: notesTextCopy,
+                    toolCalls: toolCallsCopy,
+                  ),
+                  metadata: metadataCopy,
+                ))
+              }
+            }
+            return .init(
               content: Self.assistantContent(
-                reasoningText: fullReasoningTextCopy.isEmpty ? nil : fullReasoningTextCopy,
-                responseText: fullResponseTextCopy.isEmpty ? nil : fullResponseTextCopy,
-                refusalText: fullRefusalTextCopy.isEmpty ? nil : fullRefusalTextCopy,
+                reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+                responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+                refusalText: fullRefusalText.isEmpty ? nil : fullRefusalText,
                 annotationsData: annotationsData,
-                notesText: notesTextCopy,
-                toolCalls: toolCallsCopy,
+                notesText: notesText,
+                toolCalls: toolCalls,
               ),
-              metadata: metadataCopy,
-            ))
+              metadata: finalMetadata,
+            )
+          } catch {
+            if error is CancellationError {
+              return .init(
+                content: Self.assistantContent(
+                  reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
+                  responseText: fullResponseText.isEmpty ? nil : fullResponseText,
+                  refusalText: fullRefusalText.isEmpty ? nil : fullRefusalText,
+                  annotationsData: annotationsData,
+                  notesText: notesText,
+                  toolCalls: toolCalls,
+                ),
+                metadata: finalMetadata,
+              )
+            } else {
+              throw error
+            }
           }
         }
-        return .init(
-          content: Self.assistantContent(
-            reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
-            responseText: fullResponseText.isEmpty ? nil : fullResponseText,
-            refusalText: fullRefusalText.isEmpty ? nil : fullRefusalText,
-            annotationsData: annotationsData,
-            notesText: notesText,
-            toolCalls: toolCalls,
-          ),
-          metadata: finalMetadata,
-        )
-      } catch {
-        if error is CancellationError {
-          return .init(
-            content: Self.assistantContent(
-              reasoningText: fullReasoningText.isEmpty ? nil : fullReasoningText,
-              responseText: fullResponseText.isEmpty ? nil : fullResponseText,
-              refusalText: fullRefusalText.isEmpty ? nil : fullRefusalText,
-              annotationsData: annotationsData,
-              notesText: notesText,
-              toolCalls: toolCalls,
-            ),
-            metadata: finalMetadata,
-          )
-        } else {
-          throw error
+
+        taskHolder.withLock { $0 = task }
+        if Task.isCancelled {
+          task.cancel()
         }
+        await MainActor.run {
+          currentTask = task
+        }
+        return await task.result
+      } onCancel: {
+        taskHolder.withLock { $0?.cancel() }
       }
+
+      taskHolder.withLock { $0 = nil }
+      await cleanUpGeneration()
+      return try result.get()
+    } catch {
+      taskHolder.withLock { $0 = nil }
+      await cleanUpGeneration()
+      throw error
     }
-    await MainActor.run {
-      currentTask = task
-    }
-    let result = await task.result
-    await cleanUpGeneration()
-    return try result.get()
   }
 
   @MainActor

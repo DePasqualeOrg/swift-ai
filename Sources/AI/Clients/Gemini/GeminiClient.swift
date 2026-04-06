@@ -658,78 +658,99 @@ public final class GeminiClient: APIClient, Sendable {
     await MainActor.run {
       isGenerating = true
     }
-    let task = Task<GenerationResponse, Error> {
-      var assembler = GeminiResponseAssembler()
+    let taskHolder = OSAllocatedUnfairLock(initialState: Task<GenerationResponse, Error>?.none)
 
-      do {
-        let stream = try await streamResponse(
-          messages: messages,
-          systemPrompt: systemPrompt,
-          modelId: modelId,
-          apiKey: apiKey,
-          maxTokens: maxTokens,
-          temperature: temperature,
-          configuration: configuration,
-          tools: tools,
-          streaming: streaming,
-        )
+    do {
+      let result = try await withTaskCancellationHandler {
+        try Task.checkCancellation()
 
-        let sendUpdate = {
-          let response = assembler.response()
-          await MainActor.run {
-            update(response)
-          }
-        }
+        let task = Task<GenerationResponse, Error> {
+          var assembler = GeminiResponseAssembler()
 
-        for try await chunk in stream {
-          try Task.checkCancellation()
+          do {
+            let stream = try await streamResponse(
+              messages: messages,
+              systemPrompt: systemPrompt,
+              modelId: modelId,
+              apiKey: apiKey,
+              maxTokens: maxTokens,
+              temperature: temperature,
+              configuration: configuration,
+              tools: tools,
+              streaming: streaming,
+            )
 
-          if await assembler.consume(
-            chunk,
-            formatGroundingInfo: { [self] metadata in
-              await formatGroundingInfo(from: metadata)
-            },
-          ) {
+            let sendUpdate = {
+              let response = assembler.response()
+              await MainActor.run {
+                update(response)
+              }
+            }
+
+            for try await chunk in stream {
+              try Task.checkCancellation()
+
+              if await assembler.consume(
+                chunk,
+                formatGroundingInfo: { [self] metadata in
+                  await formatGroundingInfo(from: metadata)
+                },
+              ) {
+                await sendUpdate()
+              }
+            }
+
+            // Yield final state with complete metadata (usage and finish reason may arrive
+            // in chunks that don't contain content, so the last content-triggered update
+            // may lack them)
             await sendUpdate()
+
+            return assembler.response()
+          } catch let error as GeminiError {
+            // Check if the task was cancelled
+            if Task.isCancelled {
+              return assembler.partialResponse()
+            }
+
+            geminiLogger.warning("Gemini error: \(error.message)")
+            let errorMessage = if error.message.contains("SAFETY") {
+              "Response blocked due to safety filters"
+            } else if error.message.contains("RECITATION") {
+              "Response blocked due to content recitation"
+            } else {
+              error.message
+            }
+            throw AIError.serverError(statusCode: 0, message: errorMessage, context: nil)
+          } catch {
+            // Handle cancellation
+            if error is CancellationError || Task.isCancelled {
+              return assembler.partialResponse()
+            } else {
+              throw error
+            }
           }
         }
 
-        // Yield final state with complete metadata (usage and finish reason may arrive
-        // in chunks that don't contain content, so the last content-triggered update
-        // may lack them)
-        await sendUpdate()
-
-        return assembler.response()
-      } catch let error as GeminiError {
-        // Check if the task was cancelled
+        taskHolder.withLock { $0 = task }
         if Task.isCancelled {
-          return assembler.partialResponse()
+          task.cancel()
         }
-
-        geminiLogger.warning("Gemini error: \(error.message)")
-        let errorMessage = if error.message.contains("SAFETY") {
-          "Response blocked due to safety filters"
-        } else if error.message.contains("RECITATION") {
-          "Response blocked due to content recitation"
-        } else {
-          error.message
+        await MainActor.run {
+          currentTask = task
         }
-        throw AIError.serverError(statusCode: 0, message: errorMessage, context: nil)
-      } catch {
-        // Handle cancellation
-        if error is CancellationError || Task.isCancelled {
-          return assembler.partialResponse()
-        } else {
-          throw error
-        }
+        return await task.result
+      } onCancel: {
+        taskHolder.withLock { $0?.cancel() }
       }
+
+      taskHolder.withLock { $0 = nil }
+      await cleanUpGeneration()
+      return try result.get()
+    } catch {
+      taskHolder.withLock { $0 = nil }
+      await cleanUpGeneration()
+      throw error
     }
-    await MainActor.run {
-      currentTask = task
-    }
-    let result = await task.result
-    await cleanUpGeneration()
-    return try result.get()
   }
 
   @MainActor

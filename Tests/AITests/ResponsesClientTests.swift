@@ -2,6 +2,7 @@
 
 @testable import AI
 import Foundation
+import os
 import Testing
 
 @Suite(.serialized)
@@ -2575,7 +2576,7 @@ struct ResponsesClientTests {
 
   @Test
   func `Stop sends authenticated cancel for background response`() async throws {
-    var cancelRequest: URLRequest?
+    let cancelRequest = OSAllocatedUnfairLock(initialState: URLRequest?.none)
     let streamGate = AsyncStream<Data>.makeStream()
     let testId = "bg-cancel-test"
 
@@ -2584,7 +2585,7 @@ struct ResponsesClientTests {
 
       // Handle cancel request
       if url.path.contains("/cancel") {
-        cancelRequest = request
+        cancelRequest.withLock { $0 = request }
         let response = HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!
         return (response, AsyncStream { $0.yield(Data("{}".utf8)); $0.finish() })
       }
@@ -2647,17 +2648,17 @@ struct ResponsesClientTests {
     _ = try? await task.value
 
     // Verify the cancel request included the API key
-    let authHeader = try #require(cancelRequest).value(forHTTPHeaderField: "Authorization")
+    let authHeader = try #require(cancelRequest.withLock { $0 }).value(forHTTPHeaderField: "Authorization")
     #expect(authHeader == "Bearer secret-api-key")
   }
 
   @Test
   func `Background Responses resume preserves existing endpoint query parameters`() async throws {
-    var capturedURL: URL?
+    let capturedURL = OSAllocatedUnfairLock(initialState: URL?.none)
     let testId = UUID().uuidString
 
     MockURLProtocol.setStreamHandler(for: testId) { request in
-      capturedURL = request.url
+      capturedURL.withLock { $0 = request.url }
       let response = HTTPURLResponse(
         url: request.url!,
         statusCode: 200,
@@ -2690,7 +2691,7 @@ struct ResponsesClientTests {
     continuation.finish()
     for try await _ in stream {}
 
-    let requestURL = try #require(capturedURL)
+    let requestURL = try #require(capturedURL.withLock { $0 })
     let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: true))
     let queryItems = components.queryItems ?? []
 
@@ -2698,5 +2699,49 @@ struct ResponsesClientTests {
     #expect(queryItems.contains(where: { $0.name == "tenant" && $0.value == "acme" }))
     #expect(queryItems.contains(where: { $0.name == "stream" && $0.value == "true" }))
     #expect(queryItems.contains(where: { $0.name == "starting_after" && $0.value == "42" }))
+  }
+
+  @Test
+  func `Dropping stream cancels underlying request`() async throws {
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+    let requestCancelled = OSAllocatedUnfairLock(initialState: false)
+
+    MockURLProtocol.setStreamHandler(for: testId) { request in
+      let response = try HTTPURLResponse(
+        url: #require(request.url),
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      return (response, AsyncStream { continuation in
+        continuation.onTermination = { _ in
+          requestCancelled.withLock { $0 = true }
+        }
+      })
+    }
+    defer { MockURLProtocol.removeStreamHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    do {
+      let stream = client.streamText(
+        modelId: "gpt-4o",
+        systemPrompt: nil,
+        messages: [Message(role: .user, content: "Hello")],
+        maxTokens: 1024,
+        apiKey: "test-key",
+      )
+      try await Task.sleep(for: .milliseconds(50))
+      withExtendedLifetime(stream) {}
+    }
+
+    for _ in 0 ..< 40 {
+      if requestCancelled.withLock({ $0 }) {
+        break
+      }
+      try await Task.sleep(for: .milliseconds(25))
+    }
+
+    #expect(requestCancelled.withLock { $0 })
   }
 }

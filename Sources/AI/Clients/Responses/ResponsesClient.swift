@@ -227,63 +227,82 @@ public final class ResponsesClient: APIClient, Sendable {
     await MainActor.run {
       isGenerating = true
     }
+    let taskHolder = OSAllocatedUnfairLock(initialState: Task<GenerationResponse, Error>?.none)
 
-    let task = Task<GenerationResponse, Error> {
-      var finalContent: [Message.Content] = []
-      var finalMetadata: GenerationResponse.Metadata?
+    do {
+      let result = try await withTaskCancellationHandler {
+        try Task.checkCancellation()
 
-      do {
-        let stream = try await streamResponse(
-          input: messages,
-          systemPrompt: systemPrompt,
-          modelId: modelId,
-          apiKey: apiKey,
-          maxTokens: maxTokens,
-          temperature: temperature,
-          stream: stream,
-          reasoningEffortLevel: configuration.reasoningEffortLevel,
-          verbosityLevel: configuration.verbosityLevel,
-          serverSideTools: configuration.serverSideTools,
-          backgroundMode: configuration.backgroundMode,
-          provider: configuration.provider,
-          tools: tools,
-          enableStrictModeForTools: configuration.enableStrictModeForTools,
-        )
+        let task = Task<GenerationResponse, Error> {
+          var finalContent: [Message.Content] = []
+          var finalMetadata: GenerationResponse.Metadata?
 
-        for try await chunk in stream {
-          try Task.checkCancellation()
+          do {
+            let stream = try await streamResponse(
+              input: messages,
+              systemPrompt: systemPrompt,
+              modelId: modelId,
+              apiKey: apiKey,
+              maxTokens: maxTokens,
+              temperature: temperature,
+              stream: stream,
+              reasoningEffortLevel: configuration.reasoningEffortLevel,
+              verbosityLevel: configuration.verbosityLevel,
+              serverSideTools: configuration.serverSideTools,
+              backgroundMode: configuration.backgroundMode,
+              provider: configuration.provider,
+              tools: tools,
+              enableStrictModeForTools: configuration.enableStrictModeForTools,
+            )
 
-          finalContent = chunk.content
-          finalMetadata = chunk.metadata
+            for try await chunk in stream {
+              try Task.checkCancellation()
 
-          await MainActor.run {
-            update(chunk)
+              finalContent = chunk.content
+              finalMetadata = chunk.metadata
+
+              await MainActor.run {
+                update(chunk)
+              }
+            }
+
+            if Task.isCancelled {
+              openAIResponsesLogger.log("Generation task returning cancelled state")
+              return .init(content: finalContent, metadata: finalMetadata)
+            }
+
+            return .init(content: finalContent, metadata: finalMetadata)
+          } catch {
+            if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
+              openAIResponsesLogger.log("Generation task caught cancellation error.")
+              return .init(content: finalContent, metadata: finalMetadata)
+            } else {
+              openAIResponsesLogger.error("Generation failed: \(error)")
+              throw error
+            }
           }
         }
 
+        taskHolder.withLock { $0 = task }
         if Task.isCancelled {
-          openAIResponsesLogger.log("Generation task returning cancelled state")
-          return .init(content: finalContent, metadata: finalMetadata)
+          task.cancel()
         }
-
-        return .init(content: finalContent, metadata: finalMetadata)
-      } catch {
-        if error is CancellationError || (error as NSError).code == NSURLErrorCancelled {
-          openAIResponsesLogger.log("Generation task caught cancellation error.")
-          return .init(content: finalContent, metadata: finalMetadata)
-        } else {
-          openAIResponsesLogger.error("Generation failed: \(error)")
-          throw error
+        await MainActor.run {
+          currentTask = task
         }
+        return await task.result
+      } onCancel: {
+        taskHolder.withLock { $0?.cancel() }
       }
-    }
 
-    await MainActor.run {
-      currentTask = task
+      taskHolder.withLock { $0 = nil }
+      await cleanUpGeneration()
+      return try result.get()
+    } catch {
+      taskHolder.withLock { $0 = nil }
+      await cleanUpGeneration()
+      throw error
     }
-    let result = await task.result
-    await cleanUpGeneration()
-    return try result.get()
   }
 
   @MainActor
