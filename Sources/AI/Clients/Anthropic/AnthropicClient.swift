@@ -265,7 +265,6 @@ public extension AnthropicClient {
     let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
     let task = Task {
       do {
-        let didYield = OSAllocatedUnfairLock(initialState: false)
         let finalResponse = try await _generate(
           modelId: modelId,
           tools: tools,
@@ -276,13 +275,10 @@ public extension AnthropicClient {
           apiKey: apiKey,
           configuration: configuration,
           update: { response in
-            didYield.withLock { $0 = true }
             continuation.yield(response)
           },
         )
-        if !didYield.withLock({ $0 }) {
-          continuation.yield(finalResponse)
-        }
+        continuation.yield(finalResponse)
         continuation.finish()
       } catch {
         continuation.finish(throwing: error)
