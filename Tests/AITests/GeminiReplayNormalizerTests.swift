@@ -7,9 +7,10 @@ import Testing
 struct GeminiReplayNormalizerTests {
   @Test
   func `Gemini normalizer emits explicit roles and request ready contents`() async throws {
-    let client = try GeminiClient(
+    let modelsEndpoint = try #require(URL(string: "https://mock.test/normalizer"))
+    let client = GeminiClient(
       session: makeMockSession(),
-      modelsEndpoint: #require(URL(string: "https://mock.test/normalizer")),
+      modelsEndpoint: modelsEndpoint,
     )
     let messages = [Message(role: .system, content: "Follow policy")] + ReplayFixtures.mixedToolTurnHistory()
 
