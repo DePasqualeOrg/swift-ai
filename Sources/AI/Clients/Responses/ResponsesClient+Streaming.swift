@@ -402,12 +402,13 @@ extension ResponsesClient {
     guard var urlComponents = URLComponents(url: streamUrl, resolvingAgainstBaseURL: false) else {
       throw AIError.invalidRequest(message: "Failed to construct URL components for response: \(responseId)")
     }
-    urlComponents.queryItems = [
-      URLQueryItem(name: "stream", value: "true"),
-    ]
+    var queryItems = urlComponents.queryItems ?? []
+    queryItems.removeAll { $0.name == "stream" || $0.name == "starting_after" }
+    queryItems.append(URLQueryItem(name: "stream", value: "true"))
     if let startingAfter {
-      urlComponents.queryItems?.append(URLQueryItem(name: "starting_after", value: String(startingAfter)))
+      queryItems.append(URLQueryItem(name: "starting_after", value: String(startingAfter)))
     }
+    urlComponents.queryItems = queryItems
     guard let requestURL = urlComponents.url else {
       throw AIError.invalidRequest(message: "Failed to construct request URL for response: \(responseId)")
     }

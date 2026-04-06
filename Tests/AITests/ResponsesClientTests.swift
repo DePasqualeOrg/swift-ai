@@ -2650,4 +2650,53 @@ struct ResponsesClientTests {
     let authHeader = try #require(cancelRequest).value(forHTTPHeaderField: "Authorization")
     #expect(authHeader == "Bearer secret-api-key")
   }
+
+  @Test
+  func `Background Responses resume preserves existing endpoint query parameters`() async throws {
+    var capturedURL: URL?
+    let testId = UUID().uuidString
+
+    MockURLProtocol.setStreamHandler(for: testId) { request in
+      capturedURL = request.url
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"type":"response.completed","response":{"id":"resp_123","status":"completed","output_text":"Done"}}
+
+      data: [DONE]
+
+      """
+      return (response, AsyncStream { continuation in
+        continuation.yield(Data(sseData.utf8))
+        continuation.finish()
+      })
+    }
+    defer { MockURLProtocol.removeStreamHandler(for: testId) }
+
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)/v1/responses?route=proxy&tenant=acme"))
+    let client = ResponsesClient(endpoint: testEndpoint, session: makeMockSession())
+    let (stream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
+
+    try await client.streamBackgroundResponse(
+      responseId: "resp_123",
+      apiKey: "test-key",
+      continuation: continuation,
+      startingAfter: 42,
+    )
+    continuation.finish()
+    for try await _ in stream {}
+
+    let requestURL = try #require(capturedURL)
+    let components = try #require(URLComponents(url: requestURL, resolvingAgainstBaseURL: true))
+    let queryItems = components.queryItems ?? []
+
+    #expect(queryItems.contains(where: { $0.name == "route" && $0.value == "proxy" }))
+    #expect(queryItems.contains(where: { $0.name == "tenant" && $0.value == "acme" }))
+    #expect(queryItems.contains(where: { $0.name == "stream" && $0.value == "true" }))
+    #expect(queryItems.contains(where: { $0.name == "starting_after" && $0.value == "42" }))
+  }
 }

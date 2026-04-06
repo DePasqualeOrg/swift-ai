@@ -1730,6 +1730,94 @@ struct GeminiClientTests {
     ])
   }
 
+  @Test
+  func `Gemini upload flow preserves custom query parameters for upload and status URLs`() async throws {
+    let uploadRequestURL = OSAllocatedUnfairLock(initialState: URL?.none)
+    let statusRequestURL = OSAllocatedUnfairLock(initialState: URL?.none)
+    let testId = UUID().uuidString
+    let modelsEndpoint = try #require(URL(string: "https://mock.test/\(testId)/v1beta/models?route=proxy&version=2026-04-06"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      let path = request.url?.path ?? ""
+
+      switch path {
+        case "/\(testId)/upload/v1beta/files":
+          uploadRequestURL.withLock { $0 = request.url }
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: [
+              "Content-Type": "application/json",
+              "X-Goog-Upload-URL": "https://mock.test/\(testId)/upload-session",
+            ],
+          )!
+          return (response, Data())
+
+        case "/\(testId)/upload-session":
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"file":{"uri":"https://mock.test/\(testId)/files/file_123?token=signed","state":"PROCESSING"}}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+
+        case "/\(testId)/files/file_123":
+          statusRequestURL.withLock { $0 = request.url }
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"state":"ACTIVE"}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+
+        default:
+          let response = HTTPURLResponse(
+            url: request.url!,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/json"],
+          )!
+          let body = """
+          {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}]}
+          """
+          return try (response, #require(body.data(using: .utf8)))
+      }
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let attachment = Attachment(kind: .video(data: Data([0x00, 0x01]), mimeType: "video/mp4"), filename: "clip.mp4")
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: modelsEndpoint)
+    _ = try await client.generateText(
+      modelId: "gemini-2.0-flash",
+      systemPrompt: nil,
+      messages: [Message(role: .user, content: [.attachment(attachment)])],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    )
+
+    let uploadURL = try #require(uploadRequestURL.withLock { $0 })
+    let uploadComponents = try #require(URLComponents(url: uploadURL, resolvingAgainstBaseURL: true))
+    let uploadQueryItems = uploadComponents.queryItems ?? []
+    #expect(uploadQueryItems.contains(where: { $0.name == "route" && $0.value == "proxy" }))
+    #expect(uploadQueryItems.contains(where: { $0.name == "version" && $0.value == "2026-04-06" }))
+    #expect(uploadQueryItems.contains(where: { $0.name == "key" && $0.value == "test-key" }))
+
+    let statusURL = try #require(statusRequestURL.withLock { $0 })
+    let statusComponents = try #require(URLComponents(url: statusURL, resolvingAgainstBaseURL: true))
+    let statusQueryItems = statusComponents.queryItems ?? []
+    #expect(statusQueryItems.contains(where: { $0.name == "token" && $0.value == "signed" }))
+    #expect(statusQueryItems.contains(where: { $0.name == "key" && $0.value == "test-key" }))
+  }
+
   // MARK: - Multiple Tool Calls Tests
 
   @Test

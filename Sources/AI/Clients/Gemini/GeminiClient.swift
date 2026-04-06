@@ -744,6 +744,16 @@ public final class GeminiClient: APIClient, Sendable {
     currentTask?.cancel()
   }
 
+  private func queryItemsPreservingCustomParameters(
+    _ queryItems: [URLQueryItem]?,
+    apiKey: String,
+  ) -> [URLQueryItem] {
+    var preservedQueryItems = queryItems ?? []
+    preservedQueryItems.removeAll { $0.name == "key" }
+    preservedQueryItems.append(URLQueryItem(name: "key", value: apiKey))
+    return preservedQueryItems
+  }
+
   private func uploadFile(data: Data, mimeType: String, displayName: String, apiKey: String) async throws -> String {
     // Derive upload URL from the configured models endpoint so custom endpoints (proxies, mocks) work.
     // modelsEndpoint path is e.g. "/v1beta/models" or "/prefix/v1beta/models";
@@ -755,12 +765,10 @@ public final class GeminiClient: APIClient, Sendable {
     } else {
       uploadComponents.path = "/upload/v1beta/files"
     }
-    uploadComponents.queryItems = nil
+    uploadComponents.queryItems = queryItemsPreservingCustomParameters(uploadComponents.queryItems, apiKey: apiKey)
     let uploadURL = uploadComponents.url!
-    var components = URLComponents(url: uploadURL, resolvingAgainstBaseURL: true)!
-    components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
     // Start resumable upload
-    var request = URLRequest(url: components.url!)
+    var request = URLRequest(url: uploadURL)
     request.httpMethod = "POST"
     request.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
     request.setValue("start", forHTTPHeaderField: "X-Goog-Upload-Command")
@@ -856,7 +864,7 @@ public final class GeminiClient: APIClient, Sendable {
         else {
           throw AIError.parsing(message: "Invalid file URI from server: \(fileUri)")
         }
-        checkComponents.queryItems = [URLQueryItem(name: "key", value: apiKey)]
+        checkComponents.queryItems = queryItemsPreservingCustomParameters(checkComponents.queryItems, apiKey: apiKey)
         guard let checkRequestURL = checkComponents.url else {
           throw AIError.parsing(message: "Failed to construct status check URL for file: \(fileUri)")
         }
