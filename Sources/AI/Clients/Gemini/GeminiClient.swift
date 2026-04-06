@@ -392,22 +392,22 @@ public final class GeminiClient: APIClient, Sendable {
         case let .providerOpaque(opaque) where opaque.isGeminiRoundTrippablePart:
           if let jsonObject = Self.geminiJSONObject(from: opaque) {
             parts.append([opaque.type: jsonObject])
-          } else if opaque.isResponseContent, let text = opaque.content, !text.isEmpty {
+          } else if let text = opaque.replayDowngradeText(for: .gemini) {
             // If a manually constructed Gemini opaque block is missing raw JSON,
             // preserve its visible output rather than dropping the history item.
-            parts.append(["text": text])
-          }
-
-        case let .providerOpaque(opaque) where opaque.portableReplayText != nil:
-          // Non-Gemini providers store some visible output only in opaque blocks.
-          // Downgrade that text so provider switches preserve the assistant transcript.
-          if let text = opaque.portableReplayText, !text.isEmpty {
             parts.append(["text": text])
           }
 
         case let .providerOpaque(opaque) where opaque.isGeminiURLContextMetadata:
           // urlContextMetadata is candidate-level output metadata, not a request Part.
           break
+
+        case let .providerOpaque(opaque):
+          // Non-Gemini providers store some visible output only in opaque blocks.
+          // Downgrade that text so provider switches preserve the assistant transcript.
+          if let text = opaque.replayDowngradeText(for: .gemini) {
+            parts.append(["text": text])
+          }
 
         default:
           break

@@ -21,6 +21,7 @@ extension ResponsesClient {
     var fallbackContent: [Message.Content] = []
     var toolCallArgumentBuffers: [String: String] = [:]
     var itemIdToFallbackIndex: [String: Int] = [:]
+    var itemIdToToolCallId: [String: String] = [:]
     var summaryContent: [Int: String] = [:]
     private var nextContentIndex: [Int: Int] = [:]
 
@@ -155,12 +156,16 @@ extension ResponsesClient {
         appendFallback(.toolCall(toolCall))
         if let itemId {
           itemIdToFallbackIndex[itemId] = index
+          itemIdToToolCallId[itemId] = toolCall.id
         }
         itemIdToFallbackIndex[toolCall.id] = index
         return
       }
       let k = key(outputIndex: outputIndex, contentIndex: nil)
       indexedContent[k] = .toolCall(toolCall)
+      if let itemId {
+        itemIdToToolCallId[itemId] = toolCall.id
+      }
       toolCallArgumentBuffers[String(outputIndex)] = ""
     }
 
@@ -195,7 +200,7 @@ extension ResponsesClient {
       }
     }
 
-    mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int?, itemId: String?) {
+    mutating func completeToolCallArguments(_ argumentsString: String, outputIndex: Int?, itemId: String?, name: String?) {
       let bufferKey = outputIndex.map(String.init) ?? itemId ?? "_fallback"
       toolCallArgumentBuffers.removeValue(forKey: bufferKey)
 
@@ -212,6 +217,27 @@ extension ResponsesClient {
         if let idx, case let .toolCall(currentToolCall) = fallbackContent[idx] {
           updatedToolCall = currentToolCall
           matchedFallbackIndex = idx
+        }
+      }
+
+      if updatedToolCall == nil,
+         let name
+      {
+        let fallbackId = itemId.flatMap { itemIdToToolCallId[$0] } ?? itemId
+        if let fallbackId {
+          updatedToolCall = ToolCall(name: name, id: fallbackId, parameters: [:])
+          if let itemId {
+            itemIdToToolCallId[itemId] = fallbackId
+          }
+          if outputIndex == nil {
+            appendFallback(.toolCall(updatedToolCall!))
+            matchedFallbackIndex = fallbackContent.count - 1
+            itemIdToFallbackIndex[fallbackId] = matchedFallbackIndex
+            if let itemId {
+              itemIdToFallbackIndex[itemId] = matchedFallbackIndex
+              itemIdToToolCallId[itemId] = fallbackId
+            }
+          }
         }
       }
 
@@ -559,7 +585,12 @@ extension ResponsesClient {
           }
         case StreamEventType.functionCallArgumentsDone:
           if let arguments = event.arguments {
-            completeFunctionCallArguments(arguments, outputIndex: event.outputIndex, itemID: event.itemId)
+            completeFunctionCallArguments(
+              arguments,
+              outputIndex: event.outputIndex,
+              itemID: event.itemId,
+              name: event.name,
+            )
           }
         case StreamEventType.completed, StreamEventType.failed, StreamEventType.incomplete:
           if let response = event.response {
@@ -847,25 +878,35 @@ extension ResponsesClient {
       if output["type"] == nil {
         output["type"] = .string(OutputItemType.functionCall)
       }
-      if let itemID, output["call_id"] == nil {
-        output["call_id"] = .string(itemID)
+      if let itemID, output["id"] == nil {
+        output["id"] = .string(itemID)
       }
 
       outputs[resolvedOutputIndex] = output
+      rebuildIndexes()
     }
 
-    private mutating func completeFunctionCallArguments(_ arguments: String, outputIndex: Int?, itemID: String?) {
+    private mutating func completeFunctionCallArguments(
+      _ arguments: String,
+      outputIndex: Int?,
+      itemID: String?,
+      name: String?,
+    ) {
       let resolvedOutputIndex = resolveToolCallOutputIndex(explicitIndex: outputIndex, itemID: itemID)
       guard outputs.indices.contains(resolvedOutputIndex) else { return }
 
       var output = outputs[resolvedOutputIndex]
       output["type"] = .string(OutputItemType.functionCall)
       output["arguments"] = .string(arguments)
-      if let itemID, output["call_id"] == nil {
-        output["call_id"] = .string(itemID)
+      if let name {
+        output["name"] = .string(name)
+      }
+      if let itemID, output["id"] == nil {
+        output["id"] = .string(itemID)
       }
 
       outputs[resolvedOutputIndex] = output
+      rebuildIndexes()
     }
 
     private mutating func resolveToolCallOutputIndex(explicitIndex: Int?, itemID: String?) -> Int {
@@ -880,7 +921,7 @@ extension ResponsesClient {
 
       var item = Self.syntheticOutputItem(ofType: OutputItemType.functionCall)
       if let itemID {
-        item["call_id"] = .string(itemID)
+        item["id"] = .string(itemID)
       }
       return appendOutputItem(item)
     }

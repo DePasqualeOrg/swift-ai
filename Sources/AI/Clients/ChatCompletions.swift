@@ -395,10 +395,10 @@ public final class ChatCompletionsClient: APIClient, Sendable {
               ])
             }
           }
-        case let .providerOpaque(block) where block.isResponseContent:
+        case let .providerOpaque(block):
           // Foreign provider-visible output has no native Chat Completions shape.
           // Preserve the user-visible text instead of dropping the history item.
-          if let text = block.content, !text.isEmpty {
+          if let text = block.replayDowngradeText(for: .chatCompletions) {
             textParts.append(text)
             multimodalContent.append([
               "type": "text",

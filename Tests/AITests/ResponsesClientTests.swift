@@ -456,7 +456,7 @@ struct ResponsesClientTests {
     data: {"type":"response.function_call_arguments.delta","item_id":"call_eof_weather","delta":"{\\"location\\":"}
 
     event: response.function_call_arguments.done
-    data: {"type":"response.function_call_arguments.done","item_id":"call_eof_weather","arguments":"{\\"location\\":\\"Paris\\"}"}
+    data: {"type":"response.function_call_arguments.done","item_id":"call_eof_weather","name":"get_weather","arguments":"{\\"location\\":\\"Paris\\"}"}
 
     data: [DONE]
 
@@ -481,6 +481,50 @@ struct ResponsesClientTests {
     let toolCall = try #require(response.toolCalls.first)
     #expect(toolCall.name == "get_weather")
     #expect(toolCall.id == "call_eof_weather")
+    if case let .string(location) = toolCall.parameters["location"] {
+      #expect(location == "Paris")
+    } else {
+      Issue.record("Expected location parameter to be a string")
+    }
+  }
+
+  @Test
+  func `Clean EOF recovers function calls from arguments done when output item is missing`() async throws {
+    let sseData = """
+    event: response.created
+    data: {"type":"response.created","response":{"id":"resp_eof_missing_item","status":"in_progress","model":"gpt-4o"}}
+
+    event: response.output_text.delta
+    data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"I'll check the weather."}
+
+    event: response.function_call_arguments.delta
+    data: {"type":"response.function_call_arguments.delta","output_index":1,"item_id":"fc_item_123","delta":"{\\"location\\":"}
+
+    event: response.function_call_arguments.done
+    data: {"type":"response.function_call_arguments.done","output_index":1,"item_id":"fc_item_123","name":"get_weather","arguments":"{\\"location\\":\\"Paris\\"}"}
+
+    data: [DONE]
+
+    """
+    let (testId, endpoint) = setupMockHandler(sseData: sseData)
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = ResponsesClient(endpoint: endpoint, session: makeMockSession())
+    let response = try await consumeStream(client.streamText(
+      modelId: "gpt-4o",
+      tools: [makeTestTool(name: "get_weather", description: "Get weather", paramName: "location")],
+      messages: [Message(role: .user, content: "What's the weather in Paris?")],
+      maxTokens: 1024,
+      apiKey: "test-api-key",
+    ))
+
+    #expect(response.responseText == "I'll check the weather.")
+    #expect(response.metadata?.responseId == "resp_eof_missing_item")
+    #expect(response.toolCalls.count == 1)
+
+    let toolCall = try #require(response.toolCalls.first)
+    #expect(toolCall.name == "get_weather")
+    #expect(toolCall.id == "fc_item_123")
     if case let .string(location) = toolCall.parameters["location"] {
       #expect(location == "Paris")
     } else {
@@ -1250,7 +1294,7 @@ struct ResponsesClientTests {
   }
 
   @Test
-  func `Document attachment encodes file_data as data URL`() async throws {
+  func `Document attachment encodes file_data as raw base64`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -1297,7 +1341,7 @@ struct ResponsesClientTests {
     let fileData = try #require(fileContent["file_data"] as? String)
 
     let expectedBase64 = pdfData.base64EncodedString()
-    #expect(fileData == "data:application/pdf;base64,\(expectedBase64)")
+    #expect(fileData == expectedBase64)
     #expect(fileContent["filename"] as? String == "test.pdf")
   }
 
@@ -1346,15 +1390,17 @@ struct ResponsesClientTests {
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
     let input = try #require(body?["input"] as? [[String: Any]])
+    #expect(input.count == 2)
     let firstInput = try #require(input.first)
     let content = try #require(firstInput["content"] as? [[String: Any]])
 
-    #expect(content.count == 2)
+    #expect(content.count == 1)
     #expect(content[0]["type"] as? String == "input_text")
     #expect(content[0]["text"] as? String == "Describe this audio")
 
-    let audioContent = try #require(content[1]["input_audio"] as? [String: Any])
-    #expect(content[1]["type"] as? String == "input_audio")
+    let audioItem = try #require(input.last)
+    let audioContent = try #require(audioItem["input_audio"] as? [String: Any])
+    #expect(audioItem["type"] as? String == "input_audio")
     #expect(audioContent["data"] as? String == audioData.base64EncodedString())
     #expect(audioContent["format"] as? String == "wav")
   }
@@ -1802,6 +1848,7 @@ struct ResponsesClientTests {
     #expect(outputItems[1]["type"] as? String == "input_text")
     #expect(outputItems[1]["text"] as? String == "Analysis complete")
     #expect(outputItems[2]["type"] as? String == "input_file")
+    #expect(outputItems[2]["file_data"] as? String == pdfData.base64EncodedString())
     #expect(outputItems[2]["filename"] as? String == "report.pdf")
   }
 

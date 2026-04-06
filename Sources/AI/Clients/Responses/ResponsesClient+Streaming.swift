@@ -327,7 +327,12 @@ extension ResponsesClient {
 
       case StreamEventType.functionCallArgumentsDone:
         if let argumentsString = event.arguments {
-          streamingState.completeToolCallArguments(argumentsString, outputIndex: event.outputIndex, itemId: event.itemId)
+          streamingState.completeToolCallArguments(
+            argumentsString,
+            outputIndex: event.outputIndex,
+            itemId: event.itemId,
+            name: event.name,
+          )
           yieldCurrentState()
         }
 

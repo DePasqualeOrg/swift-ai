@@ -38,11 +38,11 @@ extension AnthropicClient {
               type: ContentBlockType(rawValue: opaqueBlock.type) ?? .serverToolUse,
               rawValue: rawValue,
             ))
-          } else if opaqueBlock.isResponseContent, let text = opaqueBlock.content, !text.isEmpty {
+          } else if let text = opaqueBlock.replayDowngradeText(for: .anthropic) {
             contentBlocks.append(.init(type: .text, text: text))
           }
-        case let .providerOpaque(opaqueBlock) where opaqueBlock.portableReplayText != nil:
-          if let text = opaqueBlock.portableReplayText, !text.isEmpty {
+        case let .providerOpaque(opaqueBlock):
+          if let text = opaqueBlock.replayDowngradeText(for: .anthropic) {
             contentBlocks.append(.init(type: .text, text: text))
           }
         case let .text(text) where !text.isEmpty:

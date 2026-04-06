@@ -2,22 +2,22 @@
 
 extension OpaqueBlock {
   var isOpenAIChatCompletionsRefusal: Bool {
-    provider == "openai-chat-completions" && type == "refusal"
+    provider == Self.ProviderID.openAIChatCompletions && type == Self.OpenAIChatCompletionsType.refusal
   }
 
   var isOpenAIResponsesAnnotatedOutputText: Bool {
-    provider == "openai-responses" && type == "annotated_output_text"
+    provider == Self.ProviderID.openAIResponses && type == Self.OpenAIResponsesType.annotatedOutputText
   }
 
   var isOpenAIResponsesRefusal: Bool {
-    provider == "openai-responses" && type == "refusal"
+    provider == Self.ProviderID.openAIResponses && type == Self.OpenAIResponsesType.refusal
   }
 
   var isOpenAIResponsesMessageMetadata: Bool {
-    provider == "openai-responses" && type == "message_metadata"
+    provider == Self.ProviderID.openAIResponses && type == Self.OpenAIResponsesType.messageMetadata
   }
 
   var isOpenAIResponsesReasoning: Bool {
-    provider == "openai-responses" && type == "reasoning"
+    provider == Self.ProviderID.openAIResponses && type == Self.OpenAIResponsesType.reasoning
   }
 }

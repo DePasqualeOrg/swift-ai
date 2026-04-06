@@ -34,9 +34,18 @@ public struct Message: Sendable, Hashable {
     var opaqueBlock: OpaqueBlock? {
       switch self {
         case let .thinking(text, signature) where signature != nil:
-          OpaqueBlock(provider: "anthropic", type: "thinking", content: text, signature: signature)
+          OpaqueBlock(
+            provider: OpaqueBlock.ProviderID.anthropic,
+            type: OpaqueBlock.AnthropicType.thinking,
+            content: text,
+            signature: signature,
+          )
         case let .redactedThinking(data):
-          OpaqueBlock(provider: "anthropic", type: "redacted_thinking", data: data)
+          OpaqueBlock(
+            provider: OpaqueBlock.ProviderID.anthropic,
+            type: OpaqueBlock.AnthropicType.redactedThinking,
+            data: data,
+          )
         case let .providerOpaque(opaqueBlock):
           opaqueBlock
         default:
@@ -141,6 +150,34 @@ public extension Message {
     content.compactMap {
       guard case let .toolCall(toolCall) = $0 else { return nil }
       return toolCall
+    }
+  }
+
+  internal func hasNativeReasoningContent(for target: ReplayTarget) -> Bool {
+    content.contains { block in
+      switch (target, block) {
+        case (.anthropic, let .thinking(_, signature)):
+          signature != nil
+        case (.anthropic, .redactedThinking):
+          true
+        case let (_, .providerOpaque(opaque)):
+          switch target {
+            case .anthropic:
+              opaque.provider == OpaqueBlock.ProviderID.anthropic
+                && (opaque.type == OpaqueBlock.AnthropicType.thinking
+                  || opaque.type == OpaqueBlock.AnthropicType.redactedThinking)
+            case .responses:
+              opaque.provider == OpaqueBlock.ProviderID.openAIResponses
+                && opaque.type == OpaqueBlock.OpenAIResponsesType.reasoning
+            case .gemini:
+              opaque.provider == OpaqueBlock.ProviderID.gemini
+                && opaque.type == OpaqueBlock.GeminiType.thinking
+            case .chatCompletions:
+              false
+          }
+        default:
+          false
+      }
     }
   }
 

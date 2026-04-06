@@ -2,18 +2,18 @@
 
 extension OpaqueBlock {
   var isGeminiThinking: Bool {
-    provider == "gemini" && type == "thinking"
+    provider == Self.ProviderID.gemini && type == Self.GeminiType.thinking
   }
 
   var isGeminiRoundTrippablePart: Bool {
-    provider == "gemini"
-      && (type == "executableCode"
-        || type == "codeExecutionResult"
-        || type == "toolCall"
-        || type == "toolResponse")
+    provider == Self.ProviderID.gemini
+      && (type == Self.GeminiType.executableCode
+        || type == Self.GeminiType.codeExecutionResult
+        || type == Self.GeminiType.toolCall
+        || type == Self.GeminiType.toolResponse)
   }
 
   var isGeminiURLContextMetadata: Bool {
-    provider == "gemini" && type == "urlContextMetadata"
+    provider == Self.ProviderID.gemini && type == Self.GeminiType.urlContextMetadata
   }
 }

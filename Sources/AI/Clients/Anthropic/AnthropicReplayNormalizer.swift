@@ -10,12 +10,7 @@ enum AnthropicReplayNormalizer {
 
   static func normalize(_ messages: [Message], thinkingEnabled: Bool) async throws -> Plan {
     let profile = ReplayProviderProfile.forAnthropic(thinkingEnabled: thinkingEnabled)
-    let repairedMessages = ReplayNormalizer.normalize(messages, profile: profile).messages
-    let normalizedMessages = if profile.reasoning.collapsesToolExchangesWithoutNativeReasoning {
-      collapseThinkingHistory(in: repairedMessages)
-    } else {
-      repairedMessages
-    }
+    let normalizedMessages = ReplayNormalizer.normalize(messages, profile: profile).messages
     var systemTexts: [String] = []
     var messageParams: [AnthropicClient.MessageParam] = []
 
@@ -36,31 +31,5 @@ enum AnthropicReplayNormalizer {
     }
 
     return Plan(systemTexts: systemTexts, messages: messageParams)
-  }
-
-  private static func collapseThinkingHistory(in messages: [Message]) -> [Message] {
-    var normalizedMessages: [Message] = []
-    var skipUntilIndex = 0
-
-    for (index, message) in messages.enumerated() {
-      if index < skipUntilIndex {
-        continue
-      }
-
-      if message.role == .assistant, message.hasToolCalls, !message.hasNativeAnthropicThinkingBlocks {
-        normalizedMessages.append(message.collapsingToolCalls())
-
-        var nextIndex = index + 1
-        while nextIndex < messages.count, messages[nextIndex].hasToolResults {
-          normalizedMessages.append(messages[nextIndex].collapsingToolResults())
-          nextIndex += 1
-        }
-        skipUntilIndex = nextIndex
-      } else {
-        normalizedMessages.append(message)
-      }
-    }
-
-    return normalizedMessages
   }
 }

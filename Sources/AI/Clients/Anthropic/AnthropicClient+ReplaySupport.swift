@@ -6,23 +6,24 @@ extension OpaqueBlock {
   }
 
   var isAnthropicThinking: Bool {
-    provider == "anthropic" && type == "thinking"
+    provider == Self.ProviderID.anthropic && type == Self.AnthropicType.thinking
   }
 
   var isAnthropicRedactedThinking: Bool {
-    provider == "anthropic" && type == "redacted_thinking"
+    provider == Self.ProviderID.anthropic && type == Self.AnthropicType.redactedThinking
   }
 
   var isAnthropicCitationCarrier: Bool {
-    provider == "anthropic" && (type == "web_search_tool_result" || type == "web_fetch_tool_result")
+    provider == Self.ProviderID.anthropic
+      && (type == Self.AnthropicType.webSearchToolResult || type == Self.AnthropicType.webFetchToolResult)
   }
 
   var isAnthropicNativeStructuredBlock: Bool {
-    provider == "anthropic"
-      && (type == "server_tool_use"
-        || type == "web_search_tool_result"
-        || type == "web_fetch_tool_result"
-        || type == "code_execution_tool_result")
+    provider == Self.ProviderID.anthropic
+      && (type == Self.AnthropicType.serverToolUse
+        || type == Self.AnthropicType.webSearchToolResult
+        || type == Self.AnthropicType.webFetchToolResult
+        || type == Self.AnthropicType.codeExecutionToolResult)
   }
 }
 

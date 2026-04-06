@@ -9,8 +9,13 @@ enum ReplayNormalizer {
     _ messages: [Message],
     profile: ReplayProviderProfile,
   ) -> ReplayNormalizationPlan {
-    ReplayNormalizationPlan(
-      messages: ToolHistoryNormalizer.normalize(messages, policy: profile.toolHistory),
+    let toolRepairedMessages = ToolHistoryNormalizer.normalize(messages, policy: profile.toolHistory)
+    return ReplayNormalizationPlan(
+      messages: ReasoningHistoryNormalizer.normalize(
+        toolRepairedMessages,
+        target: profile.target,
+        policy: profile.reasoning,
+      ),
     )
   }
 }

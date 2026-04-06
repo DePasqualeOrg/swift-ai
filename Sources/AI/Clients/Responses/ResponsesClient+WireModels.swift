@@ -10,6 +10,7 @@ extension ResponsesClient {
     let delta: String?
     let text: String?
     let refusal: String?
+    let name: String?
     let annotationIndex: Int?
     let itemId: String?
     let outputIndex: Int?
@@ -28,6 +29,7 @@ extension ResponsesClient {
       case delta
       case text
       case refusal
+      case name
       case annotationIndex = "annotation_index"
       case itemId = "item_id"
       case outputIndex = "output_index"
@@ -293,7 +295,7 @@ extension ResponsesClient {
               }
             case OutputItemType.functionCall:
               if let name = item.name,
-                 let callId = item.callId,
+                 let callId = item.callId ?? item.id,
                  let argumentsString = item.arguments
               {
                 var parameters: [String: Value] = [:]
