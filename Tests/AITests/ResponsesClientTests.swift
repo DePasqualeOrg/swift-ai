@@ -1560,12 +1560,12 @@ struct ResponsesClientTests {
       guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
-        $0["type"] as? String == "input_text" && $0["text"] as? String == "Fetched article body."
+        $0["type"] as? String == "output_text" && $0["text"] as? String == "Fetched article body."
       }) == true
     }))
     let content = try #require(replayedMessage["content"] as? [[String: Any]])
     #expect(content.contains(where: {
-      $0["type"] as? String == "input_text" && $0["text"] as? String == "Fetched article body."
+      $0["type"] as? String == "output_text" && $0["text"] as? String == "Fetched article body."
     }))
   }
 
@@ -1621,12 +1621,12 @@ struct ResponsesClientTests {
       guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
-        $0["type"] as? String == "input_text" && $0["text"] as? String == "Search snippet"
+        $0["type"] as? String == "output_text" && $0["text"] as? String == "Search snippet"
       }) == true
     }))
     let content = try #require(replayedMessage["content"] as? [[String: Any]])
     #expect(content.contains(where: {
-      $0["type"] as? String == "input_text" && $0["text"] as? String == "Search snippet"
+      $0["type"] as? String == "output_text" && $0["text"] as? String == "Search snippet"
     }))
   }
 
@@ -1688,7 +1688,7 @@ struct ResponsesClientTests {
     }))
     let content = try #require(replayedMessage["content"] as? [[String: Any]])
 
-    #expect(content.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "Keep these results in mind." }))
+    #expect(content.contains(where: { $0["type"] as? String == "output_text" && $0["text"] as? String == "Keep these results in mind." }))
     let imageContent = try #require(content.first(where: { $0["type"] as? String == "input_image" }))
     let imageURL = try #require(imageContent["image_url"] as? String)
     #expect(imageURL.hasPrefix("data:image/"))
@@ -1777,7 +1777,7 @@ struct ResponsesClientTests {
     let downgradedContent = try #require(downgradedAssistantMessage["content"] as? [[String: Any]])
     #expect(downgradedContent[0]["type"] as? String == "input_file")
     #expect(downgradedContent[0]["filename"] as? String == "notes.pdf")
-    #expect(downgradedContent[1]["type"] as? String == "input_text")
+    #expect(downgradedContent[1]["type"] as? String == "output_text")
     #expect(downgradedContent[1]["text"] as? String == "Supplemental note.")
   }
 
@@ -2206,16 +2206,16 @@ struct ResponsesClientTests {
     #expect(summary[0]["text"] as? String == "Let me think step by step.")
 
     // Manually constructed assistant messages (without message_metadata) stay assistant turns
-    // and replay as EasyInputMessage content.
+    // and replay using assistant-shaped content items.
     let replayedMessage = try #require(input.first(where: { item in
       guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
-        $0["type"] as? String == "input_text" && $0["text"] as? String == "The answer is 42."
+        $0["type"] as? String == "output_text" && $0["text"] as? String == "The answer is 42."
       }) == true
     }))
     let content = try #require(replayedMessage["content"] as? [[String: Any]])
-    #expect(content.contains(where: { $0["type"] as? String == "input_text" && $0["text"] as? String == "The answer is 42." }))
+    #expect(content.contains(where: { $0["type"] as? String == "output_text" && $0["text"] as? String == "The answer is 42." }))
   }
 
   @Test
@@ -2286,7 +2286,7 @@ struct ResponsesClientTests {
   }
 
   @Test
-  func `Assistant message without metadata omits annotations and serializes refusal as text`() async throws {
+  func `Assistant message without metadata omits annotations and preserves refusal type`() async throws {
     var capturedBodyData: Data?
     let testId = UUID().uuidString
     let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
@@ -2350,19 +2350,18 @@ struct ResponsesClientTests {
       guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
-        $0["type"] as? String == "input_text" && $0["text"] as? String == "See this source."
+        $0["type"] as? String == "output_text" && $0["text"] as? String == "See this source."
       }) == true
     }))
     let content = try #require(replayedMessage["content"] as? [[String: Any]])
 
-    // Without metadata, annotated text should become plain input_text without annotations
+    // Without metadata, annotated text should become plain output_text without annotations
     let annotatedItem = try #require(content.first(where: { $0["text"] as? String == "See this source." }))
-    #expect(annotatedItem["type"] as? String == "input_text")
+    #expect(annotatedItem["type"] as? String == "output_text")
     #expect(annotatedItem["annotations"] == nil)
 
-    // Refusal should become plain input_text, not a "refusal" type
-    let refusalItem = try #require(content.first(where: { $0["text"] as? String == "I cannot help with that." }))
-    #expect(refusalItem["type"] as? String == "input_text")
+    let refusalItem = try #require(content.first(where: { $0["refusal"] as? String == "I cannot help with that." }))
+    #expect(refusalItem["type"] as? String == "refusal")
   }
 
   @Test
@@ -2425,7 +2424,7 @@ struct ResponsesClientTests {
       guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
-        $0["type"] as? String == "input_text" && $0["text"] as? String == "Cited answer."
+        $0["type"] as? String == "output_text" && $0["text"] as? String == "Cited answer."
       }) == true
     }))
     let content = try #require(replayedMessage["content"] as? [[String: Any]])

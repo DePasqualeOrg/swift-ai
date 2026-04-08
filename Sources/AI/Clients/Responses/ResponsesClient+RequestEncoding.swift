@@ -132,7 +132,7 @@ extension ResponsesClient {
         }
 
         var textContentType: String {
-          isReplayingOutputMessage ? ContentType.outputText : ContentType.inputText
+          ContentType.outputText
         }
 
         var currentMessageRole: String {
@@ -216,23 +216,16 @@ extension ResponsesClient {
               }
             case let .providerOpaque(block) where block.isOpenAIResponsesRefusal:
               if let refusal = block.content {
-                if isReplayingOutputMessage {
-                  contentItems.append([
-                    "type": OutputItemType.refusal,
-                    "refusal": refusal,
-                  ])
-                } else {
-                  contentItems.append([
-                    "type": ContentType.inputText,
-                    "text": refusal,
-                  ])
-                }
+                contentItems.append([
+                  "type": OutputItemType.refusal,
+                  "refusal": refusal,
+                ])
               }
             case let .providerOpaque(block) where block.isOpenAIChatCompletionsRefusal:
               if let refusal = block.content {
                 contentItems.append([
-                  "type": ContentType.inputText,
-                  "text": refusal,
+                  "type": OutputItemType.refusal,
+                  "refusal": refusal,
                 ])
               }
             case let .providerOpaque(block) where block.isOpenAIResponsesReasoning:
@@ -303,7 +296,7 @@ extension ResponsesClient {
               } else if block.isResponseContent, let text = block.content, !text.isEmpty {
                 clearCurrentMetadata()
                 contentItems.append([
-                  "type": ContentType.inputText,
+                  "type": ContentType.outputText,
                   "text": text,
                 ])
               }
