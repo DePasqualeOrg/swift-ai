@@ -341,7 +341,11 @@ enum GeminiStreamTransport {
             geminiTransportLogger.error("Failed to read error response: \(error.localizedDescription)")
           }
 
-          throw geminiHTTPError(statusCode: httpResponse.statusCode, message: errorMessage)
+          throw GeminiClient.geminiHTTPError(
+            statusCode: httpResponse.statusCode,
+            message: errorMessage,
+            retryAfter: AIError.parseRetryAfter(from: httpResponse),
+          )
         }
 
         for try await event in result.events {
@@ -384,7 +388,11 @@ enum GeminiStreamTransport {
 
         if !(200 ... 299).contains(httpResponse.statusCode) {
           let errorMessage = parseGeminiErrorMessage(from: data)
-          throw geminiHTTPError(statusCode: httpResponse.statusCode, message: errorMessage)
+          throw GeminiClient.geminiHTTPError(
+            statusCode: httpResponse.statusCode,
+            message: errorMessage,
+            retryAfter: AIError.parseRetryAfter(from: httpResponse),
+          )
         }
 
         let jsonObject = try decodedJSONObject(from: data)
@@ -488,19 +496,6 @@ enum GeminiStreamTransport {
       return firstError.error.message
     }
     return nil
-  }
-
-  private static func geminiHTTPError(statusCode: Int, message: String?) -> AIError {
-    switch statusCode {
-      case 400: .invalidRequest(message: message ?? "There was a problem with the request body.")
-      case 403: .authentication(message: "Ensure your API key is set correctly and has the right access.")
-      case 404: .invalidRequest(message: message.map { "Not found: \($0)" } ?? "The requested resource wasn't found.")
-      case 429: .rateLimit(retryAfter: nil)
-      case 500: .serverError(statusCode: 500, message: message ?? "An unexpected error occurred. Try reducing your input context, switching to another model temporarily, or retry after a short wait.", context: nil)
-      case 503: .serverError(statusCode: 503, message: message ?? "The service may be temporarily overloaded. Try switching to another model temporarily or retry after a short wait.", context: nil)
-      case 504: .timeout
-      default: .serverError(statusCode: statusCode, message: message ?? "HTTP error \(statusCode)", context: nil)
-    }
   }
 
   // TODO: Remove @_optimize(none) when the Swift compiler bug is fixed.

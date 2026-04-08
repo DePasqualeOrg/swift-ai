@@ -38,6 +38,7 @@ public final class GeminiClient: APIClient, Sendable {
   }()
 
   private let session: URLSession
+  let retryHandler: RetryHandler
 
   struct GeminiError: LocalizedError {
     let message: String
@@ -171,9 +172,11 @@ public final class GeminiClient: APIClient, Sendable {
   /// Creates a new Gemini client.
   ///
   /// - Parameters:
+  ///   - maxRetries: Maximum number of retry attempts for failed requests.
   ///   - session: URLSession to use for requests. Defaults to a session with no timeout.
   ///   - modelsEndpoint: Custom endpoint URL for the models API.
-  public init(session: URLSession = GeminiClient.defaultSession, modelsEndpoint: URL? = nil) {
+  public init(maxRetries: Int = 4, session: URLSession = GeminiClient.defaultSession, modelsEndpoint: URL? = nil) {
+    retryHandler = RetryHandler(maxRetries: maxRetries)
     self.session = session
     self.modelsEndpoint = modelsEndpoint ?? GeminiClient.defaultModelsEndpoint
   }
@@ -450,12 +453,54 @@ public final class GeminiClient: APIClient, Sendable {
       },
     )
 
-    if streaming {
-      let (result, response) = try await session.bytes(for: request)
-      return GeminiStreamTransport.processStreamBytes(result: result, response: response)
-    } else {
-      let (data, response) = try await session.data(for: request)
-      return GeminiStreamTransport.processBufferedResponse(data: data, response: response)
+    var retriesRemaining = retryHandler.maxRetries
+    while true {
+      do {
+        if streaming {
+          let (result, response) = try await session.bytes(for: request)
+          // Consume the stream to check for HTTP errors before returning
+          guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIError.network(underlying: URLError(.badServerResponse))
+          }
+          if !(200 ... 299).contains(httpResponse.statusCode) {
+            var errorData = Data()
+            for try await byte in result {
+              try Task.checkCancellation()
+              errorData.append(byte)
+            }
+            let errorMessage = GeminiStreamTransport.parseGeminiErrorMessage(from: errorData)
+            throw Self.geminiHTTPError(
+              statusCode: httpResponse.statusCode,
+              message: errorMessage,
+              retryAfter: AIError.parseRetryAfter(from: httpResponse),
+            )
+          }
+          return GeminiStreamTransport.processStreamBytes(result: result, response: response)
+        } else {
+          let (data, response) = try await session.data(for: request)
+          guard let httpResponse = response as? HTTPURLResponse else {
+            throw AIError.network(underlying: URLError(.badServerResponse))
+          }
+          if !(200 ... 299).contains(httpResponse.statusCode) {
+            let errorMessage = GeminiStreamTransport.parseGeminiErrorMessage(from: data)
+            throw Self.geminiHTTPError(
+              statusCode: httpResponse.statusCode,
+              message: errorMessage,
+              retryAfter: AIError.parseRetryAfter(from: httpResponse),
+            )
+          }
+          return GeminiStreamTransport.processBufferedResponse(data: data, response: response)
+        }
+      } catch {
+        let aiError = (error as? AIError) ?? .network(underlying: error)
+        if retriesRemaining > 0, retryHandler.shouldRetry(aiError) {
+          let delay = retryHandler.retryDelay(retriesRemaining: retriesRemaining)
+          try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+          retriesRemaining -= 1
+          continue
+        }
+        throw aiError
+      }
     }
   }
 
@@ -891,7 +936,11 @@ public final class GeminiClient: APIClient, Sendable {
         }
         if !(200 ... 299).contains(checkHTTPResponse.statusCode) {
           let errorMessage = GeminiStreamTransport.parseGeminiErrorMessage(from: checkData)
-          throw Self.geminiHTTPError(statusCode: checkHTTPResponse.statusCode, message: errorMessage)
+          throw Self.geminiHTTPError(
+            statusCode: checkHTTPResponse.statusCode,
+            message: errorMessage,
+            retryAfter: AIError.parseRetryAfter(from: checkHTTPResponse),
+          )
         }
         // Decode the status check response
         let statusResponse = try JSONDecoder().decode(StatusResponse.self, from: checkData)
@@ -979,16 +1028,18 @@ public final class GeminiClient: APIClient, Sendable {
 
 extension GeminiClient {
   /// Maps an HTTP status code and optional error message to an `AIError`.
-  private static func geminiHTTPError(statusCode: Int, message: String?) -> AIError {
-    switch statusCode {
+  static func geminiHTTPError(statusCode: Int, message: String?, retryAfter: TimeInterval? = nil) -> AIError {
+    let providerInfo = AIError.ProviderErrorInfo.gemini(status: "\(statusCode)", message: message)
+    let context = AIError.ErrorContext(providerInfo: providerInfo)
+    return switch statusCode {
       case 400: .invalidRequest(message: message ?? "There was a problem with the request body.")
       case 403: .authentication(message: "Ensure your API key is set correctly and has the right access.")
       case 404: .invalidRequest(message: message.map { "Not found: \($0)" } ?? "The requested resource wasn't found.")
-      case 429: .rateLimit(retryAfter: nil)
-      case 500: .serverError(statusCode: 500, message: message ?? "An unexpected error occurred. Try reducing your input context, switching to another model temporarily, or retry after a short wait.", context: nil)
-      case 503: .serverError(statusCode: 503, message: message ?? "The service may be temporarily overloaded. Try switching to another model temporarily or retry after a short wait.", context: nil)
+      case 429: .rateLimit(retryAfter: retryAfter)
+      case 500: .serverError(statusCode: 500, message: message ?? "An unexpected error occurred. Try reducing your input context, switching to another model temporarily, or retry after a short wait.", context: context)
+      case 503: .serverError(statusCode: 503, message: message ?? "The service may be temporarily overloaded. Try switching to another model temporarily or retry after a short wait.", context: context)
       case 504: .timeout
-      default: .serverError(statusCode: statusCode, message: message ?? "HTTP error \(statusCode)", context: nil)
+      default: .serverError(statusCode: statusCode, message: message ?? "HTTP error \(statusCode)", context: context)
     }
   }
 }

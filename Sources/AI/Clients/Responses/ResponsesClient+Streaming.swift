@@ -157,12 +157,31 @@ extension ResponsesClient {
           )
         } else if backgroundMode {
           openAIResponsesLogger.log("Initiating background mode response without streaming in OpenAI Responses client")
-          let (data, response) = try await session.data(for: request)
-          guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIError.network(underlying: URLError(.badServerResponse))
-          }
-          if !(200 ... 299).contains(httpResponse.statusCode) {
-            try handleErrorResponse(httpResponse, data: data)
+          let data: Data
+          var retriesRemaining = retryHandler.maxRetries
+          while true {
+            var lastResponseHeaders: [AnyHashable: Any]?
+            do {
+              let (responseData, response) = try await session.data(for: request)
+              guard let httpResponse = response as? HTTPURLResponse else {
+                throw AIError.network(underlying: URLError(.badServerResponse))
+              }
+              lastResponseHeaders = httpResponse.allHeaderFields
+              if !(200 ... 299).contains(httpResponse.statusCode) {
+                try handleErrorResponse(httpResponse, data: responseData)
+              }
+              data = responseData
+              break
+            } catch {
+              let aiError = (error as? AIError) ?? .network(underlying: error)
+              if retriesRemaining > 0, retryHandler.shouldRetry(aiError, responseHeaders: lastResponseHeaders) {
+                let delay = retryHandler.retryDelay(retriesRemaining: retriesRemaining, responseHeaders: lastResponseHeaders)
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                retriesRemaining -= 1
+                continue
+              }
+              throw aiError
+            }
           }
 
           let decodedResponse = try JSONDecoder().decode(ResponseObject.self, from: data)
@@ -182,12 +201,31 @@ extension ResponsesClient {
             logPrefix: "Standard Stream",
           )
         } else {
-          let (data, response) = try await session.data(for: request)
-          guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIError.network(underlying: URLError(.badServerResponse))
-          }
-          if !(200 ... 299).contains(httpResponse.statusCode) {
-            try handleErrorResponse(httpResponse, data: data)
+          let data: Data
+          var retriesRemaining = retryHandler.maxRetries
+          while true {
+            var lastResponseHeaders: [AnyHashable: Any]?
+            do {
+              let (responseData, response) = try await session.data(for: request)
+              guard let httpResponse = response as? HTTPURLResponse else {
+                throw AIError.network(underlying: URLError(.badServerResponse))
+              }
+              lastResponseHeaders = httpResponse.allHeaderFields
+              if !(200 ... 299).contains(httpResponse.statusCode) {
+                try handleErrorResponse(httpResponse, data: responseData)
+              }
+              data = responseData
+              break
+            } catch {
+              let aiError = (error as? AIError) ?? .network(underlying: error)
+              if retriesRemaining > 0, retryHandler.shouldRetry(aiError, responseHeaders: lastResponseHeaders) {
+                let delay = retryHandler.retryDelay(retriesRemaining: retriesRemaining, responseHeaders: lastResponseHeaders)
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                retriesRemaining -= 1
+                continue
+              }
+              throw aiError
+            }
           }
 
           do {
@@ -560,18 +598,36 @@ extension ResponsesClient {
   ) async throws {
     openAIResponsesLogger.log("\(logPrefix): Connecting to stream...")
 
-    let (result, response) = try await session.bytes(for: request)
-    guard let httpResponse = response as? HTTPURLResponse else {
-      throw AIError.network(underlying: URLError(.badServerResponse))
-    }
-
-    if !(200 ... 299).contains(httpResponse.statusCode) {
-      var errorData = Data()
-      for try await byte in result {
-        try Task.checkCancellation()
-        errorData.append(byte)
+    let result: URLSession.AsyncBytes
+    var retriesRemaining = retryHandler.maxRetries
+    while true {
+      var lastResponseHeaders: [AnyHashable: Any]?
+      do {
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+          throw AIError.network(underlying: URLError(.badServerResponse))
+        }
+        lastResponseHeaders = httpResponse.allHeaderFields
+        if !(200 ... 299).contains(httpResponse.statusCode) {
+          var errorData = Data()
+          for try await byte in bytes {
+            try Task.checkCancellation()
+            errorData.append(byte)
+          }
+          try handleErrorResponse(httpResponse, data: errorData)
+        }
+        result = bytes
+        break
+      } catch {
+        let aiError = (error as? AIError) ?? .network(underlying: error)
+        if retriesRemaining > 0, retryHandler.shouldRetry(aiError, responseHeaders: lastResponseHeaders) {
+          let delay = retryHandler.retryDelay(retriesRemaining: retriesRemaining, responseHeaders: lastResponseHeaders)
+          try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+          retriesRemaining -= 1
+          continue
+        }
+        throw aiError
       }
-      try handleErrorResponse(httpResponse, data: errorData)
     }
 
     var streamingState = StreamingResponseState()

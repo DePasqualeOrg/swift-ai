@@ -28,7 +28,7 @@ public final class AnthropicClient: APIClient, Sendable {
   let messagesEndpoint: URL
 
   let version = "2023-06-01"
-  let maxRetries: Int
+  let retryHandler: RetryHandler
   let timeout: TimeInterval
   let session: URLSession
 
@@ -124,7 +124,7 @@ public final class AnthropicClient: APIClient, Sendable {
   ///   - session: URLSession to use for requests.
   ///   - messagesEndpoint: Custom endpoint URL for the messages API.
   public init(maxRetries: Int = 2, timeout: TimeInterval = 600, session: URLSession = .shared, messagesEndpoint: URL? = nil) {
-    self.maxRetries = maxRetries
+    retryHandler = RetryHandler(maxRetries: maxRetries)
     self.timeout = timeout
     self.session = session
     self.messagesEndpoint = messagesEndpoint ?? baseURL.appendingPathComponent("messages")
@@ -144,7 +144,8 @@ public final class AnthropicClient: APIClient, Sendable {
     body: [String: any Sendable]? = nil,
     retries: Int? = nil,
   ) async throws -> T {
-    let retriesRemaining = retries ?? maxRetries
+    let retriesRemaining = retries ?? retryHandler.maxRetries
+    var lastResponseHeaders: [AnyHashable: Any]?
     do {
       var request = URLRequest(url: endpoint)
       request.httpMethod = method
@@ -159,14 +160,14 @@ public final class AnthropicClient: APIClient, Sendable {
       guard let httpResponse = response as? HTTPURLResponse else {
         throw AIError.network(underlying: URLError(.badServerResponse))
       }
+      lastResponseHeaders = httpResponse.allHeaderFields
       if !(200 ... 299).contains(httpResponse.statusCode) {
-        throw Self.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: data)
+        throw Self.aiErrorFromHTTPResponse(httpResponse: httpResponse, data: data)
       }
       return try JSONDecoder().decode(T.self, from: data)
     } catch {
-      if retriesRemaining > 0, shouldRetry(error) {
-        // Calculate backoff with jitter
-        let delay = calculateRetryDelay(retriesRemaining: retriesRemaining)
+      if retriesRemaining > 0, retryHandler.shouldRetry(error, responseHeaders: lastResponseHeaders) {
+        let delay = retryHandler.retryDelay(retriesRemaining: retriesRemaining, responseHeaders: lastResponseHeaders)
         try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         return try await makeRequest(
           endpoint: endpoint,
@@ -178,28 +179,6 @@ public final class AnthropicClient: APIClient, Sendable {
       }
       throw error
     }
-  }
-
-  func shouldRetry(_ error: Error) -> Bool {
-    if let urlError = error as? URLError {
-      // Retry network errors
-      return urlError.code != .cancelled
-    }
-    if let aiError = error as? AIError {
-      return aiError.isRetryable
-    }
-    return false
-  }
-
-  func calculateRetryDelay(retriesRemaining: Int) -> Double {
-    let initialRetryDelay = 0.5
-    let maxRetryDelay = 8.0
-    let numRetries = maxRetries - retriesRemaining
-    // Apply exponential backoff, but not more than the max
-    let sleepSeconds = min(initialRetryDelay * pow(2.0, Double(numRetries)), maxRetryDelay)
-    // Apply jitter, take up to at most 25 percent of the retry time
-    let jitter = 1.0 - Double.random(in: 0.0 ... 0.25)
-    return sleepSeconds * jitter
   }
 }
 
@@ -544,9 +523,11 @@ public extension AnthropicClient {
   /// Returns the default max_tokens for a given model ID.
   /// Newer models default to 64000; older models use their documented limits.
   internal static func defaultMaxTokens(for modelId: String) -> Int {
-    if modelId.contains("claude-3-5-haiku") {
+    if modelId.contains("claude-3-5-haiku") || modelId.contains("claude-3-5-sonnet") {
       8192
-    } else if modelId.contains("claude-3-haiku") {
+    } else if modelId.contains("claude-3-haiku") || modelId.contains("claude-3-sonnet")
+      || modelId.contains("claude-3-opus")
+    {
       4096
     } else if modelId.contains("claude-opus-4-1") {
       32000
@@ -578,12 +559,23 @@ public extension AnthropicClient {
 }
 
 extension AnthropicClient {
-  static func aiErrorFromHTTPResponse(status: Int, data: Data) -> AIError {
+  static func aiErrorFromHTTPResponse(httpResponse: HTTPURLResponse, data: Data) -> AIError {
+    let retryAfter = AIError.parseRetryAfter(from: httpResponse)
+    let responseHeaders = httpResponse.allHeaderFields.reduce(into: [String: String]()) { result, pair in
+      result["\(pair.key)"] = "\(pair.value)"
+    }
     let decoder = JSONDecoder()
     decoder.keyDecodingStrategy = .convertFromSnakeCase
     if let errorResponse = try? decoder.decode(ErrorResponse.self, from: data) {
       let message = errorResponse.error.message ?? "Unknown error"
-      switch status {
+      let errorType = errorResponse.error.type ?? "unknown"
+      let context = AIError.ErrorContext(
+        url: httpResponse.url,
+        responseHeaders: responseHeaders,
+        responseBody: data,
+        providerInfo: .anthropic(type: errorType, message: errorResponse.error.message),
+      )
+      switch httpResponse.statusCode {
         case 400:
           return .invalidRequest(message: message)
         case 401:
@@ -592,16 +584,23 @@ extension AnthropicClient {
           return .authentication(message: "Your API key does not have permission to use the specified resource")
         case 404:
           return .invalidRequest(message: "Not found: \(message)")
+        case 408, 409:
+          return .serverError(statusCode: httpResponse.statusCode, message: message, context: context)
         case 429:
-          return .rateLimit(retryAfter: nil)
+          return .rateLimit(retryAfter: retryAfter)
         case 500 ... 599:
-          return .serverError(statusCode: status, message: message, context: nil)
+          return .serverError(statusCode: httpResponse.statusCode, message: message, context: context)
         default:
-          return .serverError(statusCode: status, message: message, context: nil)
+          return .invalidRequest(message: message)
       }
     }
 
-    return .serverError(statusCode: status, message: "Unknown error", context: nil)
+    let context = AIError.ErrorContext(
+      url: httpResponse.url,
+      responseHeaders: responseHeaders,
+      responseBody: data,
+    )
+    return .serverError(statusCode: httpResponse.statusCode, message: "Unknown error", context: context)
   }
 
   private struct ErrorResponse: Codable {

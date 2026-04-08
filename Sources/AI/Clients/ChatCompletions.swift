@@ -90,14 +90,17 @@ public final class ChatCompletionsClient: APIClient, Sendable {
   @MainActor private var currentTask: Task<GenerationResponse, Error>?
 
   private let session: URLSession
+  let retryHandler: RetryHandler
 
   /// Creates a new Chat Completions client with a predefined endpoint.
   ///
   /// - Parameters:
   ///   - endpoint: The API endpoint to use (OpenAI or xAI).
+  ///   - maxRetries: Maximum number of retry attempts for failed requests.
   ///   - session: URLSession to use for requests.
-  public init(endpoint: Endpoint = .openAI, session: URLSession = .shared) {
+  public init(endpoint: Endpoint = .openAI, maxRetries: Int = 2, session: URLSession = .shared) {
     self.endpoint = endpoint.url
+    retryHandler = RetryHandler(maxRetries: maxRetries)
     self.session = session
   }
 
@@ -105,9 +108,11 @@ public final class ChatCompletionsClient: APIClient, Sendable {
   ///
   /// - Parameters:
   ///   - endpoint: Custom endpoint URL for the Chat Completions API.
+  ///   - maxRetries: Maximum number of retry attempts for failed requests.
   ///   - session: URLSession to use for requests.
-  public init(endpoint: URL, session: URLSession = .shared) {
+  public init(endpoint: URL, maxRetries: Int = 2, session: URLSession = .shared) {
     self.endpoint = endpoint
+    retryHandler = RetryHandler(maxRetries: maxRetries)
     self.session = session
   }
 
@@ -497,6 +502,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
       "messages": processedMessages,
       "stream": stream,
     ]
+    if stream {
+      body["stream_options"] = ["include_usage": true]
+    }
     if let maxTokens {
       body[useLegacyMaxTokensField ? "max_tokens" : "max_completion_tokens"] = maxTokens
     }
@@ -546,22 +554,42 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     request.httpBody = try JSONSerialization.data(withJSONObject: body)
     let finalRequest = request
     let (resultStream, continuation) = AsyncThrowingStream<GenerationResponse, Error>.makeStream()
+    let retryHandler = retryHandler
     let task = Task { @Sendable in
       let request = finalRequest
       do {
         if stream {
-          // Handle streaming response
-          let (result, response) = try await session.bytes(for: request)
-          guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIError.network(underlying: URLError(.badServerResponse))
-          }
-          if !(200 ... 299).contains(httpResponse.statusCode) {
-            var errorData = Data()
-            for try await byte in result {
-              try Task.checkCancellation()
-              errorData.append(byte)
+          // Handle streaming response with retry on initial connection
+          let result: URLSession.AsyncBytes
+          var retriesRemaining = retryHandler.maxRetries
+          while true {
+            var lastResponseHeaders: [AnyHashable: Any]?
+            do {
+              let (bytes, response) = try await session.bytes(for: request)
+              guard let httpResponse = response as? HTTPURLResponse else {
+                throw AIError.network(underlying: URLError(.badServerResponse))
+              }
+              lastResponseHeaders = httpResponse.allHeaderFields
+              if !(200 ... 299).contains(httpResponse.statusCode) {
+                var errorData = Data()
+                for try await byte in bytes {
+                  try Task.checkCancellation()
+                  errorData.append(byte)
+                }
+                try handleErrorResponse(httpResponse, data: errorData)
+              }
+              result = bytes
+              break
+            } catch {
+              let aiError = (error as? AIError) ?? .network(underlying: error)
+              if retriesRemaining > 0, retryHandler.shouldRetry(aiError, responseHeaders: lastResponseHeaders) {
+                let delay = retryHandler.retryDelay(retriesRemaining: retriesRemaining, responseHeaders: lastResponseHeaders)
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                retriesRemaining -= 1
+                continue
+              }
+              throw aiError
             }
-            try handleErrorResponse(httpResponse, data: errorData)
           }
           var toolCallsById: [Int: AI.ToolCall] = [:] // Accumulate tool calls by index
           var functionCallArguments: [Int: String] = [:] // Accumulate arguments by index
@@ -682,13 +710,32 @@ public final class ChatCompletionsClient: APIClient, Sendable {
             }
           }
         } else {
-          // Handle non-streaming response
-          let (data, response) = try await session.data(for: request)
-          guard let httpResponse = response as? HTTPURLResponse else {
-            throw AIError.network(underlying: URLError(.badServerResponse))
-          }
-          if !(200 ... 299).contains(httpResponse.statusCode) {
-            try handleErrorResponse(httpResponse, data: data)
+          // Handle non-streaming response with retry
+          let data: Data
+          var retriesRemaining = retryHandler.maxRetries
+          while true {
+            var lastResponseHeaders: [AnyHashable: Any]?
+            do {
+              let (responseData, response) = try await session.data(for: request)
+              guard let httpResponse = response as? HTTPURLResponse else {
+                throw AIError.network(underlying: URLError(.badServerResponse))
+              }
+              lastResponseHeaders = httpResponse.allHeaderFields
+              if !(200 ... 299).contains(httpResponse.statusCode) {
+                try handleErrorResponse(httpResponse, data: responseData)
+              }
+              data = responseData
+              break
+            } catch {
+              let aiError = (error as? AIError) ?? .network(underlying: error)
+              if retriesRemaining > 0, retryHandler.shouldRetry(aiError, responseHeaders: lastResponseHeaders) {
+                let delay = retryHandler.retryDelay(retriesRemaining: retriesRemaining, responseHeaders: lastResponseHeaders)
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                retriesRemaining -= 1
+                continue
+              }
+              throw aiError
+            }
           }
           do {
             let completionResponse = try JSONDecoder().decode(CompletionResponse.self, from: data)

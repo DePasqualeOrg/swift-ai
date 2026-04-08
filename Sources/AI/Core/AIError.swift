@@ -80,7 +80,9 @@ public enum AIError: Error, Sendable {
   /// Whether this error is potentially retryable.
   public var isRetryable: Bool {
     switch self {
-      case .rateLimit, .serverError, .network, .timeout: true
+      case .rateLimit, .network, .timeout: true
+      case let .serverError(statusCode, _, _):
+        statusCode == 408 || statusCode == 409 || statusCode >= 500
       default: false
     }
   }
@@ -125,32 +127,74 @@ extension AIError {
     data: Data,
     logger: Logger,
   ) throws -> Never {
+    let retryAfter = parseRetryAfter(from: httpResponse)
+    let responseHeaders = httpResponse.allHeaderFields.reduce(into: [String: String]()) { result, pair in
+      result["\(pair.key)"] = "\(pair.value)"
+    }
+    let context = ErrorContext(
+      url: httpResponse.url,
+      responseHeaders: responseHeaders,
+      responseBody: data,
+    )
     if let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: any Sendable] {
       logger.warning("Error: \(errorJson)")
       // OpenAI nested format
       if let error = errorJson["error"] as? [String: any Sendable], let message = error["message"] as? String {
-        throw fromHTTPStatusCode(httpResponse.statusCode, message: message)
+        let type = error["type"] as? String
+        let code = error["code"] as? String
+        let providerContext = ErrorContext(
+          url: context.url,
+          responseHeaders: context.responseHeaders,
+          responseBody: context.responseBody,
+          providerInfo: .openAI(type: type ?? "unknown", code: code),
+        )
+        throw fromHTTPStatusCode(httpResponse.statusCode, message: message, retryAfter: retryAfter, context: providerContext)
       }
       // Fireworks format
       if let message = errorJson["error"] as? String {
-        throw fromHTTPStatusCode(httpResponse.statusCode, message: message)
+        throw fromHTTPStatusCode(httpResponse.statusCode, message: message, retryAfter: retryAfter, context: context)
       }
       // Mistral format
       if let message = errorJson["message"] as? String {
-        throw fromHTTPStatusCode(httpResponse.statusCode, message: message)
+        throw fromHTTPStatusCode(httpResponse.statusCode, message: message, retryAfter: retryAfter, context: context)
       }
     }
-    throw fromHTTPStatusCode(httpResponse.statusCode, message: nil)
+    throw fromHTTPStatusCode(httpResponse.statusCode, message: nil, retryAfter: retryAfter, context: context)
   }
 
-  static func fromHTTPStatusCode(_ statusCode: Int, message: String? = nil) -> AIError {
+  static func fromHTTPStatusCode(_ statusCode: Int, message: String? = nil, retryAfter: TimeInterval? = nil, context: ErrorContext? = nil) -> AIError {
     let errorMessage = message ?? "HTTP error \(statusCode)"
     return switch statusCode {
       case 401: .authentication(message: "Ensure the correct API key is being used.")
       case 403: .authentication(message: "You may be accessing the API from an unsupported country, region, or territory.")
-      case 429: .rateLimit(retryAfter: nil)
-      case 500 ... 599: .serverError(statusCode: statusCode, message: errorMessage, context: nil)
+      case 408, 409: .serverError(statusCode: statusCode, message: errorMessage, context: context)
+      case 429: .rateLimit(retryAfter: retryAfter)
+      case 500 ... 599: .serverError(statusCode: statusCode, message: errorMessage, context: context)
       default: .invalidRequest(message: errorMessage)
     }
+  }
+
+  /// Parses the `retry-after-ms` (custom, milliseconds) or `Retry-After`
+  /// (standard, seconds or HTTP-date) headers from an HTTP response.
+  static func parseRetryAfter(from response: HTTPURLResponse) -> TimeInterval? {
+    // Custom header (milliseconds)
+    if let retryAfterMs = response.value(forHTTPHeaderField: "retry-after-ms"),
+       let ms = Double(retryAfterMs)
+    {
+      return ms / 1000.0
+    }
+    // Standard Retry-After header (seconds or HTTP-date)
+    if let retryAfter = response.value(forHTTPHeaderField: "Retry-After") {
+      if let seconds = Double(retryAfter) {
+        return seconds
+      }
+      let formatter = DateFormatter()
+      formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+      formatter.locale = Locale(identifier: "en_US_POSIX")
+      if let date = formatter.date(from: retryAfter) {
+        return max(0, date.timeIntervalSinceNow)
+      }
+    }
+    return nil
   }
 }

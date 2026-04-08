@@ -53,14 +53,17 @@ public final class ResponsesClient: APIClient, Sendable {
   @MainActor var activeBackgroundResponseApiKey: String?
 
   let session: URLSession
+  let retryHandler: RetryHandler
 
   /// Creates a new Responses client with a predefined endpoint.
   ///
   /// - Parameters:
   ///   - endpoint: The API endpoint to use (OpenAI or xAI).
+  ///   - maxRetries: Maximum number of retry attempts for failed requests.
   ///   - session: URLSession to use for requests.
-  public init(endpoint: Endpoint = .openAI, session: URLSession = .shared) {
+  public init(endpoint: Endpoint = .openAI, maxRetries: Int = 2, session: URLSession = .shared) {
     self.endpoint = endpoint.url
+    retryHandler = RetryHandler(maxRetries: maxRetries)
     self.session = session
   }
 
@@ -68,9 +71,11 @@ public final class ResponsesClient: APIClient, Sendable {
   ///
   /// - Parameters:
   ///   - endpoint: Custom endpoint URL for the Responses API.
+  ///   - maxRetries: Maximum number of retry attempts for failed requests.
   ///   - session: URLSession to use for requests.
-  public init(endpoint: URL, session: URLSession = .shared) {
+  public init(endpoint: URL, maxRetries: Int = 2, session: URLSession = .shared) {
     self.endpoint = endpoint
+    retryHandler = RetryHandler(maxRetries: maxRetries)
     self.session = session
   }
 

@@ -114,14 +114,16 @@ extension AnthropicClient {
       beginRequest()
 
       let byteStream: URLSession.AsyncBytes
-      var retriesRemaining = client.maxRetries
+      var retriesRemaining = client.retryHandler.maxRetries
       while true {
+        var lastResponseHeaders: [AnyHashable: Any]?
         do {
           let request = try await client.buildMessagesRequest(params: params, stream: true, apiKey: apiKey)
           let (stream, response) = try await session.bytes(for: request)
           guard let httpResponse = response as? HTTPURLResponse else {
             throw AIError.network(underlying: URLError(.badServerResponse))
           }
+          lastResponseHeaders = httpResponse.allHeaderFields
           connected()
           if !(200 ... 299).contains(httpResponse.statusCode) {
             var errorData = Data()
@@ -129,7 +131,7 @@ extension AnthropicClient {
               try Task.checkCancellation()
               errorData.append(byte)
             }
-            throw AnthropicClient.aiErrorFromHTTPResponse(status: httpResponse.statusCode, data: errorData)
+            throw AnthropicClient.aiErrorFromHTTPResponse(httpResponse: httpResponse, data: errorData)
           }
           byteStream = stream
           break
@@ -138,8 +140,8 @@ extension AnthropicClient {
             case .timedOut: .timeout
             default: .network(underlying: urlError)
           }
-          if retriesRemaining > 0, client.shouldRetry(aiError) {
-            let delay = client.calculateRetryDelay(retriesRemaining: retriesRemaining)
+          if retriesRemaining > 0, client.retryHandler.shouldRetry(aiError, responseHeaders: lastResponseHeaders) {
+            let delay = client.retryHandler.retryDelay(retriesRemaining: retriesRemaining, responseHeaders: lastResponseHeaders)
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             retriesRemaining -= 1
             continue
@@ -147,8 +149,8 @@ extension AnthropicClient {
           throw aiError
         } catch {
           let aiError = (error as? AIError) ?? .network(underlying: error)
-          if retriesRemaining > 0, client.shouldRetry(aiError) {
-            let delay = client.calculateRetryDelay(retriesRemaining: retriesRemaining)
+          if retriesRemaining > 0, client.retryHandler.shouldRetry(aiError, responseHeaders: lastResponseHeaders) {
+            let delay = client.retryHandler.retryDelay(retriesRemaining: retriesRemaining, responseHeaders: lastResponseHeaders)
             try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             retriesRemaining -= 1
             continue
