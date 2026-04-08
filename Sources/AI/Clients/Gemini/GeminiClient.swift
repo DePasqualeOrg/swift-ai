@@ -28,7 +28,9 @@ public final class GeminiClient: APIClient, Sendable {
 
   private let modelsEndpoint: URL
 
-  /// URLSession with no timeout, since Gemini thinking requests can take several minutes.
+  /// URLSession with no timeout. Gemini thinking requests can go over a minute between
+  /// streaming updates, and URLSession's `timeoutIntervalForRequest` applies between every
+  /// data packet (not just the initial connection), so a finite value would kill the stream.
   /// Callers that need a timeout can pass their own URLSession.
   public static let defaultSession: URLSession = {
     let config = URLSessionConfiguration.default
