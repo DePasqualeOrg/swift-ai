@@ -374,7 +374,9 @@ struct ReplayInvariantFixtureTests {
   private func responsesTexts(in plan: ResponsesReplayNormalizer.Plan) -> [String] {
     plan.inputItems.flatMap { item in
       let content = item["content"] as? [[String: Any]] ?? []
-      return content.compactMap { $0["text"] as? String }
+      // Assistant messages can contain native refusal content blocks where the text
+      // lives under the `refusal` key rather than `text`. Surface both.
+      return content.compactMap { ($0["text"] as? String) ?? ($0["refusal"] as? String) }
     }
   }
 

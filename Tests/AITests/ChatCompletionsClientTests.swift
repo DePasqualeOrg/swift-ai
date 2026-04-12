@@ -1047,7 +1047,7 @@ struct ChatCompletionsClientTests {
   }
 
   @Test
-  func `Chat Completions refusals survive replay through Responses as text`() async throws {
+  func `Chat Completions refusals survive replay through Responses as native refusal`() async throws {
     let refusalSSEData = """
     data: {"id":"chatcmpl-refusal-cross-client","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4","choices":[{"index":0,"delta":{"role":"assistant","refusal":"I can't assist with that."},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
 
@@ -1108,12 +1108,12 @@ struct ChatCompletionsClientTests {
       guard item["type"] as? String == "message", item["role"] as? String == "assistant" else { return false }
       let content = item["content"] as? [[String: Any]]
       return content?.contains(where: {
-        $0["type"] as? String == "input_text" && $0["text"] as? String == "I can't assist with that."
+        $0["type"] as? String == "refusal" && $0["refusal"] as? String == "I can't assist with that."
       }) == true
     }))
     let content = try #require(replayedMessage["content"] as? [[String: Any]])
-    let refusalItem = try #require(content.first(where: { $0["text"] as? String == "I can't assist with that." }))
-    #expect(refusalItem["type"] as? String == "input_text")
+    let refusalItem = try #require(content.first(where: { $0["refusal"] as? String == "I can't assist with that." }))
+    #expect(refusalItem["type"] as? String == "refusal")
   }
 
   @Test
