@@ -208,6 +208,6 @@ public extension Parameter {
 ///     }
 /// }
 /// ```
-@attached(member, names: named(tool), named(parse), named(init), named(title))
+@attached(member, names: named(tool), named(parse), named(init), named(title), named(_perform))
 @attached(extension, conformances: ToolSpec, Sendable)
 public macro Tool() = #externalMacro(module: "AIMacros", type: "ToolMacro")

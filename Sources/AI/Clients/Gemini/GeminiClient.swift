@@ -742,11 +742,9 @@ public final class GeminiClient: APIClient, Sendable {
               }
             }
 
-            // Yield final state with complete metadata (usage and finish reason may arrive
-            // in chunks that don't contain content, so the last content-triggered update
-            // may lack them)
-            await sendUpdate()
-
+            // The streamText wrapper yields `assembler.response()` as the final value of the
+            // stream after this function returns, so the terminal state is delivered with
+            // complete metadata there — no need to duplicate it via another update here.
             return assembler.response()
           } catch let error as GeminiError {
             // Check if the task was cancelled

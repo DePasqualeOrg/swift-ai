@@ -8,17 +8,19 @@ import SwiftSyntaxMacros
 /// The `@Tool` macro generates `ToolSpec` protocol conformance.
 ///
 /// It inspects the struct to find:
-/// - `static let name: String` - The tool name
-/// - `static let description: String` - The tool description
-/// - `static let title: String` (optional) - User-facing title
-/// - Properties with `@Parameter` attribute - Tool parameters
-/// - `func perform()` - The execution method
+/// - `static let name: String` — The tool name
+/// - `static let description: String` — The tool description
+/// - `static let title: String` (optional) — User-facing title
+/// - `static let strictSchema: Bool` (optional) — Strict JSON Schema flag (defaults to `true`)
+/// - Properties with `@Parameter` attribute — Tool parameters
+/// - `func perform()` — The execution method
 ///
 /// It generates:
-/// - `static var tool: Tool` - The tool definition with JSON Schema
-/// - `static func parse(from:)` - Argument parsing
-/// - `init()` - Empty initializer
-/// - `static var title: String` (if not provided) - Defaults to name
+/// - `static var tool: Tool` — The tool definition with JSON Schema
+/// - `static func parse(from:)` — Argument parsing
+/// - `init()` — Empty initializer
+/// - `_perform()` — Bridges to the user's `perform()` method
+/// - `static var title: String` — Defaults to `name` (only if not declared on the struct)
 public struct ToolMacro: MemberMacro, ExtensionMacro {
   // MARK: - MemberMacro
 
@@ -33,32 +35,52 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       throw ToolMacroError.notAStruct
     }
 
+    // Determine access level from the struct declaration
+    let accessLevel = structDecl.modifiers.first(where: {
+      $0.name.text == "public" || $0.name.text == "package" || $0.name.text == "internal"
+    })?.name.text
+    let accessPrefix = accessLevel.map { "\($0) " } ?? ""
+
     // Extract tool metadata
-    let toolInfo = try extractToolInfo(from: structDecl, context: context)
+    let toolInfo: ToolInfo
+    do {
+      toolInfo = try extractToolInfo(from: structDecl, context: context)
+    } catch is AbortMacroExpansion {
+      // Diagnostic has already been emitted at a specific node; skip member generation.
+      return []
+    }
 
     // Generate members
     var members: [DeclSyntax] = []
 
     // Generate init()
     members.append("""
-    public init() {}
+    \(raw: accessPrefix)init() {}
     """)
 
     // Generate title if not provided by user
     if !toolInfo.hasTitle {
       members.append("""
-      public static var title: String { name }
+      \(raw: accessPrefix)static var title: String { name }
       """)
     }
+
+    // Generate _perform() bridging to the user's perform()
+    members.append("""
+    \(raw: accessPrefix)func _perform() async throws -> \(raw: toolInfo.outputType) {
+        try await perform()
+    }
+    """)
 
     // Generate tool property
     let toolDecl = generateToolProperty(
       toolInfo: toolInfo,
+      accessPrefix: accessPrefix,
     )
     members.append(toolDecl)
 
     // Generate parse(from:)
-    let parseDecl = generateParseMethod(toolInfo: toolInfo)
+    let parseDecl = generateParseMethod(toolInfo: toolInfo, accessPrefix: accessPrefix)
     members.append(parseDecl)
 
     return members
@@ -79,16 +101,23 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       return []
     }
 
-    // Check for required static properties
+    // Validation checks below must mirror those in `extractToolInfo`. If one side
+    // rejects a tool but the other generates code for it, the user sees a cascade
+    // of "type does not conform to ToolSpec" errors on top of the real problem.
     var hasName = false
     var hasDescription = false
     var toolName: String?
     var parameterInfos: [ParameterInfo] = []
+    var performDecl: FunctionDeclSyntax?
 
     for member in structDecl.memberBlock.members {
       if let varDecl = member.decl.as(VariableDeclSyntax.self),
          varDecl.modifiers.contains(where: { $0.name.text == "static" })
       {
+        // @Parameter on static properties is an error
+        if hasParameterAttribute(varDecl) {
+          return []
+        }
         for binding in varDecl.bindings {
           if let identifier = binding.pattern.as(IdentifierPatternSyntax.self) {
             let propName = identifier.identifier.text
@@ -125,6 +154,18 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
           }
         }
       }
+
+      // Capture perform method for signature validation
+      // Must mirror the checks in `extractToolInfo`, or the conformance extension
+      // will be generated even when the member macro refuses to produce `_perform`.
+      if let funcDecl = member.decl.as(FunctionDeclSyntax.self),
+         funcDecl.name.text == "perform"
+      {
+        if funcDecl.modifiers.contains(where: { $0.name.text == "static" }) {
+          return []
+        }
+        performDecl = funcDecl
+      }
     }
 
     // Don't add conformance if basic validation fails
@@ -138,6 +179,21 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     }
 
     if !duplicateParameterKeys(in: parameterInfos).isEmpty {
+      return []
+    }
+
+    // Reject if perform() is missing — otherwise the extension would claim conformance
+    // while the MemberMacro failed to generate `_perform`, producing a second error.
+    guard let performDecl else {
+      return []
+    }
+
+    // Don't add conformance if perform() has an invalid signature
+    let params = performDecl.signature.parameterClause.parameters
+    let hasAsync = performDecl.signature.effectSpecifiers?.asyncSpecifier != nil
+    let hasThrows = performDecl.signature.effectSpecifiers?.throwsClause != nil
+    let hasReturn = performDecl.signature.returnClause != nil
+    if !params.isEmpty || !hasAsync || !hasThrows || !hasReturn {
       return []
     }
 
@@ -177,6 +233,21 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     var maxLength: String?
     var minimum: String?
     var maximum: String?
+    var declSyntax: VariableDeclSyntax? // For pointing diagnostics at the offending @Parameter
+  }
+
+  /// Emits a node-level error diagnostic and throws `AbortMacroExpansion` so the
+  /// outer expansion returns empty results without producing a second attribute-level error.
+  private static func diagnoseAndAbort(
+    message: String,
+    node: some SyntaxProtocol,
+    in context: some MacroExpansionContext,
+  ) throws -> Never {
+    context.diagnose(Diagnostic(
+      node: Syntax(node),
+      message: ToolMacroDiagnostic.error(message),
+    ))
+    throw AbortMacroExpansion()
   }
 
   private static func extractToolInfo(
@@ -190,7 +261,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     var outputType = "String"
     var hasTitle = false
     var strictSchema = true
-    var hasPerformMethod = false
+    var performDecl: FunctionDeclSyntax?
 
     for member in structDecl.memberBlock.members {
       let decl = member.decl
@@ -199,6 +270,16 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       if let varDecl = decl.as(VariableDeclSyntax.self),
          varDecl.modifiers.contains(where: { $0.name.text == "static" })
       {
+        // Reject @Parameter on static properties
+        if hasParameterAttribute(varDecl) {
+          let propertyName = varDecl.bindings.first?.pattern.as(IdentifierPatternSyntax.self)?.identifier.text ?? "?"
+          try diagnoseAndAbort(
+            message: "@Parameter cannot be applied to static property '\(propertyName)'. Tool parameters must be instance properties.",
+            node: varDecl,
+            in: context,
+          )
+        }
+
         for binding in varDecl.bindings {
           guard let identifier = binding.pattern.as(IdentifierPatternSyntax.self) else {
             continue
@@ -253,7 +334,14 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       if let funcDecl = decl.as(FunctionDeclSyntax.self),
          funcDecl.name.text == "perform"
       {
-        hasPerformMethod = true
+        if funcDecl.modifiers.contains(where: { $0.name.text == "static" }) {
+          try diagnoseAndAbort(
+            message: "@Tool requires 'perform()' to be an instance method, not static.",
+            node: funcDecl.name,
+            in: context,
+          )
+        }
+        performDecl = funcDecl
         if let returnClause = funcDecl.signature.returnClause {
           outputType = returnClause.type.trimmedDescription
         }
@@ -268,8 +356,54 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       throw ToolMacroError.missingDescription
     }
 
-    guard hasPerformMethod else {
+    guard let performDecl else {
       throw ToolMacroError.missingPerformMethod
+    }
+
+    // Validate perform() signature
+    let performParams = performDecl.signature.parameterClause.parameters
+    if !performParams.isEmpty {
+      try diagnoseAndAbort(
+        message: "@Tool requires 'perform()' to take no arguments. Use '@Parameter' properties on the struct to declare inputs.",
+        node: performDecl.signature.parameterClause,
+        in: context,
+      )
+    }
+    if performDecl.signature.effectSpecifiers?.asyncSpecifier == nil {
+      try diagnoseAndAbort(
+        message: "@Tool requires 'perform()' to be marked 'async'",
+        node: performDecl.name,
+        in: context,
+      )
+    }
+    if performDecl.signature.effectSpecifiers?.throwsClause == nil {
+      try diagnoseAndAbort(
+        message: "@Tool requires 'perform()' to be marked 'throws'",
+        node: performDecl.name,
+        in: context,
+      )
+    }
+    if performDecl.signature.returnClause == nil {
+      try diagnoseAndAbort(
+        message: "@Tool requires 'perform()' to return a value conforming to 'ToolOutput'",
+        node: performDecl.name,
+        in: context,
+      )
+    }
+
+    // Warn if perform() has an explicit access modifier more restrictive than the struct.
+    // Only flag explicit modifiers; an unmarked `perform()` is the canonical case this
+    // macro is designed for, so it must not produce a diagnostic.
+    let structAccess = accessLevelRank(of: structDecl.modifiers)
+    if let performAccess = explicitAccessLevelRank(of: performDecl.modifiers),
+       performAccess < structAccess
+    {
+      context.diagnose(Diagnostic(
+        node: Syntax(performDecl),
+        message: ToolMacroDiagnostic.warning(
+          "'perform()' has more restrictive access (\(accessLevelName(performAccess))) than the enclosing struct (\(accessLevelName(structAccess))). If the return type is similarly restricted, the generated '_perform()' bridge will fail to compile.",
+        ),
+      ))
     }
 
     // Validate tool name
@@ -277,9 +411,20 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       throw ToolMacroError.invalidToolName(validationError)
     }
 
-    let duplicateParameterKeys = duplicateParameterKeys(in: parameters)
-    if !duplicateParameterKeys.isEmpty {
-      throw ToolMacroError.duplicateParameterKeys(duplicateParameterKeys)
+    // Reject duplicate @Parameter keys (silent overwrite in the schema otherwise).
+    // Emit one diagnostic per offending property so the user can locate each one.
+    let duplicates = Set(duplicateParameterKeys(in: parameters))
+    if !duplicates.isEmpty {
+      for param in parameters where duplicates.contains(param.jsonKey) {
+        let node: any SyntaxProtocol = param.declSyntax ?? structDecl.name
+        context.diagnose(Diagnostic(
+          node: Syntax(node),
+          message: ToolMacroDiagnostic.error(
+            "Duplicate @Parameter key '\(param.jsonKey)'. Each @Parameter key must be unique.",
+          ),
+        ))
+      }
+      throw AbortMacroExpansion()
     }
 
     // Warn about tool name style issues
@@ -406,6 +551,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       maxLength: maxLength,
       minimum: minimum,
       maximum: maximum,
+      declSyntax: varDecl,
     )
   }
 
@@ -413,6 +559,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
 
   private static func generateToolProperty(
     toolInfo: ToolInfo,
+    accessPrefix: String,
   ) -> DeclSyntax {
     let descriptorEntries = toolInfo.parameters.map { param in
       let defaultValueLiteral = if let defaultVal = param.defaultValue {
@@ -447,7 +594,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     let descriptorsLiteral = descriptorEntries.isEmpty ? "[]" : "[\n                \(descriptorEntries)\n            ]"
 
     return """
-    public static var tool: AI.Tool {
+    \(raw: accessPrefix)static var tool: AI.Tool {
         let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
             parameters: \(raw: descriptorsLiteral),
             strict: \(raw: toolInfo.strictSchema ? "true" : "false")
@@ -461,7 +608,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
             schemaBuildErrorMessage: _schemaBuild.errorMessage,
             execute: { parameters in
                 let instance = try Self.parse(from: parameters)
-                let output = try await instance.perform()
+                let output = try await instance._perform()
                 return output.toToolResult()
             }
         )
@@ -469,11 +616,11 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     """
   }
 
-  private static func generateParseMethod(toolInfo: ToolInfo) -> DeclSyntax {
+  private static func generateParseMethod(toolInfo: ToolInfo, accessPrefix: String) -> DeclSyntax {
     // For tools with no parameters, generate a simple parse method
     if toolInfo.parameters.isEmpty {
       return """
-      public static func parse(from arguments: [String: AI.Value]) throws -> Self {
+      \(raw: accessPrefix)static func parse(from arguments: [String: AI.Value]) throws -> Self {
           Self()
       }
       """
@@ -508,7 +655,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     let statements = parseStatements.joined(separator: "\n    ")
 
     return """
-    public static func parse(from arguments: [String: AI.Value]) throws -> Self {
+    \(raw: accessPrefix)static func parse(from arguments: [String: AI.Value]) throws -> Self {
         var _instance = Self()
         let _args = arguments
         \(raw: statements)
@@ -518,108 +665,6 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
   }
 
   // MARK: - Type Mapping Helpers
-
-  /// Checks if a type string represents a dictionary type `[Key: Value]` at the top level.
-  private static func isDictionaryType(_ inner: String) -> Bool {
-    var bracketDepth = 0
-    for char in inner {
-      switch char {
-        case "[": bracketDepth += 1
-        case "]": bracketDepth -= 1
-        case ":":
-          if bracketDepth == 0 {
-            return true
-          }
-        default: break
-      }
-    }
-    return false
-  }
-
-  /// Extracts the value type from a dictionary type string `[Key: Value]`.
-  private static func extractDictionaryValueType(_ inner: String) -> String? {
-    var bracketDepth = 0
-    for (index, char) in inner.enumerated() {
-      switch char {
-        case "[": bracketDepth += 1
-        case "]": bracketDepth -= 1
-        case ":":
-          if bracketDepth == 0 {
-            let afterColon = inner.index(inner.startIndex, offsetBy: index + 1)
-            return String(inner[afterColon...]).trimmingCharacters(in: .whitespaces)
-          }
-        default: break
-      }
-    }
-    return nil
-  }
-
-  private static func getJSONSchemaType(for swiftType: String) -> String {
-    switch swiftType {
-      case "String": return "string"
-      case "Int": return "integer"
-      case "Double": return "number"
-      case "Bool": return "boolean"
-      case "Date": return "string"
-      case "Data": return "string"
-      default:
-        // Check for collection types [T] or [K: V]
-        if swiftType.hasPrefix("["), swiftType.hasSuffix("]") {
-          let inner = String(swiftType.dropFirst().dropLast())
-          if isDictionaryType(inner) {
-            return "object"
-          }
-          return "array"
-        }
-        // Could be an enum or other type - default to string
-        return "string"
-    }
-  }
-
-  private static func getJSONSchemaProperties(for swiftType: String) -> [(String, String)] {
-    switch swiftType {
-      case "Date":
-        return [("format", "AI.Value.string(\"date-time\")")]
-      case "Data":
-        return [("contentEncoding", "AI.Value.string(\"base64\")")]
-      default:
-        if swiftType.hasPrefix("["), swiftType.hasSuffix("]") {
-          let inner = String(swiftType.dropFirst().dropLast())
-          if let valueType = extractDictionaryValueType(inner) {
-            let valueSchema = generateSchemaObject(for: valueType)
-            return [("additionalProperties", valueSchema)]
-          }
-          let elementSchema = generateSchemaObject(for: inner)
-          return [("items", elementSchema)]
-        }
-        return []
-    }
-  }
-
-  private static func generateSchemaObject(for swiftType: String) -> String {
-    let schemaType = getJSONSchemaType(for: swiftType)
-    var parts = ["\"type\": AI.Value.string(\"\(schemaType)\")"]
-
-    switch swiftType {
-      case "Date":
-        parts.append("\"format\": AI.Value.string(\"date-time\")")
-      case "Data":
-        parts.append("\"contentEncoding\": AI.Value.string(\"base64\")")
-      default:
-        if swiftType.hasPrefix("["), swiftType.hasSuffix("]") {
-          let inner = String(swiftType.dropFirst().dropLast())
-          if let valueType = extractDictionaryValueType(inner) {
-            let valueSchema = generateSchemaObject(for: valueType)
-            parts.append("\"additionalProperties\": \(valueSchema)")
-          } else {
-            let elementSchema = generateSchemaObject(for: inner)
-            parts.append("\"items\": \(elementSchema)")
-          }
-        }
-    }
-
-    return "AI.Value.object([\(parts.joined(separator: ", "))])"
-  }
 
   private static func convertToValueLiteral(_ value: String, type: String) -> String {
     if value == "nil" {
@@ -646,6 +691,115 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
           "AI.Value.string(\(value))"
         }
     }
+  }
+}
+
+// MARK: - Errors
+
+enum ToolMacroError: Error, CustomStringConvertible {
+  case notAStruct
+  case missingName
+  case missingDescription
+  case missingPerformMethod
+  case invalidToolName(String)
+  case nonLiteralDefaultValue(String)
+
+  var description: String {
+    switch self {
+      case .notAStruct:
+        "@Tool can only be applied to structs"
+      case .missingName:
+        "@Tool requires 'static let name: String' property"
+      case .missingDescription:
+        "@Tool requires 'static let description: String' property"
+      case .missingPerformMethod:
+        "@Tool requires a 'perform' method (e.g., 'func perform() async throws -> String')"
+      case let .invalidToolName(reason):
+        "Invalid tool name: \(reason)"
+      case let .nonLiteralDefaultValue(param):
+        "Parameter '\(param)' has a non-literal default value. Only literal values (numbers, strings, booleans) are supported. For complex defaults, make the parameter optional and handle the default in perform()."
+    }
+  }
+}
+
+/// Thrown after emitting a node-level diagnostic to silently abort macro expansion
+/// without a second attribute-level error. Caught by the outer `expansion` function.
+private struct AbortMacroExpansion: Error {}
+
+// MARK: - Diagnostics
+
+struct ToolMacroDiagnostic: DiagnosticMessage {
+  let message: String
+  let diagnosticID: MessageID
+  let severity: DiagnosticSeverity
+
+  static func warning(_ message: String) -> ToolMacroDiagnostic {
+    ToolMacroDiagnostic(
+      message: message,
+      diagnosticID: MessageID(domain: "ToolMacro", id: "warning"),
+      severity: .warning,
+    )
+  }
+
+  static func error(_ message: String) -> ToolMacroDiagnostic {
+    ToolMacroDiagnostic(
+      message: message,
+      diagnosticID: MessageID(domain: "ToolMacro", id: "error"),
+      severity: .error,
+    )
+  }
+}
+
+// MARK: - Access Level Helpers
+
+extension ToolMacro {
+  /// Ranks Swift access levels from most to least restrictive.
+  /// Missing modifier defaults to internal.
+  static func accessLevelRank(of modifiers: DeclModifierListSyntax) -> Int {
+    explicitAccessLevelRank(of: modifiers) ?? 2
+  }
+
+  /// Returns the explicit access level rank, or nil if no access modifier is present.
+  static func explicitAccessLevelRank(of modifiers: DeclModifierListSyntax) -> Int? {
+    for modifier in modifiers {
+      switch modifier.name.text {
+        case "private": return 0
+        case "fileprivate": return 1
+        case "internal": return 2
+        case "package": return 3
+        case "public": return 4
+        case "open": return 5
+        default: continue
+      }
+    }
+    return nil
+  }
+
+  static func accessLevelName(_ rank: Int) -> String {
+    switch rank {
+      case 0: "private"
+      case 1: "fileprivate"
+      case 2: "internal"
+      case 3: "package"
+      case 4: "public"
+      case 5: "open"
+      default: "internal"
+    }
+  }
+}
+
+// MARK: - Duplicate Parameter Key Detection
+
+extension ToolMacro {
+  private static func duplicateParameterKeys(in parameters: [ParameterInfo]) -> [String] {
+    var counts: [String: Int] = [:]
+    for parameter in parameters {
+      counts[parameter.jsonKey, default: 0] += 1
+    }
+    return counts
+      .filter { $0.value > 1 }
+      .map(\.key)
+      .sorted()
   }
 }
 
@@ -741,73 +895,5 @@ extension ToolMacro {
       return isLiteralExpression(prefixExpr.expression)
     }
     return false
-  }
-
-  private static func duplicateParameterKeys(in parameters: [ParameterInfo]) -> [String] {
-    var counts: [String: Int] = [:]
-    for parameter in parameters {
-      counts[parameter.jsonKey, default: 0] += 1
-    }
-    return counts
-      .filter { $0.value > 1 }
-      .map(\.key)
-      .sorted()
-  }
-}
-
-// MARK: - Errors
-
-enum ToolMacroError: Error, CustomStringConvertible {
-  case notAStruct
-  case missingName
-  case missingDescription
-  case missingPerformMethod
-  case invalidToolName(String)
-  case nonLiteralDefaultValue(String)
-  case duplicateParameterKeys([String])
-
-  var description: String {
-    switch self {
-      case .notAStruct:
-        return "@Tool can only be applied to structs"
-      case .missingName:
-        return "@Tool requires 'static let name: String' property"
-      case .missingDescription:
-        return "@Tool requires 'static let description: String' property"
-      case .missingPerformMethod:
-        return "@Tool requires a 'func perform() async throws' method"
-      case let .invalidToolName(reason):
-        return "Invalid tool name: \(reason)"
-      case let .nonLiteralDefaultValue(param):
-        return "Parameter '\(param)' has a non-literal default value. Only literal values (numbers, strings, booleans) are supported. For complex defaults, make the parameter optional and handle the default in perform()."
-      case let .duplicateParameterKeys(keys):
-        let quotedKeys = keys.map { "'\($0)'" }.joined(separator: ", ")
-        let suffix = keys.count == 1 ? "" : "s"
-        return "Duplicate parameter key\(suffix): \(quotedKeys). Each @Parameter key must be unique."
-    }
-  }
-}
-
-// MARK: - Diagnostics
-
-struct ToolMacroDiagnostic: DiagnosticMessage {
-  let message: String
-  let diagnosticID: MessageID
-  let severity: DiagnosticSeverity
-
-  static func warning(_ message: String) -> ToolMacroDiagnostic {
-    ToolMacroDiagnostic(
-      message: message,
-      diagnosticID: MessageID(domain: "ToolMacro", id: "warning"),
-      severity: .warning,
-    )
-  }
-
-  static func error(_ message: String) -> ToolMacroDiagnostic {
-    ToolMacroDiagnostic(
-      message: message,
-      diagnosticID: MessageID(domain: "ToolMacro", id: "error"),
-      severity: .error,
-    )
   }
 }
