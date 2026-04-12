@@ -25,7 +25,7 @@ let package = Package(
   ],
   dependencies: [
     .package(url: "https://github.com/DePasqualeOrg/swift-sse", .upToNextMinor(from: "0.1.0")),
-    .package(url: "https://github.com/DePasqualeOrg/swift-mcp", branch: "main"),
+    .package(url: "https://github.com/DePasqualeOrg/swift-mcp", from: "1.1.0"),
     .package(url: "https://github.com/ajevans99/swift-json-schema", from: "0.2.1"),
     .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0" ..< "603.0.0"),
   ],
