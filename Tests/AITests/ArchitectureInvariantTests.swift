@@ -142,6 +142,34 @@ struct ArchitectureInvariantTests {
   }
 
   @Test
+  func `Strict mode accepts optional non nullable field with default value`() throws {
+    // A property with a default is safe in strict mode — OpenAI fills in the
+    // default when the model omits the field. Matches the OpenAI TS SDK's
+    // zod-to-json-schema behavior (skips the optional-without-nullable throw
+    // when `defaultValue` is present).
+    let schema: [String: Value] = [
+      "type": "object",
+      "properties": [
+        "query": ["type": "string"],
+        "limit": [
+          "type": "integer",
+          "default": 20,
+        ],
+      ],
+      "required": ["query"],
+    ]
+
+    let normalized = try strictJSONObject(schema)
+    let required = try #require(normalized["required"] as? [String])
+    #expect(required.sorted() == ["limit", "query"])
+
+    let properties = try #require(normalized["properties"] as? [String: Any])
+    let limit = try #require(properties["limit"] as? [String: Any])
+    #expect(limit["default"] as? Int == 20)
+    #expect(limit["type"] as? String == "integer")
+  }
+
+  @Test
   func `Strict mode makes nullable properties required and adds additionalProperties false recursively`() throws {
     let schema: [String: Value] = [
       "type": "object",

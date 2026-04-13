@@ -235,7 +235,14 @@ private enum StrictModeNormalizer {
             var converted: [String: Value] = [:]
             for (propertyName, propertySchema) in properties {
               propertyNames.append(propertyName)
-              if !originalRequired.contains(propertyName), !isNullableSchema(propertySchema) {
+              // A property is safe in strict mode if any of: already required,
+              // nullable (null is an accepted value), or carries a default
+              // (OpenAI fills in the default when the model omits the field).
+              // Matches the OpenAI TS SDK behavior in zod-to-json-schema/parsers/object.ts.
+              if !originalRequired.contains(propertyName),
+                 !isNullableSchema(propertySchema),
+                 !hasDefaultValue(propertySchema)
+              {
                 let fieldPath = (path + ["properties", propertyName]).joined(separator: "/")
                 throw AIError.invalidRequest(
                   message: "Strict mode requires all properties to be required. Property '\(fieldPath)' is optional but not nullable. "
@@ -379,5 +386,10 @@ private enum StrictModeNormalizer {
     }
 
     return false
+  }
+
+  private static func hasDefaultValue(_ schema: Value) -> Bool {
+    guard case let .object(dictionary) = schema else { return false }
+    return dictionary["default"] != nil
   }
 }
