@@ -61,14 +61,9 @@ extension ResponsesClient {
 
     if !tools.isEmpty {
       for tool in tools {
-        if let baseSchemaBuildErrorMessage = tool.baseSchemaBuildErrorMessage {
+        if let schemaBuildErrorMessage = tool.schemaBuildErrorMessage {
           throw AIError.invalidRequest(
-            message: "Tool '\(tool.name)' has an invalid input schema: \(baseSchemaBuildErrorMessage)",
-          )
-        }
-        if enableStrictModeForTools, let schemaBuildErrorMessage = tool.schemaBuildErrorMessage {
-          throw AIError.invalidRequest(
-            message: "Tool '\(tool.name)' has an invalid strict schema: \(schemaBuildErrorMessage)",
+            message: "Tool '\(tool.name)' has an invalid input schema: \(schemaBuildErrorMessage)",
           )
         }
         let parameters: [String: any Sendable] = if enableStrictModeForTools {

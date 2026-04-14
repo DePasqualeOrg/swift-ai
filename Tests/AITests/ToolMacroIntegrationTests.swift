@@ -3,6 +3,7 @@
 @testable import AI
 import AITool
 import Foundation
+import JSONSchemaBuilder
 import Testing
 
 // MARK: - Test Tools
@@ -87,7 +88,8 @@ struct ToolWithTitle {
   }
 }
 
-enum Priority: String, ToolEnum, CaseIterable {
+@Schemable
+enum Priority: String, CaseIterable {
   case low, medium, high
 }
 
@@ -227,57 +229,19 @@ struct StrictSchemaTool {
   }
 }
 
-struct InvalidStrictSettings: ParameterValue {
-  static var jsonSchemaType: String {
-    "object"
-  }
-
-  static var jsonSchemaProperties: [String: Value] {
-    [
-      "properties": .object([
-        "mode": .object(["type": "string"]),
-      ]),
-    ]
-  }
-
-  static var placeholderValue: InvalidStrictSettings {
-    InvalidStrictSettings()
-  }
-
-  init() {}
-
-  init?(parameterValue value: Value) {
-    guard case .object = value else { return nil }
-    self.init()
-  }
-}
-
-@Tool
-struct InvalidStrictSchemaTool {
-  static let name = "invalid_strict_schema_tool"
-  static let description = "A tool whose nested schema is invalid in strict mode"
-  static let strictSchema = true
-
-  @Parameter(description: "Invalid nested settings")
-  var settings: InvalidStrictSettings
-
-  func perform() async throws -> String {
-    "ok"
-  }
-}
-
 // MARK: - Tests
 
 struct ToolMacroIntegrationTests {
   @Test
-  func `Basic tool definition is generated correctly`() {
+  func `Basic tool definition is generated correctly`() throws {
     let tool = GetWeather.tool
 
     #expect(tool.name == "get_weather")
     #expect(tool.description == "Get weather for a city")
     #expect(tool.title == "get_weather") // Defaults to name
 
-    // Check schema
+    // Raw schema shape: optional params absent from `required`; strict-mode
+    // all-required behavior is applied by the OpenAI client at send time.
     let schema = tool.rawInputSchema
     #expect(schema["type"]?.stringValue == "object")
 
@@ -287,11 +251,16 @@ struct ToolMacroIntegrationTests {
 
     let required = schema["required"]?.arrayValue?.compactMap { $0.stringValue }
     #expect(required?.contains("city") == true)
-    #expect(required?.contains("unit") == true) // All properties required in strict mode (default)
+    #expect(required?.contains("unit") == false)
+
+    // Strict-mode normalization (send-time) puts every property into `required`.
+    let normalized = try ToolSchema.normalizeForStrictMode(schema)
+    let normalizedRequired = normalized["required"]?.arrayValue?.compactMap { $0.stringValue }
+    #expect(normalizedRequired?.contains("unit") == true)
   }
 
   @Test
-  func `Tool with default parameter value`() {
+  func `Tool with default parameter value`() throws {
     let tool = SearchDocuments.tool
 
     let schema = tool.rawInputSchema
@@ -301,10 +270,16 @@ struct ToolMacroIntegrationTests {
     let limitProp = properties?["limit"]?.objectValue
     #expect(limitProp?["default"]?.intValue == 10)
 
-    // All properties required in strict mode (default); optional params are nullable instead
+    // Raw schema excludes defaulted params from `required`; strict-mode
+    // normalization at send time makes them required (defaults satisfy strict
+    // mode because OpenAI fills in the default when the model omits the field).
     let required = schema["required"]?.arrayValue?.compactMap { $0.stringValue }
     #expect(required?.contains("query") == true)
-    #expect(required?.contains("limit") == true)
+    #expect(required?.contains("limit") == false)
+
+    let normalized = try ToolSchema.normalizeForStrictMode(schema)
+    let normalizedRequired = normalized["required"]?.arrayValue?.compactMap { $0.stringValue }
+    #expect(normalizedRequired?.contains("limit") == true)
   }
 
   @Test
@@ -328,26 +303,23 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test
-  func `Tool with strictSchema includes additionalProperties false`() {
+  func `Tool with strictSchema passes strict-mode normalization`() throws {
+    // `strictSchema: true` is a capability assertion: the stored raw schema
+    // has no strict transforms baked in, but the OpenAI client's send-time
+    // normalization adds them.
     let tool = StrictSchemaTool.tool
     let schema = tool.rawInputSchema
+    #expect(schema["additionalProperties"] == nil)
 
-    // Strict tool should have additionalProperties: false
-    #expect(schema["additionalProperties"]?.boolValue == false)
+    let normalized = try ToolSchema.normalizeForStrictMode(schema)
+    #expect(normalized["additionalProperties"]?.boolValue == false)
 
-    // Strict mode is now the default, so all tools have additionalProperties: false
-    let nonStrictTool = GetWeather.tool
-    let nonStrictSchema = nonStrictTool.rawInputSchema
-    #expect(nonStrictSchema["additionalProperties"]?.boolValue == false)
-  }
-
-  @Test
-  func `Invalid strict macro tool records schema build error instead of crashing`() {
-    let tool = InvalidStrictSchemaTool.tool
-
-    #expect(tool.schemaBuildErrorMessage != nil)
-    #expect(tool.rawInputSchema["type"]?.stringValue == "object")
-    #expect(tool.rawInputSchema["additionalProperties"] == nil)
+    // Tools that don't declare `strictSchema` default to `false` — they skip
+    // the build-time assertion but are still normalized correctly at send time
+    // when the schema happens to be strict-compatible.
+    let defaultTool = GetWeather.tool
+    let defaultNormalized = try ToolSchema.normalizeForStrictMode(defaultTool.rawInputSchema)
+    #expect(defaultNormalized["additionalProperties"]?.boolValue == false)
   }
 
   @Test
@@ -378,6 +350,64 @@ struct ToolMacroIntegrationTests {
     #expect(enumValues?.contains(.string("medium")) == true)
     #expect(enumValues?.contains(.string("high")) == true)
     #expect(enumValues?.contains(.null) == true)
+  }
+
+  @Test
+  func `Defaulted enum parameter stays scalar in raw and normalized schemas`() throws {
+    // Pins the post-refactor behavior: a non-optional enum parameter with a
+    // default emits a scalar `type: "string"` with `default: "low"` — no
+    // `null` in either the enum values or the type array. Defaults satisfy
+    // OpenAI strict mode on their own, so nullable wrapping would be extra
+    // clutter. Built through `buildObjectSchema` directly because the `@Tool`
+    // macro only accepts literal defaults, not enum-case references.
+    let descriptor = ToolMacroSupport.SchemaParameterDescriptor(
+      name: "priority",
+      description: "Priority level",
+      jsonSchemaType: "string",
+      jsonSchemaProperties: [
+        "enum": .array([.string("low"), .string("medium"), .string("high")]),
+      ],
+      isOptional: false,
+      hasDefault: true,
+      defaultValue: .string("low"),
+    )
+    let schema = try ToolMacroSupport.buildObjectSchema(parameters: [descriptor])
+
+    let properties = schema["properties"]?.objectValue
+    let priorityProp = try #require(properties?["priority"]?.objectValue)
+    #expect(priorityProp["type"]?.stringValue == "string")
+    #expect(priorityProp["default"]?.stringValue == "low")
+    let enumValues = priorityProp["enum"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+    #expect(Set(enumValues) == Set(["low", "medium", "high"]))
+    #expect(priorityProp["enum"]?.arrayValue?.contains(Value.null) == false)
+    // Defaulted params are not in `required` at the raw stage.
+    let required = schema["required"]?.arrayValue?.compactMap { $0.stringValue } ?? []
+    #expect(!required.contains("priority"))
+
+    // Normalized (send-time) shape also stays scalar.
+    let normalized = try ToolSchema.normalizeForStrictMode(schema)
+    let normalizedProps = normalized["properties"]?.objectValue
+    let normalizedPriority = try #require(normalizedProps?["priority"]?.objectValue)
+    #expect(normalizedPriority["type"]?.stringValue == "string")
+    #expect(normalizedPriority["default"]?.stringValue == "low")
+    #expect(normalizedPriority["enum"]?.arrayValue?.contains(Value.null) == false)
+  }
+
+  @Test
+  func `Tool with no parameters stays strict-compatible after normalization`() throws {
+    // Empty-properties tools have no required keys to list, so the normalized
+    // form omits the `required` key entirely. OpenAI accepts both `required: []`
+    // and a missing key for empty-properties objects; this test pins whichever
+    // form the normalizer produces.
+    let schema = GetServerTime.tool.rawInputSchema
+    let normalized = try ToolSchema.normalizeForStrictMode(schema)
+
+    #expect(normalized["type"]?.stringValue == "object")
+    #expect(normalized["properties"]?.objectValue?.isEmpty == true)
+    #expect(normalized["additionalProperties"]?.boolValue == false)
+    // Current normalizer behavior: `required` is only emitted when there are
+    // properties. If that changes, update this assertion intentionally.
+    #expect(normalized["required"] == nil)
   }
 
   @Test
@@ -618,7 +648,7 @@ struct ToolMacroIntegrationTests {
   // MARK: - Custom Key Tests
 
   @Test
-  func `Custom key appears in schema instead of property name`() {
+  func `Custom key appears in schema instead of property name`() throws {
     let tool = ToolWithCustomKey.tool
     let properties = tool.rawInputSchema["properties"]?.objectValue
 
@@ -628,10 +658,15 @@ struct ToolMacroIntegrationTests {
     #expect(properties?["startDate"] == nil)
     #expect(properties?["endDate"] == nil)
 
-    // All properties required in strict mode (default)
+    // Raw schema: required reflects the non-optional, non-defaulted params.
     let required = tool.rawInputSchema["required"]?.arrayValue?.compactMap { $0.stringValue }
     #expect(required?.contains("start_date") == true)
-    #expect(required?.contains("end_date") == true)
+    #expect(required?.contains("end_date") == false)
+
+    // Strict-mode normalization puts every property into `required`.
+    let normalized = try ToolSchema.normalizeForStrictMode(tool.rawInputSchema)
+    let normalizedRequired = normalized["required"]?.arrayValue?.compactMap { $0.stringValue }
+    #expect(normalizedRequired?.contains("end_date") == true)
   }
 
   @Test
@@ -873,16 +908,15 @@ struct ToolMacroIntegrationTests {
   }
 
   @Test
-  func `Invalid base64 returns nil for Data parameter`() throws {
+  func `Invalid base64 throws error for Data parameter`() {
     let arguments: [String: Value] = [
       "eventDate": "2024-01-01T00:00:00Z",
       "payload": .string("not valid base64!!!"),
     ]
 
-    let instance = try ToolWithDateAndData.parse(from: arguments)
-
-    // Invalid base64 should result in nil for optional Data
-    #expect(instance.payload == nil)
+    #expect(throws: ToolError.self) {
+      _ = try ToolWithDateAndData.parse(from: arguments)
+    }
   }
 
   // MARK: - Multiple Output Types Tests

@@ -11,7 +11,12 @@ import SwiftSyntaxMacros
 /// - `static let name: String` — The tool name
 /// - `static let description: String` — The tool description
 /// - `static let title: String` (optional) — User-facing title
-/// - `static let strictSchema: Bool` (optional) — Strict JSON Schema flag (defaults to `true`)
+/// - `static let strictSchema: Bool` (optional) — Opt-in assertion that the tool's
+///   schema is strict JSON Schema-compatible. Defaults to `false`. When set to
+///   `true`, the generated `tool` accessor traps at first access (typically when
+///   the tool is registered) if the schema is not strict-compatible. This is a
+///   declaration-site self-check by the tool author, independent of any per-request
+///   strict-mode flag configured on a client.
 /// - Properties with `@Parameter` attribute — Tool parameters
 /// - `func perform()` — The execution method
 ///
@@ -260,7 +265,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     var parameters: [ParameterInfo] = []
     var outputType = "String"
     var hasTitle = false
-    var strictSchema = true
+    var strictSchema = false
     var performDecl: FunctionDeclSyntax?
 
     for member in structDecl.memberBlock.members {
@@ -579,7 +584,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
         name: "\(param.jsonKey)",
         title: \(titleLiteral),
         description: \(descriptionLiteral),
-        type: \(param.typeName).self,
+        schema: \(param.typeName).schema,
         isOptional: \(param.isOptional),
         hasDefault: \(param.hasDefault),
         defaultValue: \(defaultValueLiteral),
@@ -593,13 +598,15 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
 
     let descriptorsLiteral = descriptorEntries.isEmpty ? "[]" : "[\n                \(descriptorEntries)\n            ]"
 
+    let strictValidationStmt = toolInfo.strictSchema
+      ? "try! AITool.ToolMacroSupport.validateStrictCompatibility(_schemaBuild.schema, toolName: name)\n        "
+      : ""
     return """
     \(raw: accessPrefix)static var tool: AI.Tool {
         let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
-            parameters: \(raw: descriptorsLiteral),
-            strict: \(raw: toolInfo.strictSchema ? "true" : "false")
+            parameters: \(raw: descriptorsLiteral)
         )
-        return AI.Tool(
+        \(raw: strictValidationStmt)return AI.Tool(
             name: name,
             description: description,
             title: \(raw: toolInfo.hasTitle ? "title" : "name"),
@@ -634,21 +641,23 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       let type = param.typeName
 
       if param.isOptional {
-        // Optional: use flatMap with explicit type
+        // Optional: parse only if present and non-null; leave as nil otherwise.
         parseStatements.append(
-          "_instance.\(prop) = _args[\"\(key)\"].flatMap(\(type).init(parameterValue:))",
+          "if let _value = _args[\"\(key)\"], !_value.isNull { _instance.\(prop) = try AITool.ToolMacroSupport.parseParameter(\(type).schema, from: _value, parameterName: \"\(key)\") }",
         )
       } else if param.hasDefault {
-        // Has default: only use default if key is absent or null; throw if wrong type
+        // Has default: only parse if key is present and non-null; otherwise keep the struct's default.
         parseStatements.append(
-          "if let _value = _args[\"\(key)\"], !_value.isNull { guard let _parsed = \(type)(parameterValue: _value) else { throw ToolError.invalidParameterType(parameter: \"\(key)\", expected: \"\(type)\", got: String(describing: _value)) }; _instance.\(prop) = _parsed }",
+          "if let _value = _args[\"\(key)\"], !_value.isNull { _instance.\(prop) = try AITool.ToolMacroSupport.parseParameter(\(type).schema, from: _value, parameterName: \"\(key)\") }",
         )
       } else {
-        // Required: guard and throw
+        // Required: must be present; parse throws with detail if the value shape is wrong.
         parseStatements.append(
-          "guard let _\(prop)Value = _args[\"\(key)\"], let _\(prop) = \(type)(parameterValue: _\(prop)Value) else { throw ToolError.invalidParameterType(parameter: \"\(key)\", expected: \"\(type)\", got: _args[\"\(key)\"].map { String(describing: $0) } ?? \"nil\") }",
+          "guard let _\(prop)Value = _args[\"\(key)\"] else { throw ToolError.invalidParameterType(parameter: \"\(key)\", expected: \"\(type)\", got: \"nil\") }",
         )
-        parseStatements.append("_instance.\(prop) = _\(prop)")
+        parseStatements.append(
+          "_instance.\(prop) = try AITool.ToolMacroSupport.parseParameter(\(type).schema, from: _\(prop)Value, parameterName: \"\(key)\")",
+        )
       }
     }
 

@@ -6,7 +6,9 @@
 /// - `static let name: String` — The tool name
 /// - `static let description: String` — The tool description
 /// - `static let title: String` (optional) — User-facing title
-/// - `static let strictSchema: Bool` (optional) — Strict JSON Schema flag (defaults to `true`)
+/// - `static let strictSchema: Bool` (optional) — Opt-in assertion that the tool's schema
+///   is strict JSON Schema-compatible (defaults to `false`). When `true`, the generated
+///   `tool` accessor traps at first access if the schema is not strict-compatible.
 /// - Properties with `@Parameter` attribute — Tool parameters
 /// - `func perform() async throws -> Output` — The execution method
 ///

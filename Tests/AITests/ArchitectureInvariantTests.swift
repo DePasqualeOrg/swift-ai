@@ -73,8 +73,10 @@ struct ArchitectureInvariantTests {
       [.text("ok")]
     }
 
+    // Both tools store raw schemas; comparing at send-time normalized form
+    // proves the two paths converge on the same wire-level schema for OpenAI.
     let imperativeStrict = try canonicalJSONString(Value.schemaForStrictMode(imperativeTool.rawInputSchema))
-    let macroStrict = try canonicalJSONString(Value.toSendable(GetWeather.tool.rawInputSchema))
+    let macroStrict = try canonicalJSONString(Value.schemaForStrictMode(GetWeather.tool.rawInputSchema))
 
     #expect(imperativeStrict == macroStrict)
   }
@@ -92,14 +94,17 @@ struct ArchitectureInvariantTests {
     }
 
     let imperativeStrict = try canonicalJSONString(Value.schemaForStrictMode(imperativeTool.rawInputSchema))
-    let macroStrict = try canonicalJSONString(Value.toSendable(SetOptionalPriority.tool.rawInputSchema))
+    let macroStrict = try canonicalJSONString(Value.schemaForStrictMode(SetOptionalPriority.tool.rawInputSchema))
 
     #expect(imperativeStrict == macroStrict)
   }
 
   @Test
   func `Manual defaulted schema strict normalization matches macro schema`() throws {
-    let preStrictSchema: [String: Value] = [
+    // A raw schema for a tool with one required string param and one defaulted
+    // integer param. The defaulted param stays a scalar `integer` type (no
+    // nullable wrapping) — `default` alone is enough for OpenAI strict mode.
+    let rawEquivalent: [String: Value] = [
       "type": "object",
       "properties": [
         "query": [
@@ -109,7 +114,7 @@ struct ArchitectureInvariantTests {
           "maxLength": 500,
         ],
         "limit": [
-          "type": ["integer", "null"],
+          "type": "integer",
           "description": "Maximum results",
           "minimum": .double(1),
           "maximum": .double(100),
@@ -119,7 +124,7 @@ struct ArchitectureInvariantTests {
       "required": ["query"],
     ]
 
-    let normalized = try canonicalJSONString(Value.schemaForStrictMode(preStrictSchema))
+    let normalized = try canonicalJSONString(Value.schemaForStrictMode(rawEquivalent))
     let macroStrict = try canonicalJSONString(Value.schemaForStrictMode(SearchDocuments.tool.rawInputSchema))
 
     #expect(normalized == macroStrict)
@@ -289,7 +294,7 @@ struct ArchitectureInvariantTests {
   }
 
   @Test
-  func `Generated strict schema reuses the shared normalizer for nested object parameters`() throws {
+  func `Strict-mode normalization reaches into nested object parameters`() throws {
     let descriptor = ToolMacroSupport.SchemaParameterDescriptor(
       name: "settings",
       title: nil,
@@ -310,20 +315,19 @@ struct ArchitectureInvariantTests {
       maximum: nil,
     )
 
-    let strictSchema = try ToolMacroSupport.buildObjectSchema(parameters: [descriptor], strict: true)
-    let normalizedFromBase = try ToolSchema.normalizeForStrictMode(
-      ToolMacroSupport.buildObjectSchema(parameters: [descriptor], strict: false),
-    )
+    // `buildObjectSchema` always returns the raw form.
+    let built = try ToolMacroSupport.buildObjectSchema(parameters: [descriptor])
 
-    #expect(strictSchema == normalizedFromBase)
-
-    let settings = try #require(strictSchema["properties"]?.objectValue?["settings"]?.objectValue)
+    // The normalizer (run at send time) applies `additionalProperties: false`
+    // to nested objects, not just the root.
+    let normalized = try ToolSchema.normalizeForStrictMode(built)
+    let settings = try #require(normalized["properties"]?.objectValue?["settings"]?.objectValue)
     #expect(settings["additionalProperties"]?.boolValue == false)
     #expect(settings["required"]?.arrayValue == [.string("mode")])
   }
 
   @Test
-  func `Throwing macro schema builder reports invalid strict schema without crashing`() {
+  func `validateStrictCompatibility throws StrictSchemaAssertionFailure on incompatible schema`() throws {
     let descriptor = ToolMacroSupport.SchemaParameterDescriptor(
       name: "settings",
       description: "Settings object",
@@ -336,13 +340,13 @@ struct ArchitectureInvariantTests {
       isOptional: false,
     )
 
-    #expect(throws: AIError.self) {
-      _ = try ToolMacroSupport.buildObjectSchema(parameters: [descriptor], strict: true)
-    }
+    // Build itself no longer asserts strict compat — always raw.
+    let schema = try ToolMacroSupport.buildObjectSchema(parameters: [descriptor])
 
-    let result = ToolMacroSupport.buildObjectSchemaResult(parameters: [descriptor], strict: true)
-    #expect(result.errorMessage != nil)
-    #expect(result.schema["type"] == .string("object"))
+    // Opt-in validation throws a wrapped error with the tool name attached.
+    #expect(throws: ToolMacroSupport.StrictSchemaAssertionFailure.self) {
+      try ToolMacroSupport.validateStrictCompatibility(schema, toolName: "demo_tool")
+    }
   }
 
   @Test
@@ -361,10 +365,10 @@ struct ArchitectureInvariantTests {
     )
 
     #expect(throws: AIError.self) {
-      _ = try ToolMacroSupport.buildObjectSchema(parameters: [first, second], strict: false)
+      _ = try ToolMacroSupport.buildObjectSchema(parameters: [first, second])
     }
 
-    let result = ToolMacroSupport.buildObjectSchemaResult(parameters: [first, second], strict: false)
+    let result = ToolMacroSupport.buildObjectSchemaResult(parameters: [first, second])
     #expect(result.errorMessage?.contains("Duplicate parameter name") == true)
     #expect(result.schema["properties"]?.objectValue?.isEmpty == true)
   }

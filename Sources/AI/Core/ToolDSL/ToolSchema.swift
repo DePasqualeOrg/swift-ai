@@ -16,9 +16,18 @@ private struct ToolSchemaParameter {
 }
 
 enum ToolSchema {
+  /// Builds a raw, provider-agnostic JSON Schema from parameter descriptors.
+  ///
+  /// The output is natural JSON Schema: optional properties are absent from
+  /// `required`, composite shapes like `oneOf` are preserved as-is, and no
+  /// OpenAI strict-mode transforms are applied. Provider-specific normalization
+  /// (strict mode, nullable wrapping, etc.) belongs at send time in the
+  /// provider's client, not at schema build time.
+  ///
+  /// Callers that want build-time validation for strict-mode compatibility
+  /// should run `validateStrictCompatibility(_:)` on the returned schema.
   static func buildObjectSchema<Parameters: Collection>(
     parameters: Parameters,
-    strict: Bool,
     name: (Parameters.Element) -> String,
     title: (Parameters.Element) -> String?,
     description: (Parameters.Element) -> String?,
@@ -55,10 +64,10 @@ enum ToolSchema {
 
     var properties: [String: Value] = [:]
     for descriptor in descriptors {
-      properties[descriptor.name] = .object(propertySchema(for: descriptor, strict: strict))
+      properties[descriptor.name] = .object(propertySchema(for: descriptor))
     }
 
-    var schema: [String: Value] = [
+    return [
       "type": .string("object"),
       "properties": .object(properties),
       "required": .array(descriptors
@@ -66,14 +75,14 @@ enum ToolSchema {
         .map(\.name)
         .map(Value.string)),
     ]
+  }
 
-    guard strict else { return schema }
-
-    schema = try normalizeForStrictMode(schema)
-    if descriptors.isEmpty {
-      schema["required"] = .array([])
-    }
-    return schema
+  /// Dry-run validation: runs the OpenAI strict-mode normalizer over `schema`
+  /// and discards the output. Throws the same errors `normalizeForStrictMode`
+  /// would throw, giving callers a way to assert at build time that a raw
+  /// schema can be made strict-mode-compatible without altering it.
+  static func validateStrictCompatibility(_ schema: [String: Value]) throws {
+    _ = try normalizeForStrictMode(schema)
   }
 
   static func strictModeJSONObject(_ schema: [String: Value]) throws -> [String: any Sendable] {
@@ -86,11 +95,15 @@ enum ToolSchema {
 
   private static func propertySchema(
     for descriptor: ToolSchemaParameter,
-    strict: Bool,
   ) -> [String: Value] {
     var property = descriptor.jsonSchemaProperties
 
-    property["type"] = nullableSchemaType(for: descriptor, strict: strict)
+    // Composite schemas (oneOf/anyOf/allOf) have no top-level `type`. Splitting
+    // `type` out in `makeSchemaParameterDescriptor` leaves `jsonSchemaType`
+    // empty in that case — don't emit a bogus `type: ""` back out.
+    if !descriptor.jsonSchemaType.isEmpty {
+      property["type"] = nullableSchemaType(for: descriptor)
+    }
 
     if let title = descriptor.title, title != descriptor.name {
       property["title"] = .string(title)
@@ -120,7 +133,7 @@ enum ToolSchema {
       property["default"] = defaultValue
     }
 
-    if isNullable(descriptor, strict: strict),
+    if descriptor.isOptional,
        case let .array(enumValues)? = property["enum"],
        !enumValues.contains(.null)
     {
@@ -132,19 +145,11 @@ enum ToolSchema {
 
   private static func nullableSchemaType(
     for descriptor: ToolSchemaParameter,
-    strict: Bool,
   ) -> Value {
-    if isNullable(descriptor, strict: strict) {
+    if descriptor.isOptional {
       return .array([.string(descriptor.jsonSchemaType), .string("null")])
     }
     return .string(descriptor.jsonSchemaType)
-  }
-
-  private static func isNullable(
-    _ descriptor: ToolSchemaParameter,
-    strict: Bool,
-  ) -> Bool {
-    descriptor.isOptional || (strict && descriptor.hasDefault)
   }
 
   private static func duplicateParameterNames(in descriptors: [ToolSchemaParameter]) -> [String] {
@@ -168,7 +173,6 @@ enum ToolSchema {
 @_spi(ToolMacroSupport) public enum ToolSchemaRuntime {
   public static func buildObjectSchema<Parameters: Collection>(
     parameters: Parameters,
-    strict: Bool,
     name: (Parameters.Element) -> String,
     title: (Parameters.Element) -> String?,
     description: (Parameters.Element) -> String?,
@@ -184,7 +188,6 @@ enum ToolSchema {
   ) throws -> [String: Value] {
     try ToolSchema.buildObjectSchema(
       parameters: parameters,
-      strict: strict,
       name: name,
       title: title,
       description: description,
@@ -198,6 +201,12 @@ enum ToolSchema {
       minimum: minimum,
       maximum: maximum,
     )
+  }
+
+  /// Dry-run validation: asserts that `schema` can be made strict-mode-compatible,
+  /// without modifying it. Throws if any strict-mode constraint would be violated.
+  public static func validateStrictCompatibility(_ schema: [String: Value]) throws {
+    try ToolSchema.validateStrictCompatibility(schema)
   }
 }
 
@@ -275,19 +284,27 @@ private enum StrictModeNormalizer {
             result[key] = value
           }
         case "anyOf", "oneOf":
+          // OpenAI strict mode rejects `oneOf` at property level but accepts
+          // `anyOf`. For externally tagged unions (Schemable's default enum
+          // shape, each variant discriminated by a unique key) the two are
+          // semantically identical — an input can only ever match one variant
+          // — so rewrite `oneOf` → `anyOf` unconditionally here. Without this,
+          // every associated-value enum reaching OpenAI strict mode gets
+          // rejected with "'oneOf' is not permitted".
+          let outputKey = "anyOf"
           if case let .array(variants) = value {
-            result[key] = try .array(variants.enumerated().map { index, variant in
+            result[outputKey] = try .array(variants.enumerated().map { index, variant in
               if case let .object(variantSchema) = variant {
                 return try .object(normalize(
                   variantSchema,
-                  path: path + [key, String(index)],
+                  path: path + [outputKey, String(index)],
                   root: resolvedRoot,
                 ))
               }
               return variant
             })
           } else {
-            result[key] = value
+            result[outputKey] = value
           }
         case "allOf":
           // When `allOf` has exactly one variant, collapse it: normalize the

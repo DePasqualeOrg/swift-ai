@@ -517,14 +517,16 @@ The `@Parameter` property wrapper supports these types:
 - **Temporal**: `Date` (parsed as ISO 8601 strings)
 - **Binary**: `Data` (base64-encoded strings)
 - **Optional**: `T?` for any supported type T
-- **Enums**: Types conforming to `ToolEnum`
+- **Enums**: Types annotated with `@Schemable` (string-raw enums) or richer enums with associated values
+- **Custom types**: Any Swift type annotated with `@Schemable`
 
 #### Enum Parameters
 
-Use `ToolEnum` for parameters with a fixed set of values:
+Use `@Schemable` on a string-raw enum for parameters with a fixed set of values:
 
 ```swift
-enum Priority: String, ToolEnum, CaseIterable {
+@Schemable
+enum Priority: String, CaseIterable {
     case low, medium, high
 }
 
@@ -582,7 +584,11 @@ func perform() async throws -> MultiContent {
 
 #### Strict Schema Validation
 
-Enable strict schema validation to reject extra properties:
+`static let strictSchema = true` opts into an assertion that the tool's schema
+is strict JSON Schema-compatible. The check runs the first time the generated
+`tool` accessor is read (typically at tool registration); if the assertion
+fails, it traps with a message naming the tool. This is a declaration-site
+self-check, independent of any per-request strict-mode flag configured on a client.
 
 ```swift
 @Tool
@@ -590,7 +596,7 @@ struct StrictTool {
     static let name = "strict_tool"
     static let title = "Strict Tool"
     static let description = "A tool with strict schema validation"
-    static let strictSchema = true  // Adds additionalProperties: false
+    static let strictSchema = true  // Opt-in: trap if schema isn't strict-compatible
 
     @Parameter(description: "Input value")
     var input: String

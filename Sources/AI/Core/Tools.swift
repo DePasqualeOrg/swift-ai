@@ -64,12 +64,15 @@ public struct Tool: Sendable {
   /// This preserves complex schema features like nested objects, anyOf, oneOf, etc.
   public let rawInputSchema: [String: Value]
 
-  /// Captures a schema-generation error for macro-generated strict schemas that
-  /// were downgraded to a non-strict fallback at declaration time.
+  /// Captures a schema-build failure so it can be surfaced at request-encoding
+  /// time rather than at tool-construction time. Populated by:
+  /// - the `@Tool` macro when the raw-schema build fails (e.g. duplicate param names);
+  /// - the imperative `Tool.init(parameters:)` paths when the generated schema fails to build;
+  /// - imperative callers that explicitly pass `schemaBuildErrorMessage:` to `Tool.init(...)`.
+  ///
+  /// Strict-mode assertion failures from `@Tool`'s `strictSchema: true` flag trap
+  /// before `Tool` is ever constructed, so they never land here.
   let schemaBuildErrorMessage: String?
-
-  /// Captures a failure while generating the base schema from imperative parameters.
-  let baseSchemaBuildErrorMessage: String?
 
   /// A parameter definition for a tool.
   public struct Parameter: Sendable {
@@ -266,8 +269,7 @@ public struct Tool: Sendable {
     self.parameters = parameters
     self.resultTypes = resultTypes
     self.rawInputSchema = builtSchema.schema
-    self.schemaBuildErrorMessage = schemaBuildErrorMessage
-    baseSchemaBuildErrorMessage = builtSchema.errorMessage
+    self.schemaBuildErrorMessage = schemaBuildErrorMessage ?? builtSchema.errorMessage
     self.execute = execute
   }
 
@@ -298,8 +300,7 @@ public struct Tool: Sendable {
     self.parameters = parameters
     self.resultTypes = resultTypes
     rawInputSchema = builtSchema.schema
-    self.schemaBuildErrorMessage = schemaBuildErrorMessage
-    baseSchemaBuildErrorMessage = builtSchema.errorMessage
+    self.schemaBuildErrorMessage = schemaBuildErrorMessage ?? builtSchema.errorMessage
     self.execute = execute
   }
 
@@ -321,18 +322,17 @@ public struct Tool: Sendable {
     self.resultTypes = resultTypes
     rawInputSchema = inputSchema
     self.schemaBuildErrorMessage = schemaBuildErrorMessage
-    baseSchemaBuildErrorMessage = nil
     self.execute = execute
   }
 
   /// Returns the tool's input schema after confirming schema generation succeeded.
   ///
-  /// Throws when the tool's imperative parameter schema could not be built and
-  /// `rawInputSchema` only contains a fallback placeholder schema.
+  /// Throws when the tool's schema could not be built and `rawInputSchema` only
+  /// contains a fallback placeholder schema.
   public func validatedInputSchema() throws -> [String: Value] {
-    if let baseSchemaBuildErrorMessage {
+    if let schemaBuildErrorMessage {
       throw AIError.invalidRequest(
-        message: "Tool '\(name)' has an invalid input schema: \(baseSchemaBuildErrorMessage)",
+        message: "Tool '\(name)' has an invalid input schema: \(schemaBuildErrorMessage)",
       )
     }
     return rawInputSchema
@@ -349,7 +349,6 @@ public struct Tool: Sendable {
       return try BuiltSchema(
         schema: ToolSchema.buildObjectSchema(
           parameters: parameters,
-          strict: false,
           name: \.name,
           title: { $0.title },
           description: { $0.description },

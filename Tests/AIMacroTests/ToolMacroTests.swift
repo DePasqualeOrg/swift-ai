@@ -421,8 +421,7 @@ final class ToolMacroTests: XCTestCase {
 
           public static var tool: AI.Tool {
               let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
-                  parameters: [],
-                  strict: true
+                  parameters: []
               )
               return AI.Tool(
                   name: name,
@@ -526,8 +525,7 @@ final class ToolMacroTests: XCTestCase {
 
           package static var tool: AI.Tool {
               let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
-                  parameters: [],
-                  strict: true
+                  parameters: []
               )
               return AI.Tool(
                   name: name,
@@ -591,8 +589,7 @@ final class ToolMacroTests: XCTestCase {
 
           static var tool: AI.Tool {
               let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
-                  parameters: [],
-                  strict: true
+                  parameters: []
               )
               return AI.Tool(
                   name: name,
@@ -656,8 +653,7 @@ final class ToolMacroTests: XCTestCase {
 
           public static var tool: AI.Tool {
               let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
-                  parameters: [],
-                  strict: true
+                  parameters: []
               )
               return AI.Tool(
                   name: name,
@@ -721,8 +717,7 @@ final class ToolMacroTests: XCTestCase {
 
           internal static var tool: AI.Tool {
               let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
-                  parameters: [],
-                  strict: true
+                  parameters: []
               )
               return AI.Tool(
                   name: name,
@@ -789,8 +784,7 @@ final class ToolMacroTests: XCTestCase {
 
           public static var tool: AI.Tool {
               let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
-                  parameters: [],
-                  strict: true
+                  parameters: []
               )
               return AI.Tool(
                   name: name,

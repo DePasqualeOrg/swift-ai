@@ -19,6 +19,7 @@
 // that have their own @Tool and @Parameter without naming collisions.
 
 import AI
+import JSONSchemaBuilder
 
 // MARK: - Parameter Property Wrapper
 
@@ -53,9 +54,19 @@ import AI
 /// }
 /// ```
 @propertyWrapper
-public struct Parameter<Value: ParameterValue>: Sendable {
+public struct Parameter<Value: Schemable & Sendable>: Sendable {
+  private var _storage: Value?
+
   /// The current value of the parameter.
-  public var wrappedValue: Value
+  ///
+  /// Reading traps if the generated `parse(from:)` hasn't populated this
+  /// parameter yet. In normal `@Tool` usage, parse is always called before
+  /// any read, so this trap is only reachable by manually instantiating the
+  /// tool struct and reading an unparsed parameter.
+  public var wrappedValue: Value {
+    get { _storage! }
+    set { _storage = newValue }
+  }
 
   /// The JSON key used in the schema and argument parsing.
   /// If nil, the Swift property name is used.
@@ -103,7 +114,7 @@ public struct Parameter<Value: ParameterValue>: Sendable {
     minimum: Double? = nil,
     maximum: Double? = nil,
   ) {
-    self.wrappedValue = wrappedValue
+    _storage = wrappedValue
     self.key = key
     self.title = title
     self.description = description
@@ -137,7 +148,7 @@ public extension Parameter where Value: ExpressibleByNilLiteral {
     minimum: Double? = nil,
     maximum: Double? = nil,
   ) {
-    wrappedValue = nil
+    _storage = Value(nilLiteral: ())
     self.key = key
     self.title = title
     self.description = description
@@ -151,8 +162,8 @@ public extension Parameter where Value: ExpressibleByNilLiteral {
 public extension Parameter {
   /// Creates a required parameter with the specified metadata and constraints.
   ///
-  /// Use this initializer for required parameters without a default value.
-  /// The wrapped value is set to a placeholder that will be replaced during parsing.
+  /// The storage starts empty; the generated `parse(from:)` populates it
+  /// before any read.
   ///
   /// - Parameters:
   ///   - key: The JSON key (defaults to property name).
@@ -171,7 +182,7 @@ public extension Parameter {
     minimum: Double? = nil,
     maximum: Double? = nil,
   ) {
-    wrappedValue = Value.placeholderValue
+    _storage = nil
     self.key = key
     self.title = title
     self.description = description

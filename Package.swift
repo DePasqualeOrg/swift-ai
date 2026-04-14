@@ -26,7 +26,7 @@ let package = Package(
   dependencies: [
     .package(url: "https://github.com/DePasqualeOrg/swift-sse", .upToNextMinor(from: "0.1.0")),
     .package(url: "https://github.com/DePasqualeOrg/swift-mcp", from: "1.1.0"),
-    .package(url: "https://github.com/ajevans99/swift-json-schema", from: "0.2.1"),
+    .package(url: "https://github.com/ajevans99/swift-json-schema", .upToNextMinor(from: "0.11.2")),
     .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0" ..< "603.0.0"),
   ],
   targets: [
@@ -43,6 +43,7 @@ let package = Package(
       dependencies: [
         .product(name: "SSE", package: "swift-sse"),
         .product(name: "JSONSchema", package: "swift-json-schema"),
+        .product(name: "JSONSchemaBuilder", package: "swift-json-schema"),
       ],
     ),
     .target(
@@ -50,6 +51,8 @@ let package = Package(
       dependencies: [
         "AI",
         "AIMacros",
+        .product(name: "JSONSchema", package: "swift-json-schema"),
+        .product(name: "JSONSchemaBuilder", package: "swift-json-schema"),
       ],
     ),
     .target(

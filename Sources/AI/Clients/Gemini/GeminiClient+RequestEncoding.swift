@@ -169,9 +169,9 @@ enum GeminiRequestEncoder {
 
     if !tools.isEmpty {
       let functionDeclarations = try tools.map { function in
-        if let baseSchemaBuildErrorMessage = function.baseSchemaBuildErrorMessage {
+        if let schemaBuildErrorMessage = function.schemaBuildErrorMessage {
           throw AIError.invalidRequest(
-            message: "Tool '\(function.name)' has an invalid input schema: \(baseSchemaBuildErrorMessage)",
+            message: "Tool '\(function.name)' has an invalid input schema: \(schemaBuildErrorMessage)",
           )
         }
         return [

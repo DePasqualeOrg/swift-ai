@@ -1,6 +1,7 @@
 // Copyright © Anthony DePasquale
 
 @_spi(ToolMacroSupport) import AI
+import JSONSchemaBuilder
 
 /// Public runtime support used by `@Tool` macro expansions.
 ///
@@ -51,12 +52,22 @@ public enum ToolMacroSupport {
     }
   }
 
-  /// Builds a runtime schema descriptor for a macro-generated parameter.
-  public static func makeSchemaParameterDescriptor<T: ParameterValue>(
+  /// Builds a runtime schema descriptor from a `JSONSchemaComponent` produced
+  /// by `@Schemable` (or the built-in conformances for primitives).
+  ///
+  /// This is the path used by the `@Tool` macro. The component's schema is
+  /// converted to the internal `[String: Value]` representation and split into
+  /// the `jsonSchemaType` / `jsonSchemaProperties` fields so the shared
+  /// strict-mode normalizer continues to work unchanged.
+  ///
+  /// This call is non-throwing — if Schemable conversion fails (which indicates
+  /// a programmer error), the descriptor is returned with an empty schema and
+  /// the failure surfaces as a broken tool schema at the strict-mode check.
+  public static func makeSchemaParameterDescriptor(
     name: String,
     title: String? = nil,
     description: String? = nil,
-    type _: T.Type,
+    schema component: some JSONSchemaComponent,
     isOptional: Bool,
     hasDefault: Bool = false,
     defaultValue: Value? = nil,
@@ -65,12 +76,30 @@ public enum ToolMacroSupport {
     minimum: Double? = nil,
     maximum: Double? = nil,
   ) -> SchemaParameterDescriptor {
-    SchemaParameterDescriptor(
+    let jsonSchemaType: String
+    let jsonSchemaProperties: [String: Value]
+    if var properties = try? SchemableAdapter.valueDictionary(from: component) {
+      // Split `type` back out so the existing strict-mode nullable-wrapping logic
+      // in ToolSchema can operate on a simple scalar type string. For composite
+      // schemas (`oneOf`, `anyOf`) that have no top-level `type`, an empty
+      // string is passed — nullable wrapping of composites is not supported and
+      // will surface as a strict-mode error if needed.
+      jsonSchemaType = if case let .string(typeName) = properties.removeValue(forKey: "type") {
+        typeName
+      } else {
+        ""
+      }
+      jsonSchemaProperties = properties
+    } else {
+      jsonSchemaType = ""
+      jsonSchemaProperties = [:]
+    }
+    return SchemaParameterDescriptor(
       name: name,
       title: title,
       description: description,
-      jsonSchemaType: T.jsonSchemaType,
-      jsonSchemaProperties: T.jsonSchemaProperties,
+      jsonSchemaType: jsonSchemaType,
+      jsonSchemaProperties: jsonSchemaProperties,
       isOptional: isOptional,
       hasDefault: hasDefault,
       defaultValue: defaultValue,
@@ -79,6 +108,17 @@ public enum ToolMacroSupport {
       minimum: minimum,
       maximum: maximum,
     )
+  }
+
+  /// Parses a `Value` into a Swift value using the given schema component.
+  /// Thin wrapper over `SchemableAdapter.parse` so macro-emitted parse sites
+  /// only reference symbols in `AITool`.
+  public static func parseParameter<Component: JSONSchemaComponent>(
+    _ component: Component,
+    from value: Value,
+    parameterName: String,
+  ) throws -> Component.Output {
+    try SchemableAdapter.parse(component, from: value, parameterName: parameterName)
   }
 
   /// Nonthrowing schema build result used by macro-generated declarations.
@@ -92,14 +132,15 @@ public enum ToolMacroSupport {
     }
   }
 
-  /// Builds an object JSON Schema using the shared `AI` strict-mode engine.
+  /// Builds a raw, provider-agnostic object JSON Schema from parameter descriptors.
+  ///
+  /// Provider-specific normalization (e.g. OpenAI strict mode) happens at send
+  /// time inside the provider's client, not here.
   public static func buildObjectSchema(
     parameters: [SchemaParameterDescriptor],
-    strict: Bool,
   ) throws -> [String: Value] {
     try AI.ToolSchemaRuntime.buildObjectSchema(
       parameters: parameters,
-      strict: strict,
       name: \.name,
       title: \.title,
       description: \.description,
@@ -115,26 +156,68 @@ public enum ToolMacroSupport {
     )
   }
 
-  /// Builds a schema without trapping, preserving any strict-mode failure as metadata.
+  /// Builds a raw object JSON Schema without throwing. Raw-build failures
+  /// (e.g. duplicate parameter names) are reported as `errorMessage` with an
+  /// empty fallback schema so macro-generated code can surface the failure
+  /// at request-encoding time.
   public static func buildObjectSchemaResult(
     parameters: [SchemaParameterDescriptor],
-    strict: Bool,
   ) -> BuiltObjectSchema {
     do {
-      return try BuiltObjectSchema(
-        schema: buildObjectSchema(parameters: parameters, strict: strict),
-        errorMessage: nil,
+      let schema = try AI.ToolSchemaRuntime.buildObjectSchema(
+        parameters: parameters,
+        name: \.name,
+        title: \.title,
+        description: \.description,
+        jsonSchemaType: \.jsonSchemaType,
+        jsonSchemaProperties: \.jsonSchemaProperties,
+        isOptional: \.isOptional,
+        hasDefault: \.hasDefault,
+        defaultValue: \.defaultValue,
+        minLength: \.minLength,
+        maxLength: \.maxLength,
+        minimum: \.minimum,
+        maximum: \.maximum,
       )
+      return BuiltObjectSchema(schema: schema, errorMessage: nil)
     } catch {
-      let fallbackSchema = (try? buildObjectSchema(parameters: parameters, strict: false)) ?? [
-        "type": .string("object"),
-        "properties": .object([:]),
-        "required": .array([]),
-      ]
       return BuiltObjectSchema(
-        schema: fallbackSchema,
+        schema: [
+          "type": .string("object"),
+          "properties": .object([:]),
+          "required": .array([]),
+        ],
         errorMessage: error.localizedDescription,
       )
+    }
+  }
+
+  /// Asserts that `schema` is strict JSON Schema-compatible.
+  ///
+  /// Intended for use from macro-generated `@Tool` code when the tool author
+  /// writes `static let strictSchema = true`. Failures are invariant violations
+  /// (a broken programmer assertion); the macro wraps this call in `try!` so
+  /// the result is a clear runtime trap with the tool name in the message.
+  public static func validateStrictCompatibility(
+    _ schema: [String: Value],
+    toolName: String,
+  ) throws {
+    do {
+      try AI.ToolSchemaRuntime.validateStrictCompatibility(schema)
+    } catch {
+      throw StrictSchemaAssertionFailure(toolName: toolName, underlying: error)
+    }
+  }
+
+  /// Error thrown when a tool declares `strictSchema: true` but its schema is
+  /// not strict JSON Schema-compatible. Carries the tool name so the trap
+  /// message produced by `try!` points at the offending tool.
+  public struct StrictSchemaAssertionFailure: Error, CustomStringConvertible {
+    public let toolName: String
+    public let underlying: Error
+
+    public var description: String {
+      "@Tool '\(toolName)' declares strictSchema: true but its schema is not strict JSON Schema-compatible: \(underlying.localizedDescription)"
     }
   }
 }

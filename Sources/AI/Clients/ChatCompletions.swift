@@ -23,6 +23,10 @@ public extension ChatCompletionsClient {
     /// but requires all properties to be in `required` and optional properties to be nullable.
     /// Defaults to true. Disable for tools with optional non-nullable parameters or for
     /// compatible endpoints that don't support strict mode.
+    ///
+    /// Independent of per-tool `@Tool` `static let strictSchema`. `strictSchema` is a
+    /// declaration-site self-check by the tool author (runs at tool registration);
+    /// this flag is the request-level switch that drives the normalizer at send time.
     public var enableStrictModeForTools: Bool
 
     /// Creates a new configuration with optional extra parameters.
@@ -515,14 +519,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
     if !tools.isEmpty {
       var toolsArray: [[String: any Sendable]] = []
       for tool in tools {
-        if let baseSchemaBuildErrorMessage = tool.baseSchemaBuildErrorMessage {
+        if let schemaBuildErrorMessage = tool.schemaBuildErrorMessage {
           throw AIError.invalidRequest(
-            message: "Tool '\(tool.name)' has an invalid input schema: \(baseSchemaBuildErrorMessage)",
-          )
-        }
-        if enableStrictModeForTools, let schemaBuildErrorMessage = tool.schemaBuildErrorMessage {
-          throw AIError.invalidRequest(
-            message: "Tool '\(tool.name)' has an invalid strict schema: \(schemaBuildErrorMessage)",
+            message: "Tool '\(tool.name)' has an invalid input schema: \(schemaBuildErrorMessage)",
           )
         }
         let parameters: [String: any Sendable]
