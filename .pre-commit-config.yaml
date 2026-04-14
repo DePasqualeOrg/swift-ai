@@ -1,8 +1,5 @@
 repos:
-- repo: local
-  hooks:
-    - id: swiftformat
-      name: swiftformat
-      language: system
-      entry: swiftformat
-      types: [swift]
+-   repo: https://github.com/nicklockwood/SwiftFormat
+    rev: 0.61.0
+    hooks:
+    -   id: swiftformat
