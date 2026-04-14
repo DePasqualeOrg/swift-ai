@@ -170,6 +170,98 @@ struct ArchitectureInvariantTests {
   }
 
   @Test
+  func `Strict mode collapses single-element allOf into the parent`() throws {
+    // Matches the OpenAI TS SDK: when `allOf` has exactly one variant, the
+    // variant's keys merge into the parent and `allOf` is dropped. This is
+    // how zod-to-json-schema composes refs — a lone `allOf` wrapper is
+    // structural noise that strict-mode normalization should remove.
+    let schema: [String: Value] = [
+      "type": "object",
+      "properties": [
+        "value": .object([
+          "allOf": .array([
+            .object([
+              "type": "object",
+              "properties": .object(["name": .object(["type": "string"])]),
+              "required": .array([.string("name")]),
+            ]),
+          ]),
+        ]),
+      ],
+      "required": ["value"],
+    ]
+
+    let normalized = try strictJSONObject(schema)
+    let properties = try #require(normalized["properties"] as? [String: Any])
+    let value = try #require(properties["value"] as? [String: Any])
+    #expect(value["allOf"] == nil)
+    #expect(value["type"] as? String == "object")
+    #expect(value["additionalProperties"] as? Bool == false)
+
+    let valueProperties = try #require(value["properties"] as? [String: Any])
+    let name = try #require(valueProperties["name"] as? [String: Any])
+    #expect(name["type"] as? String == "string")
+
+    let valueRequired = try #require(value["required"] as? [String])
+    #expect(valueRequired == ["name"])
+  }
+
+  @Test
+  func `Strict mode preserves multi-element allOf and normalizes each variant`() throws {
+    let schema: [String: Value] = [
+      "type": "object",
+      "properties": [
+        "value": .object([
+          "allOf": .array([
+            .object([
+              "type": "object",
+              "properties": .object(["a": .object(["type": "string"])]),
+              "required": .array([.string("a")]),
+            ]),
+            .object([
+              "type": "object",
+              "properties": .object(["b": .object(["type": "integer"])]),
+              "required": .array([.string("b")]),
+            ]),
+          ]),
+        ]),
+      ],
+      "required": ["value"],
+    ]
+
+    let normalized = try strictJSONObject(schema)
+    let properties = try #require(normalized["properties"] as? [String: Any])
+    let value = try #require(properties["value"] as? [String: Any])
+    let allOf = try #require(value["allOf"] as? [[String: Any]])
+    #expect(allOf.count == 2)
+    #expect(allOf[0]["additionalProperties"] as? Bool == false)
+    #expect(allOf[1]["additionalProperties"] as? Bool == false)
+  }
+
+  @Test
+  func `Strict mode strips default null from property schemas`() throws {
+    // `default: null` carries no information in strict mode — OpenAI's
+    // server-side default injection can't distinguish it from "no default",
+    // and keeping it around invites confusing validator output.
+    let schema: [String: Value] = [
+      "type": "object",
+      "properties": [
+        "tag": .object([
+          "type": .array([.string("string"), .string("null")]),
+          "default": .null,
+        ]),
+      ],
+      "required": ["tag"],
+    ]
+
+    let normalized = try strictJSONObject(schema)
+    let properties = try #require(normalized["properties"] as? [String: Any])
+    let tag = try #require(properties["tag"] as? [String: Any])
+    #expect(tag["default"] == nil)
+    #expect(tag["type"] as? [String] == ["string", "null"])
+  }
+
+  @Test
   func `Strict mode makes nullable properties required and adds additionalProperties false recursively`() throws {
     let schema: [String: Value] = [
       "type": "object",

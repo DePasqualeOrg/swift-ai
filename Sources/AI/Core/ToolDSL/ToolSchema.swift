@@ -226,6 +226,7 @@ private enum StrictModeNormalizer {
 
     var result: [String: Value] = [:]
     var propertyNames: [String] = []
+    var allOfSingleVariant: [String: Value]?
     let originalRequired = requiredNames(in: schema)
 
     for (key, value) in schema {
@@ -273,7 +274,7 @@ private enum StrictModeNormalizer {
           } else {
             result[key] = value
           }
-        case "anyOf", "allOf", "oneOf":
+        case "anyOf", "oneOf":
           if case let .array(variants) = value {
             result[key] = try .array(variants.enumerated().map { index, variant in
               if case let .object(variantSchema) = variant {
@@ -287,6 +288,34 @@ private enum StrictModeNormalizer {
             })
           } else {
             result[key] = value
+          }
+        case "allOf":
+          // When `allOf` has exactly one variant, collapse it: normalize the
+          // variant and merge its keys into the parent, dropping `allOf`. The
+          // merge happens after the rest of the parent's normalization so the
+          // variant's keys win, matching the TS SDK's `Object.assign`
+          // semantics in `transform.ts`.
+          guard case let .array(variants) = value else {
+            result[key] = value
+            continue
+          }
+          if variants.count == 1, case let .object(variantSchema) = variants[0] {
+            allOfSingleVariant = try normalize(
+              variantSchema,
+              path: path + ["allOf", "0"],
+              root: resolvedRoot,
+            )
+          } else {
+            result[key] = try .array(variants.enumerated().map { index, variant in
+              if case let .object(variantSchema) = variant {
+                return try .object(normalize(
+                  variantSchema,
+                  path: path + ["allOf", String(index)],
+                  root: resolvedRoot,
+                ))
+              }
+              return variant
+            })
           }
         case "$defs", "definitions":
           if case let .object(definitions) = value {
@@ -329,6 +358,21 @@ private enum StrictModeNormalizer {
 
     if !propertyNames.isEmpty {
       result["required"] = .array(propertyNames.sorted().map(Value.string))
+    }
+
+    // Merge a collapsed single-element `allOf` variant last so its keys
+    // override anything the parent declared, matching TS SDK behavior.
+    if let allOfSingleVariant {
+      for (key, value) in allOfSingleVariant {
+        result[key] = value
+      }
+    }
+
+    // Strip `default: null` — there's no meaningful distinction between
+    // "no default" and "default is null" in strict mode, and keeping it can
+    // cause validator complaints downstream.
+    if case .null = result["default"] {
+      result.removeValue(forKey: "default")
     }
 
     return result
