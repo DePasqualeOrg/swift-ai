@@ -27,7 +27,7 @@ let package = Package(
     .package(url: "https://github.com/DePasqualeOrg/swift-sse", .upToNextMinor(from: "0.1.0")),
     .package(url: "https://github.com/DePasqualeOrg/swift-mcp", from: "1.1.0"),
     .package(url: "https://github.com/ajevans99/swift-json-schema", .upToNextMinor(from: "0.11.2")),
-    .package(url: "https://github.com/swiftlang/swift-syntax", "600.0.0" ..< "603.0.0"),
+    .package(url: "https://github.com/swiftlang/swift-syntax", "603.0.0" ..< "604.0.0"),
   ],
   targets: [
     .macro(

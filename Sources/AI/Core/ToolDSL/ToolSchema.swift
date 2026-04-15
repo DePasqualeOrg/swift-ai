@@ -77,12 +77,12 @@ enum ToolSchema {
     ]
   }
 
-  /// Dry-run validation: runs the OpenAI strict-mode normalizer over `schema`
-  /// and discards the output. Throws the same errors `normalizeForStrictMode`
-  /// would throw, giving callers a way to assert at build time that a raw
-  /// schema can be made strict-mode-compatible without altering it.
+  /// Asserts that `schema` is universally-strict-mode compatible without modifying
+  /// it. Provider-agnostic: relies on the shared `StrictSchemaValidator` and emits
+  /// no OpenAI-specific transforms (e.g. `oneOf → anyOf`). Provider-specific
+  /// normalization happens only at request-send time, inside the OpenAI clients.
   static func validateStrictCompatibility(_ schema: [String: Value]) throws {
-    _ = try normalizeForStrictMode(schema)
+    try StrictSchemaValidator.validate(schema)
   }
 
   static func strictModeJSONObject(_ schema: [String: Value]) throws -> [String: any Sendable] {
@@ -103,6 +103,13 @@ enum ToolSchema {
     // empty in that case — don't emit a bogus `type: ""` back out.
     if !descriptor.jsonSchemaType.isEmpty {
       property["type"] = nullableSchemaType(for: descriptor)
+    } else if descriptor.isOptional {
+      // Composite schema + optional: the generated parse path treats `null` as
+      // "omitted" for optional fields, so the JSON Schema must accept null too.
+      // Without this, a strict validator rejects the very value the parser is
+      // designed to swallow. Append a null branch to an existing `oneOf`/`anyOf`
+      // when present (clean), or wrap the schema body in a new `oneOf` otherwise.
+      addNullBranchToCompositeSchema(&property)
     }
 
     if let title = descriptor.title, title != descriptor.name {
@@ -150,6 +157,26 @@ enum ToolSchema {
       return .array([.string(descriptor.jsonSchemaType), .string("null")])
     }
     return .string(descriptor.jsonSchemaType)
+  }
+
+  /// Adds a `{"type": "null"}` branch to a composite (no-top-level-type) schema so
+  /// it accepts `null` in addition to its declared variants. Mutates `property` in
+  /// place. Idempotent — calling twice does not double-add the null branch.
+  private static func addNullBranchToCompositeSchema(_ property: inout [String: Value]) {
+    let nullVariant: Value = .object(["type": .string("null")])
+    for key in ["oneOf", "anyOf"] {
+      if case let .array(variants) = property[key] {
+        if !variants.contains(nullVariant) {
+          property[key] = .array(variants + [nullVariant])
+        }
+        return
+      }
+    }
+    // No top-level `oneOf`/`anyOf` (e.g. an `allOf`-only or other unusual shape):
+    // wrap the entire schema body in a new `oneOf` so we don't lose the original
+    // constraint and don't introduce contradictions (which appending to `allOf`
+    // would).
+    property = ["oneOf": .array([.object(property), nullVariant])]
   }
 
   private static func duplicateParameterNames(in descriptors: [ToolSchemaParameter]) -> [String] {
@@ -207,6 +234,15 @@ enum ToolSchema {
   /// without modifying it. Throws if any strict-mode constraint would be violated.
   public static func validateStrictCompatibility(_ schema: [String: Value]) throws {
     try ToolSchema.validateStrictCompatibility(schema)
+  }
+}
+
+// Per-repo error adapter for the shared `StrictSchemaValidator` defined in
+// `StrictSchemaValidatorSharedHelpers.swift`. The shared file calls this so
+// the validator stays library-agnostic while errors keep the repo-native shape.
+extension StrictSchemaValidator {
+  static func makeStrictSchemaError(_ message: String) -> Error {
+    AIError.invalidRequest(message: message)
   }
 }
 

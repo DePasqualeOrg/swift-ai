@@ -76,24 +76,30 @@ public enum ToolMacroSupport {
     minimum: Double? = nil,
     maximum: Double? = nil,
   ) -> SchemaParameterDescriptor {
-    let jsonSchemaType: String
-    let jsonSchemaProperties: [String: Value]
-    if var properties = try? SchemableAdapter.valueDictionary(from: component) {
-      // Split `type` back out so the existing strict-mode nullable-wrapping logic
-      // in ToolSchema can operate on a simple scalar type string. For composite
-      // schemas (`oneOf`, `anyOf`) that have no top-level `type`, an empty
-      // string is passed — nullable wrapping of composites is not supported and
-      // will surface as a strict-mode error if needed.
-      jsonSchemaType = if case let .string(typeName) = properties.removeValue(forKey: "type") {
-        typeName
-      } else {
-        ""
-      }
-      jsonSchemaProperties = properties
-    } else {
-      jsonSchemaType = ""
-      jsonSchemaProperties = [:]
+    // A `Schemable` conformance whose schema can't be converted to `Value` is
+    // a programmer error in user code (custom `schema` returning
+    // non-Value-encodable structures). Trap with a parameter-named message at
+    // registration time rather than silently degrading to an empty schema and
+    // shipping a malformed parameter to clients.
+    var properties: [String: Value]
+    do {
+      properties = try SchemableAdapter.valueDictionary(from: component)
+    } catch {
+      preconditionFailure(
+        "@Tool parameter '\(name)': failed to convert Schemable schema to AI.Value (\(error)). The parameter type's `Schemable` conformance must produce a JSON Schema that round-trips through `AI.Value`.",
+      )
     }
+    // Split `type` back out so the existing strict-mode nullable-wrapping logic
+    // in ToolSchema can operate on a simple scalar type string. For composite
+    // schemas (`oneOf`, `anyOf`) that have no top-level `type`, an empty
+    // string is passed — nullable wrapping of composites is not supported and
+    // will surface as a strict-mode error if needed.
+    let jsonSchemaType: String = if case let .string(typeName) = properties.removeValue(forKey: "type") {
+      typeName
+    } else {
+      ""
+    }
+    let jsonSchemaProperties = properties
     return SchemaParameterDescriptor(
       name: name,
       title: title,
