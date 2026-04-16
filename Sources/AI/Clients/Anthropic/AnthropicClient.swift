@@ -35,24 +35,25 @@ public final class AnthropicClient: APIClient, Sendable {
   @MainActor public private(set) var isGenerating: Bool = false
   @MainActor private var currentTask: Task<(GenerationResponse, Bool), Error>?
 
-  struct ThinkingConfig: Encodable {
-    enum EnabledSetting: String, Encodable {
+  /// Controls whether thinking content is included in API responses.
+  public enum ThinkingDisplay: String, Sendable, Encodable {
+    case summarized, omitted
+  }
+
+  struct ThinkingConfig {
+    enum EnabledSetting: String {
       case enabled, disabled, adaptive
     }
 
     let type: EnabledSetting
     let budgetTokens: Int?
-
-    enum CodingKeys: String, CodingKey {
-      case type
-      case budgetTokens = "budget_tokens"
-    }
+    let display: ThinkingDisplay?
   }
 
   /// Controls how much effort the model spends on thinking.
   /// Maps to the `effort` value in the API's `output_config`.
   public enum EffortLevel: String, CaseIterable, Identifiable, Sendable {
-    case low, medium, high, max
+    case low, medium, high, xhigh, max
     public var id: String {
       rawValue
     }
@@ -112,11 +113,17 @@ public final class AnthropicClient: APIClient, Sendable {
     /// Defaults to enabled with 5-minute TTL.
     public var cacheControl: CacheControl?
 
+    /// Controls whether thinking content is included in responses.
+    /// Defaults to `.summarized` so thinking content is returned.
+    /// Set to `.omitted` if you don't need thinking content (reduces latency slightly).
+    /// Only relevant for models that support thinking (Opus 4.7+ omits thinking by default without this).
+    public var thinkingDisplay: ThinkingDisplay?
+
     /// Returns the thinking config adjusted for the given maxTokens.
     /// Returns nil if thinking should be skipped (e.g., budget would fall below 1024).
     func effectiveThinkingConfig(maxTokens: Int?) -> ThinkingConfig? {
       if effort != nil {
-        return ThinkingConfig(type: .adaptive, budgetTokens: nil)
+        return ThinkingConfig(type: .adaptive, budgetTokens: nil, display: thinkingDisplay ?? .summarized)
       }
       guard let maxThinkingTokens, maxThinkingTokens > 0 else {
         return nil
@@ -130,7 +137,7 @@ public final class AnthropicClient: APIClient, Sendable {
       if budgetTokens < 1024 {
         return nil
       }
-      return ThinkingConfig(type: .enabled, budgetTokens: budgetTokens)
+      return ThinkingConfig(type: .enabled, budgetTokens: budgetTokens, display: thinkingDisplay ?? .summarized)
     }
 
     /// Creates a new configuration with the specified options.
@@ -138,13 +145,15 @@ public final class AnthropicClient: APIClient, Sendable {
     /// - Parameters:
     ///   - maxThinkingTokens: Maximum tokens for extended thinking. Minimum is 1024.
     ///   - effort: Effort level for adaptive thinking. Setting this enables adaptive thinking.
+    ///   - thinkingDisplay: Controls whether thinking content is included in responses. Defaults to `.summarized`.
     ///   - webSearch: Enable web search tool.
     ///   - webContent: Enable web content fetching.
     ///   - codeExecution: Enable sandboxed code execution.
     ///   - cacheControl: Cache control settings. Defaults to enabled. Set to nil to disable.
-    public init(maxThinkingTokens: Int? = nil, effort: EffortLevel? = nil, webSearch: Bool = false, webContent: Bool = false, codeExecution: Bool = false, cacheControl: CacheControl? = CacheControl()) {
+    public init(maxThinkingTokens: Int? = nil, effort: EffortLevel? = nil, thinkingDisplay: ThinkingDisplay? = nil, webSearch: Bool = false, webContent: Bool = false, codeExecution: Bool = false, cacheControl: CacheControl? = CacheControl()) {
       self.maxThinkingTokens = maxThinkingTokens
       self.effort = effort
+      self.thinkingDisplay = thinkingDisplay
       self.webSearch = webSearch
       self.webContent = webContent
       self.codeExecution = codeExecution
@@ -568,6 +577,8 @@ public extension AnthropicClient {
       4096
     } else if modelId.contains("claude-opus-4-1") {
       32000
+    } else if modelId.contains("claude-opus-4-7") {
+      128_000
     } else {
       64000
     }

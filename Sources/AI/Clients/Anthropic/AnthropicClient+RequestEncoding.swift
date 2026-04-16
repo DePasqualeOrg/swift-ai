@@ -368,6 +368,9 @@ extension AnthropicClient {
       if case .enabled = thinking.type, let budgetTokens = thinking.budgetTokens {
         thinkingDict["budget_tokens"] = .int(budgetTokens)
       }
+      if let display = thinking.display {
+        thinkingDict["display"] = .string(display.rawValue)
+      }
       requestBody["thinking"] = .object(thinkingDict)
     }
     if let effort = params.effort {
