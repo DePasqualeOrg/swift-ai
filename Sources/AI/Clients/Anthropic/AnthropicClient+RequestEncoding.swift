@@ -333,8 +333,24 @@ extension AnthropicClient {
     ]
     let effectiveMaxTokens = params.maxTokens ?? Self.defaultMaxTokens(for: params.model)
     requestBody["max_tokens"] = .int(effectiveMaxTokens)
+    // Prompt caching: use a counter to stay within the 4-breakpoint limit.
+    // Priority order: system prompt, last tool, then top-level (conversation).
+    let maxCacheBreakpoints = 4
+    var cacheBreakpointsUsed = 0
+    func nextCacheControl() -> Value? {
+      guard let cacheControl = params.cacheControl, cacheBreakpointsUsed < maxCacheBreakpoints else { return nil }
+      cacheBreakpointsUsed += 1
+      return cacheControl.asValue
+    }
     if let systemPrompt = params.system, !systemPrompt.isEmpty {
-      requestBody["system"] = .string(systemPrompt)
+      var systemBlock: [String: Value] = [
+        "type": .string("text"),
+        "text": .string(systemPrompt),
+      ]
+      if let cc = nextCacheControl() {
+        systemBlock["cache_control"] = cc
+      }
+      requestBody["system"] = .array([.object(systemBlock)])
     }
     if let temperature = params.temperature {
       requestBody["temperature"] = .double(Double(temperature))
@@ -358,7 +374,7 @@ extension AnthropicClient {
       requestBody["output_config"] = .object(["effort": .string(effort.rawValue)])
     }
     if let tools = params.tools, !tools.isEmpty {
-      requestBody["tools"] = try .array(tools.compactMap { tool in
+      var toolsArray = try tools.compactMap { tool -> Value? in
         let toolData = try JSONEncoder().encode(tool)
         if let toolJson = try? JSONSerialization.jsonObject(with: toolData, options: []) {
           return try Value.fromAny(toolJson)
@@ -366,7 +382,14 @@ extension AnthropicClient {
           anthropicLogger.error("Failed to convert encoded tool to Value: \(String(describing: tool))")
           return nil
         }
-      })
+      }
+      if !toolsArray.isEmpty, case var .object(lastToolDict) = toolsArray[toolsArray.count - 1],
+         let cc = nextCacheControl()
+      {
+        lastToolDict["cache_control"] = cc
+        toolsArray[toolsArray.count - 1] = .object(lastToolDict)
+      }
+      requestBody["tools"] = .array(toolsArray)
     }
     if let toolChoice = params.toolChoice {
       var toolChoiceDict: [String: Value] = switch toolChoice {
@@ -386,6 +409,11 @@ extension AnthropicClient {
         metadataDict[key] = .string(value)
       }
       requestBody["metadata"] = .object(metadataDict)
+    }
+    // Top-level cache_control is a separate server-side mechanism that automatically
+    // applies to the last cacheable block. It does not count against the per-block limit.
+    if let cacheControl = params.cacheControl {
+      requestBody["cache_control"] = cacheControl.asValue
     }
     request.httpBody = try Value.object(requestBody).toData()
     return request

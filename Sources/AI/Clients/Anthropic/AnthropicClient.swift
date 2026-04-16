@@ -58,6 +58,36 @@ public final class AnthropicClient: APIClient, Sendable {
     }
   }
 
+  /// Cache control settings for prompt caching.
+  public struct CacheControl: Sendable {
+    /// Time-to-live for cached content.
+    public enum TTL: String, Sendable {
+      case fiveMinutes = "5m"
+      case oneHour = "1h"
+    }
+
+    /// The TTL for cache breakpoints. Defaults to 5 minutes when nil.
+    public var ttl: TTL?
+
+    /// Cache with default 5-minute TTL.
+    public static let ephemeral = CacheControl()
+
+    /// Cache with 1-hour TTL.
+    public static let oneHour = CacheControl(ttl: .oneHour)
+
+    public init(ttl: TTL? = nil) {
+      self.ttl = ttl
+    }
+
+    var asValue: Value {
+      var dict: [String: Value] = ["type": .string("ephemeral")]
+      if let ttl {
+        dict["ttl"] = .string(ttl.rawValue)
+      }
+      return .object(dict)
+    }
+  }
+
   /// Configuration options for Anthropic API requests.
   public struct Configuration: Sendable {
     /// Maximum tokens for extended thinking. Set to enable thinking mode.
@@ -77,6 +107,10 @@ public final class AnthropicClient: APIClient, Sendable {
 
     /// Enables code execution in a sandboxed environment.
     public var codeExecution: Bool
+
+    /// Cache control settings for prompt caching. Set to nil to disable caching.
+    /// Defaults to enabled with 5-minute TTL.
+    public var cacheControl: CacheControl?
 
     /// Returns the thinking config adjusted for the given maxTokens.
     /// Returns nil if thinking should be skipped (e.g., budget would fall below 1024).
@@ -107,12 +141,14 @@ public final class AnthropicClient: APIClient, Sendable {
     ///   - webSearch: Enable web search tool.
     ///   - webContent: Enable web content fetching.
     ///   - codeExecution: Enable sandboxed code execution.
-    public init(maxThinkingTokens: Int? = nil, effort: EffortLevel? = nil, webSearch: Bool = false, webContent: Bool = false, codeExecution: Bool = false) {
+    ///   - cacheControl: Cache control settings. Defaults to enabled. Set to nil to disable.
+    public init(maxThinkingTokens: Int? = nil, effort: EffortLevel? = nil, webSearch: Bool = false, webContent: Bool = false, codeExecution: Bool = false, cacheControl: CacheControl? = CacheControl()) {
       self.maxThinkingTokens = maxThinkingTokens
       self.effort = effort
       self.webSearch = webSearch
       self.webContent = webContent
       self.codeExecution = codeExecution
+      self.cacheControl = cacheControl
     }
   }
 
@@ -372,6 +408,7 @@ public extension AnthropicClient {
             temperature: adjustedTemperature,
             thinking: effectiveThinking,
             effort: configuration.effort,
+            cacheControl: configuration.cacheControl,
           )
           for tool in tools {
             if let schemaBuildErrorMessage = tool.schemaBuildErrorMessage {

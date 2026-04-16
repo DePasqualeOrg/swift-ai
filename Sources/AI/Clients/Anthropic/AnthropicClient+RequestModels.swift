@@ -204,6 +204,7 @@ extension AnthropicClient {
     let thinking: ThinkingConfig?
     let effort: EffortLevel?
     let disableParallelToolUse: Bool?
+    let cacheControl: CacheControl?
 
     init(
       model: String,
@@ -219,6 +220,7 @@ extension AnthropicClient {
       thinking: ThinkingConfig? = nil,
       effort: EffortLevel? = nil,
       disableParallelToolUse: Bool? = nil,
+      cacheControl: CacheControl? = nil,
     ) {
       self.model = model
       self.messages = messages
@@ -233,6 +235,7 @@ extension AnthropicClient {
       self.thinking = thinking
       self.effort = effort
       self.disableParallelToolUse = disableParallelToolUse
+      self.cacheControl = cacheControl
     }
   }
 
