@@ -933,7 +933,8 @@ struct AnthropicClientTests {
     ))
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
-    let system = try #require(body?["system"] as? String)
+    let systemBlocks = try #require(body?["system"] as? [[String: Any]])
+    let system = systemBlocks.compactMap { $0["text"] as? String }.joined(separator: "\n")
     #expect(system.contains("You are helpful"))
     #expect(system.contains("Be concise"))
 
@@ -1128,7 +1129,8 @@ struct AnthropicClientTests {
     ))
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
-    let system = try #require(body?["system"] as? String)
+    let systemBlocks = try #require(body?["system"] as? [[String: Any]])
+    let system = systemBlocks.compactMap { $0["text"] as? String }.joined(separator: "\n")
     #expect(system.contains("Execution output: 42"))
 
     let messages = try #require(body?["messages"] as? [[String: Any]])
@@ -1385,7 +1387,8 @@ struct AnthropicClientTests {
     ))
 
     let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
-    let system = try #require(body?["system"] as? String)
+    let systemBlocks = try #require(body?["system"] as? [[String: Any]])
+    let system = systemBlocks.compactMap { $0["text"] as? String }.joined(separator: "\n")
 
     #expect(system.contains("Base instructions"))
     #expect(system.contains("Follow the attached policy."))
