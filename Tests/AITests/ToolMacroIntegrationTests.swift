@@ -470,7 +470,7 @@ struct ToolMacroIntegrationTests {
       "limit": "not a number", // Wrong type - should throw, not silently use default
     ]
 
-    #expect(throws: ToolError.self) {
+    #expect(throws: ToolDispatchError.self) {
       _ = try SearchDocuments.parse(from: arguments)
     }
   }
@@ -493,10 +493,10 @@ struct ToolMacroIntegrationTests {
 
     let instance = try GenerateImage.parse(from: arguments)
     let result = try await instance.perform()
-    let content = result.toToolResult()
+    let output = result.toToolResult()
 
-    #expect(content.count == 1)
-    if case let .image(data, mimeType) = content[0] {
+    #expect(output.content.count == 1)
+    if case let .image(data, mimeType) = output.content[0] {
       #expect(mimeType == "image/png")
       #expect(!data.isEmpty)
     } else {
@@ -507,10 +507,12 @@ struct ToolMacroIntegrationTests {
   // MARK: - Result Types Derivation Tests
 
   @Test
-  func `String return type derives text resultTypes`() {
-    // GetWeather returns String, so resultTypes should be [.text]
+  func `String return type derives text and json resultTypes`() {
+    // GetWeather returns String. After the dual-channel landing in §3,
+    // String routes through PrimitiveToolOutput, which publishes both .text
+    // (display) and .json (structured channel via {"result": ...}).
     let tool = GetWeather.tool
-    #expect(tool.resultTypes == [.text])
+    #expect(tool.resultTypes == [.text, .json])
   }
 
   @Test
@@ -783,7 +785,7 @@ struct ToolMacroIntegrationTests {
         .string("query", description: "Second query"),
       ],
     ) { _ in
-      [.text("ok")]
+      ToolOutputResult(content: [.text("ok")])
     }
 
     let tools = Tools([invalidTool])
@@ -808,7 +810,7 @@ struct ToolMacroIntegrationTests {
   func `Parse throws error for missing required parameter`() {
     let arguments: [String: Value] = [:] // Missing required "city"
 
-    #expect(throws: ToolError.self) {
+    #expect(throws: ToolDispatchError.self) {
       _ = try GetWeather.parse(from: arguments)
     }
   }
@@ -819,7 +821,7 @@ struct ToolMacroIntegrationTests {
       "city": .int(123), // Should be string, not int
     ]
 
-    #expect(throws: ToolError.self) {
+    #expect(throws: ToolDispatchError.self) {
       _ = try GetWeather.parse(from: arguments)
     }
   }
@@ -831,11 +833,11 @@ struct ToolMacroIntegrationTests {
     do {
       _ = try GetWeather.parse(from: arguments)
       Issue.record("Expected error to be thrown")
-    } catch let error as ToolError {
+    } catch let error as ToolDispatchError {
       let description = error.errorDescription ?? ""
       #expect(description.contains("city"))
     } catch {
-      Issue.record("Expected ToolError, got \(type(of: error))")
+      Issue.record("Expected ToolDispatchError, got \(type(of: error))")
     }
   }
 
@@ -914,7 +916,7 @@ struct ToolMacroIntegrationTests {
       "payload": .string("not valid base64!!!"),
     ]
 
-    #expect(throws: ToolError.self) {
+    #expect(throws: ToolDispatchError.self) {
       _ = try ToolWithDateAndData.parse(from: arguments)
     }
   }
@@ -926,17 +928,17 @@ struct ToolMacroIntegrationTests {
     let arguments: [String: Value] = ["outputType": "audio"]
     let instance = try ToolWithAllOutputTypes.parse(from: arguments)
     let result = try await instance.perform()
-    let content = result.toToolResult()
+    let output = result.toToolResult()
 
-    #expect(content.count == 2)
+    #expect(output.content.count == 2)
 
-    if case let .text(text) = content[0] {
+    if case let .text(text) = output.content[0] {
       #expect(text == "Audio generated")
     } else {
       Issue.record("Expected text content first")
     }
 
-    if case let .audio(data, mimeType) = content[1] {
+    if case let .audio(data, mimeType) = output.content[1] {
       #expect(mimeType == "audio/wav")
       #expect(!data.isEmpty)
     } else {
@@ -949,11 +951,11 @@ struct ToolMacroIntegrationTests {
     let arguments: [String: Value] = ["outputType": "file"]
     let instance = try ToolWithAllOutputTypes.parse(from: arguments)
     let result = try await instance.perform()
-    let content = result.toToolResult()
+    let output = result.toToolResult()
 
-    #expect(content.count == 1)
+    #expect(output.content.count == 1)
 
-    if case let .file(data, mimeType, filename) = content[0] {
+    if case let .file(data, mimeType, filename) = output.content[0] {
       #expect(mimeType == "application/pdf")
       #expect(filename == "report.pdf")
       #expect(!data.isEmpty)
@@ -977,7 +979,7 @@ struct ToolMacroIntegrationTests {
         .boolean("verbose", description: "Enable verbose output", required: false),
         .array("tags", description: "Filter tags", items: .string),
       ],
-    ) { _ in [.text("Result")] }
+    ) { _ in ToolOutputResult(content: [.text("Result")]) }
 
     let properties = tool.rawInputSchema["properties"]?.objectValue
 
@@ -1033,7 +1035,7 @@ struct ToolMacroIntegrationTests {
         .integer("limit", title: "Result Limit", description: "Max results"),
         .number("threshold", description: "Without explicit title"),
       ],
-    ) { _ in [.text("Result")] }
+    ) { _ in ToolOutputResult(content: [.text("Result")]) }
 
     let properties = tool.rawInputSchema["properties"]?.objectValue
 
@@ -1067,7 +1069,7 @@ struct ToolMacroIntegrationTests {
       name: "custom_schema_tool",
       description: "Tool with custom schema",
       inputSchema: customSchema,
-    ) { _ in [.text("OK")] }
+    ) { _ in ToolOutputResult(content: [.text("OK")]) }
 
     // Schema should be used exactly as provided
     #expect(tool.rawInputSchema["type"]?.stringValue == "object")

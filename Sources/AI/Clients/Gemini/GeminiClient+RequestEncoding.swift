@@ -168,17 +168,27 @@ enum GeminiRequestEncoder {
     }
 
     if !tools.isEmpty {
-      let functionDeclarations = try tools.map { function in
+      let functionDeclarations = try tools.map { function -> [String: any Sendable] in
         if let schemaBuildErrorMessage = function.schemaBuildErrorMessage {
           throw AIError.invalidRequest(
             message: "Tool '\(function.name)' has an invalid input schema: \(schemaBuildErrorMessage)",
           )
         }
-        return [
+        var declaration: [String: any Sendable] = [
           "name": function.name,
           "description": function.description,
           "parametersJsonSchema": Value.toSendable(function.rawInputSchema),
-        ] as [String: any Sendable]
+        ]
+        if let outputSchema = function.outputSchema {
+          if let normalized = GeminiSchemaNormalizer.normalize(outputSchema) {
+            declaration["responseJsonSchema"] = normalized.toAny()
+          } else {
+            geminiLogger.warning(
+              "Tool '\(function.name)' outputSchema contains features not supported by Gemini's responseJsonSchema; omitting from declaration",
+            )
+          }
+        }
+        return declaration
       }
       toolsArray.append([
         "functionDeclarations": functionDeclarations,

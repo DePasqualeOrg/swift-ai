@@ -16,12 +16,14 @@ public extension MCP.Tool {
   ///
   /// - Parameter tool: The AI Tool to convert
   init(from tool: AI.Tool) throws {
-    let inputSchema = try AI.Tool.convertAIValueToMCPValue(.object(tool.validatedInputSchema()))
+    let inputSchema = try AI.Value.object(tool.validatedInputSchema()).mcpValue
+    let outputSchema = tool.outputSchema?.mcpValue
     self.init(
       name: tool.name,
       title: tool.title,
       description: tool.description,
       inputSchema: inputSchema,
+      outputSchema: outputSchema,
       annotations: .init(),
     )
   }
@@ -54,7 +56,7 @@ public extension AI.Tool {
   /// - Throws: `MCPConversionError` if the tool's schema can't be converted
   init(
     from tool: MCP.Tool,
-    executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content],
+    executor: @escaping @Sendable ([String: AI.Value]) async throws -> AI.ToolOutputResult,
   ) throws {
     try self.init(from: tool, name: tool.name, executor: executor)
   }
@@ -73,10 +75,11 @@ public extension AI.Tool {
     from tool: MCP.Tool,
     name: String,
     title: String? = nil,
-    executor: @escaping @Sendable ([String: AI.Value]) async throws -> [AI.ToolResult.Content],
+    executor: @escaping @Sendable ([String: AI.Value]) async throws -> AI.ToolOutputResult,
   ) throws {
     let parameters = try Self.extractParameters(from: tool.inputSchema)
-    let rawSchema = Self.convertMCPValueToJSONValue(tool.inputSchema).objectValue
+    let rawSchema = tool.inputSchema.aiValue.objectValue
+    let outputSchema = tool.outputSchema?.aiValue
 
     self.init(
       name: name,
@@ -84,6 +87,7 @@ public extension AI.Tool {
       title: title ?? tool.title ?? tool.annotations.title ?? tool.name,
       parameters: parameters,
       rawInputSchema: rawSchema,
+      outputSchema: outputSchema,
       execute: executor,
     )
   }
@@ -171,48 +175,6 @@ public extension AI.Tool {
         return .array(items: .string) // Default to string items
       case "object": return .object
       default: return .string // Treat unknown types as string
-    }
-  }
-
-  /// Converts an AI.Value to an MCP.Value for schema passthrough.
-  static func convertAIValueToMCPValue(_ value: AI.Value) -> MCP.Value {
-    switch value {
-      case let .string(s):
-        .string(s)
-      case let .int(i):
-        .int(i)
-      case let .double(d):
-        .double(d)
-      case let .bool(b):
-        .bool(b)
-      case .null:
-        .null
-      case let .array(arr):
-        .array(arr.map { convertAIValueToMCPValue($0) })
-      case let .object(obj):
-        .object(obj.mapValues { convertAIValueToMCPValue($0) })
-    }
-  }
-
-  /// Converts an MCP.Value to an AI.Value for schema passthrough.
-  private static func convertMCPValueToJSONValue(_ value: MCP.Value) -> AI.Value {
-    switch value {
-      case let .string(s):
-        .string(s)
-      case let .int(i):
-        .int(i)
-      case let .double(d):
-        .double(d)
-      case let .bool(b):
-        .bool(b)
-      case .null:
-        .null
-      case let .array(arr):
-        .array(arr.map { convertMCPValueToJSONValue($0) })
-      case let .object(obj):
-        .object(obj.mapValues { convertMCPValueToJSONValue($0) })
-      case let .data(mimeType, _):
-        .string(mimeType ?? "")
     }
   }
 }

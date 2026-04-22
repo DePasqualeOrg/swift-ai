@@ -262,10 +262,13 @@ public actor MCPToolProvider {
   /// - Returns: The tool result
   /// - Throws: `MCPToolProviderError.toolNotFound` if the tool is not provided by any server
   public func execute(_ toolCall: AI.ToolCall) async throws -> AI.ToolResult {
-    // Ensure server names are available for namespace-based resolution
-    if serverNames.isEmpty {
-      serverNames = await buildServerNames()
-    }
+    // Warming via `listTools()` here serves two roles: it gives
+    // `resolveClientIndex` server names to disambiguate, and it populates
+    // swift-mcp's internal `toolOutputSchemas` cache so `client.callTool`
+    // can validate `structuredContent` against the declared `outputSchema`.
+    // Without this, `execute(_:)` on a fresh provider (or after
+    // `clearCache()`) silently bypasses the structured-output contract.
+    try await refreshToolsIfNeeded(forceRefresh: false)
     let (index, originalName) = try resolveClientIndex(for: toolCall.name)
     let entry = entries[index]
 
@@ -454,57 +457,23 @@ public actor MCPToolProvider {
     throw MCPToolProviderError.toolNotFound(toolName)
   }
 
-  /// Error thrown when an MCP tool returns an error result.
-  struct MCPToolError: Error, LocalizedError {
-    let message: String
-    var errorDescription: String? {
-      message
-    }
+  /// Surfaces a remote MCP tool's `isError: true` result through the dispatcher's
+  /// `ToolError` branch so rich content (image/audio/resource blocks, JSON, the
+  /// structured channel) survives end-to-end. `Tools.call()` catches the throw
+  /// and emits a `ToolResult(content:, structuredContent:, isError: true)`.
+  struct MCPRemoteToolError: AI.ToolError {
+    let content: [AI.ToolResult.Content]
+    let structuredContent: AI.Value?
   }
 
-  static func convertResult(_ result: MCP.CallTool.Result) throws -> [AI.ToolResult.Content] {
+  static func convertResult(_ result: MCP.CallTool.Result) throws -> AI.ToolOutputResult {
+    let content = result.content.map { AI.ToolResult.Content($0) }
+    let structured = result.structuredContent?.aiValue
+
     if result.isError == true {
-      let errorText = result.content.compactMap { content -> String? in
-        if case let .text(text, _, _) = content {
-          return text
-        }
-        return nil
-      }.joined(separator: "\n")
-      throw MCPToolError(message: errorText.isEmpty ? "Unknown error" : errorText)
+      throw MCPRemoteToolError(content: content, structuredContent: structured)
     }
 
-    return result.content.map { content in
-      switch content {
-        case let .text(text, _, _):
-          return .text(text)
-        case let .image(data, mimeType, _, _):
-          if let imageData = Data(base64Encoded: data) {
-            return .image(imageData, mimeType: mimeType)
-          }
-          return .text("[Invalid image data]")
-        case let .audio(data, mimeType, _, _):
-          if let audioData = Data(base64Encoded: data) {
-            return .audio(audioData, mimeType: mimeType)
-          }
-          return .text("[Invalid audio data]")
-        case let .resource(resource, _, _):
-          if let text = resource.text {
-            return .text(text)
-          } else if let blob = resource.blob, let data = Data(base64Encoded: blob) {
-            let mimeType = resource.mimeType ?? "application/octet-stream"
-            if mimeType.hasPrefix("image/") {
-              return .image(data, mimeType: mimeType)
-            } else if mimeType.hasPrefix("audio/") {
-              return .audio(data, mimeType: mimeType)
-            } else {
-              return .file(data, mimeType: mimeType, filename: nil)
-            }
-          } else {
-            return .text("[Resource: \(resource.uri)]")
-          }
-        case let .resourceLink(link):
-          return .text("[Resource link: \(link.uri)]")
-      }
-    }
+    return AI.ToolOutputResult(content: content, structuredContent: structured)
   }
 }

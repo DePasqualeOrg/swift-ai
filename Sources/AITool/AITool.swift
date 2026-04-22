@@ -222,3 +222,29 @@ public extension Parameter {
 @attached(member, names: named(tool), named(parse), named(init), named(title), named(_perform))
 @attached(extension, conformances: ToolSpec, Sendable)
 public macro Tool() = #externalMacro(module: "AIMacros", type: "ToolMacro")
+
+/// Pairs with `@Schemable` to give a struct a stable wire encoding and
+/// `StructuredOutput` conformance. Synthesizes `encode(to:)` so optional
+/// properties emit as JSON `null` rather than absent, generates a
+/// `CodingKeys` enum if needed, and bridges `outputJSONSchema` to the
+/// `@Schemable` schema component.
+///
+/// ## Usage
+///
+/// ```swift
+/// @Schemable
+/// @StructuredOutput
+/// struct UserInfo: Sendable {
+///     let id: String
+///     let displayName: String?
+/// }
+/// ```
+@attached(member, names: named(encode), named(CodingKeys))
+@attached(extension, conformances: StructuredOutput, WrappableValue, names: named(outputJSONSchema), named(_structuredOutputSchema))
+public macro StructuredOutput() = #externalMacro(module: "AIMacros", type: "StructuredOutputMacro")
+
+/// Marker attribute that opts out of `@StructuredOutput`'s `encode(to:)`
+/// synthesis. The author is responsible for stable-shape correctness in
+/// the hand-rolled encoder.
+@attached(peer)
+public macro ManualEncoding() = #externalMacro(module: "AIMacros", type: "ManualEncodingMacro")

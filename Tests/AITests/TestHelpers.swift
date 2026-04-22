@@ -44,7 +44,7 @@ func makeTestTool(name: String, description: String, paramName: String) -> Tool 
         required: true,
       ),
     ],
-    execute: { _ in [.text("test result")] },
+    execute: { _ in ToolOutputResult(content: [.text("test result")]) },
   )
 }
 

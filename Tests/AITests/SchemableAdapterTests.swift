@@ -92,7 +92,7 @@ struct SchemableAdapterTests {
 
   @Test
   func `Parse surfaces ParseIssue as human-readable error`() {
-    #expect(throws: ToolError.self) {
+    #expect(throws: ToolDispatchError.self) {
       _ = try SchemableAdapter.parse(String.schema, from: .int(42), parameterName: "name")
     }
   }

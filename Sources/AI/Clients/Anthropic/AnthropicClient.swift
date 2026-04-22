@@ -22,7 +22,7 @@ import os.log
 /// ```
 @Observable
 public final class AnthropicClient: APIClient, Sendable {
-  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .image, .file]
+  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .json, .image, .file, .resource]
 
   private let baseURL = URL(string: "https://api.anthropic.com/v1")!
   let messagesEndpoint: URL

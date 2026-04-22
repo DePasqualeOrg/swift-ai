@@ -533,7 +533,7 @@ struct GeminiClientTests {
         ]),
         "required": .array([.string("grouped"), .string("payload")]),
       ],
-    ) { _ in [.text("OK")] }
+    ) { _ in ToolOutputResult(content: [.text("OK")]) }
 
     MockURLProtocol.setHandler(for: testId) { request in
       capturedBodyData = readRequestBody(from: request)
@@ -688,6 +688,121 @@ struct GeminiClientTests {
     #expect(contents[2]["role"] as? String == "user")
     let userParts = try #require(contents[2]["parts"] as? [[String: Any]])
     #expect(userParts.first?["text"] as? String == "What about tomorrow?")
+  }
+
+  @Test
+  func `Non object structuredContent is wrapped under result for Gemini`() async throws {
+    // Gemini's API requires `functionResponse.response` to be an object. The
+    // canonical paths (PrimitiveToolOutput, StructuredOutput, Dictionary)
+    // never produce a non-object structuredContent, but a custom ToolOutput
+    // conformer that puts a scalar or array directly in the structured channel
+    // would. The encoder defends with a `"result"` wrap and logs a warning;
+    // pinning the wire shape so a future refactor can't drop the fallback.
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(name: "compute", id: "call_1", parameters: [:])),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(
+            name: "compute",
+            id: "call_1",
+            content: [.text("42")],
+            structuredContent: .int(42),
+          )),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    let toolResultParts = try #require(contents[1]["parts"] as? [[String: Any]])
+    let functionResponse = try #require(toolResultParts.first?["functionResponse"] as? [String: Any])
+    let responsePayload = try #require(functionResponse["response"] as? [String: Any])
+    #expect(responsePayload["result"] as? Int == 42)
+    #expect(responsePayload["output"] == nil)
+    #expect(responsePayload["error"] == nil)
+  }
+
+  @Test
+  func `Object structuredContent passes through verbatim without result wrap`() async throws {
+    // Counterpart to the `result` wrap test: object payloads — the canonical
+    // shape from StructuredOutput / Dictionary tools — must pass through to
+    // `response` directly without the defensive `result` envelope.
+    var capturedBodyData: Data?
+    let testId = UUID().uuidString
+    let testEndpoint = try #require(URL(string: "https://mock.test/\(testId)"))
+
+    MockURLProtocol.setHandler(for: testId) { request in
+      capturedBodyData = readRequestBody(from: request)
+      let response = HTTPURLResponse(
+        url: request.url!,
+        statusCode: 200,
+        httpVersion: nil,
+        headerFields: ["Content-Type": "text/event-stream"],
+      )!
+      let sseData = """
+      data: {"candidates":[{"content":{"parts":[{"text":"Done"}],"role":"model"},"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":20,"candidatesTokenCount":3,"totalTokenCount":23}}
+
+      """
+      return (response, sseData.data(using: .utf8)!)
+    }
+    defer { MockURLProtocol.removeHandler(for: testId) }
+
+    let client = GeminiClient(session: makeMockSession(), modelsEndpoint: testEndpoint)
+    _ = try await consumeStream(client.streamText(
+      modelId: "gemini-2.5-flash",
+      systemPrompt: nil,
+      messages: [
+        Message(role: .assistant, content: [
+          .toolCall(ToolCall(name: "lookup", id: "call_1", parameters: [:])),
+        ]),
+        Message(role: .tool, content: [
+          .toolResult(ToolResult(
+            name: "lookup",
+            id: "call_1",
+            content: [.text("ok")],
+            structuredContent: .object(["score": .int(7), "label": .string("alpha")]),
+          )),
+        ]),
+      ],
+      maxTokens: 1024,
+      apiKey: "test-key",
+    ))
+
+    let body = try JSONSerialization.jsonObject(with: #require(capturedBodyData)) as? [String: Any]
+    let contents = try #require(body?["contents"] as? [[String: Any]])
+    let toolResultParts = try #require(contents[1]["parts"] as? [[String: Any]])
+    let functionResponse = try #require(toolResultParts.first?["functionResponse"] as? [String: Any])
+    let responsePayload = try #require(functionResponse["response"] as? [String: Any])
+    #expect(responsePayload["score"] as? Int == 7)
+    #expect(responsePayload["label"] as? String == "alpha")
+    #expect(responsePayload["result"] == nil)
   }
 
   @Test

@@ -193,6 +193,22 @@ public enum Value: Hashable, Sendable {
     return try JSONSerialization.data(withJSONObject: anyValue, options: [])
   }
 
+  /// Returns a compact JSON string representation of this value.
+  ///
+  /// Used by encoders that stringify `.json(value)` content blocks for
+  /// providers without a native structured channel (Anthropic, ChatCompletions,
+  /// Responses), and by the MCP boundary when emitting `.json` blocks as
+  /// `.text(stringified)`. Falls back to `stringRepresentationForJSON` if
+  /// `JSONEncoder` rejects a top-level scalar in older runtimes.
+  public var jsonString: String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+    if let data = try? encoder.encode(self), let str = String(data: data, encoding: .utf8) {
+      return str
+    }
+    return stringRepresentationForJSON
+  }
+
   /// Converts this Value to a Sendable Any value.
   public func toAny() -> any Sendable {
     switch self {

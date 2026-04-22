@@ -1,6 +1,9 @@
 // Copyright © Anthony DePasquale
 
 import Foundation
+import os.log
+
+private let toolsLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.local-intelligence", category: "Tools")
 
 /// Provides the current tool call ID to downstream code via a task-local value.
 ///
@@ -46,7 +49,7 @@ public struct Tool: Sendable {
   public let parameters: [Parameter]
 
   /// The closure that executes the tool with the given parameters.
-  public let execute: @Sendable ([String: Value]) async throws -> [ToolResult.Content]
+  public let execute: @Sendable ([String: Value]) async throws -> ToolOutputResult
 
   /// The types of values this tool may return.
   ///
@@ -73,6 +76,16 @@ public struct Tool: Sendable {
   /// Strict-mode assertion failures from `@Tool`'s `strictSchema: true` flag trap
   /// before `Tool` is ever constructed, so they never land here.
   let schemaBuildErrorMessage: String?
+
+  /// Optional JSON Schema describing the tool's structured output.
+  ///
+  /// Populated by the `@Tool` macro from a `StructuredOutput` / `PrimitiveToolOutput` /
+  /// `StructuredMetadataCarrier` return type, and copied across the MCP boundary.
+  /// Forwarded to Gemini as `functionDeclarations[i].responseJsonSchema`. Anthropic /
+  /// OpenAI Chat Completions / Responses don't accept per-tool output schemas and drop
+  /// the field silently. When non-nil, `Tools.call()` enforces the contract against
+  /// `structuredContent` after the tool returns.
+  public let outputSchema: Value?
 
   /// A parameter definition for a tool.
   public struct Parameter: Sendable {
@@ -258,8 +271,9 @@ public struct Tool: Sendable {
     parameters: [Parameter],
     resultTypes: Set<ToolResult.ValueType>? = nil,
     rawInputSchema: [String: Value]? = nil,
+    outputSchema: Value? = nil,
     schemaBuildErrorMessage: String? = nil,
-    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
+    execute: @escaping @Sendable ([String: Value]) async throws -> ToolOutputResult,
   ) {
     let builtSchema = rawInputSchema.map { BuiltSchema(schema: $0, errorMessage: nil) }
       ?? Self.buildSchema(from: parameters)
@@ -270,6 +284,7 @@ public struct Tool: Sendable {
     self.resultTypes = resultTypes
     self.rawInputSchema = builtSchema.schema
     self.schemaBuildErrorMessage = schemaBuildErrorMessage ?? builtSchema.errorMessage
+    self.outputSchema = outputSchema
     self.execute = execute
   }
 
@@ -290,8 +305,9 @@ public struct Tool: Sendable {
     title: String? = nil,
     parameters: [Parameter] = [],
     resultTypes: Set<ToolResult.ValueType>? = nil,
+    outputSchema: Value? = nil,
     schemaBuildErrorMessage: String? = nil,
-    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
+    execute: @escaping @Sendable ([String: Value]) async throws -> ToolOutputResult,
   ) {
     let builtSchema = Self.buildSchema(from: parameters)
     self.name = name
@@ -301,6 +317,7 @@ public struct Tool: Sendable {
     self.resultTypes = resultTypes
     rawInputSchema = builtSchema.schema
     self.schemaBuildErrorMessage = schemaBuildErrorMessage ?? builtSchema.errorMessage
+    self.outputSchema = outputSchema
     self.execute = execute
   }
 
@@ -312,8 +329,9 @@ public struct Tool: Sendable {
     title: String? = nil,
     inputSchema: [String: Value],
     resultTypes: Set<ToolResult.ValueType>? = nil,
+    outputSchema: Value? = nil,
     schemaBuildErrorMessage: String? = nil,
-    execute: @escaping @Sendable ([String: Value]) async throws -> [ToolResult.Content],
+    execute: @escaping @Sendable ([String: Value]) async throws -> ToolOutputResult,
   ) {
     self.name = name
     self.description = description
@@ -322,6 +340,7 @@ public struct Tool: Sendable {
     self.resultTypes = resultTypes
     rawInputSchema = inputSchema
     self.schemaBuildErrorMessage = schemaBuildErrorMessage
+    self.outputSchema = outputSchema
     self.execute = execute
   }
 
@@ -480,7 +499,7 @@ public struct Tools: Collection, Sendable {
     let startedAt = Date()
     if Task.isCancelled {
       return ToolExecutionResult(
-        result: .error("Tool execution aborted", name: toolCall.name, id: toolCall.id),
+        result: errorResult(message: "Tool execution aborted", toolCall: toolCall),
         startedAt: startedAt,
         completedAt: startedAt,
       )
@@ -489,7 +508,7 @@ public struct Tools: Collection, Sendable {
     guard let tool = self[toolCall.name] else {
       let completedAt = Date()
       return ToolExecutionResult(
-        result: .error("Unknown tool: \(toolCall.name)", name: toolCall.name, id: toolCall.id),
+        result: errorResult(message: "Unknown tool: \(toolCall.name)", toolCall: toolCall),
         startedAt: startedAt,
         completedAt: completedAt,
       )
@@ -503,7 +522,10 @@ public struct Tools: Collection, Sendable {
     } catch {
       let completedAt = Date()
       return ToolExecutionResult(
-        result: .error("Input validation error: \(error.localizedDescription)", name: toolCall.name, id: toolCall.id),
+        result: errorResult(
+          message: "Input validation error: \(error.localizedDescription)",
+          toolCall: toolCall,
+        ),
         startedAt: startedAt,
         completedAt: completedAt,
       )
@@ -511,30 +533,73 @@ public struct Tools: Collection, Sendable {
 
     // Execute tool, catching errors
     do {
-      let content = try await ToolCallContext.$currentId.withValue(toolCall.id) {
+      let output = try await ToolCallContext.$currentId.withValue(toolCall.id) {
         try await tool.execute(toolCall.parameters)
       }
       let completedAt = Date()
+      let validatedResult = validateOutput(
+        output: output,
+        tool: tool,
+        toolCall: toolCall,
+      )
       return ToolExecutionResult(
-        result: ToolResult(name: toolCall.name, id: toolCall.id, content: content),
+        result: validatedResult,
         startedAt: startedAt,
         completedAt: completedAt,
       )
     } catch is CancellationError {
       let completedAt = Date()
       return ToolExecutionResult(
-        result: .error("Tool execution aborted", name: toolCall.name, id: toolCall.id),
+        result: errorResult(message: "Tool execution aborted", toolCall: toolCall),
+        startedAt: startedAt,
+        completedAt: completedAt,
+      )
+    } catch let toolError as ToolError {
+      // Author-thrown rich error: preserve content and structured channel.
+      let completedAt = Date()
+      return ToolExecutionResult(
+        result: ToolResult(
+          name: toolCall.name,
+          id: toolCall.id,
+          content: toolError.content,
+          structuredContent: toolError.structuredContent,
+          isError: true,
+        ),
         startedAt: startedAt,
         completedAt: completedAt,
       )
     } catch {
       let completedAt = Date()
       return ToolExecutionResult(
-        result: .error(error.localizedDescription, name: toolCall.name, id: toolCall.id),
+        result: errorResult(message: errorMessage(error), toolCall: toolCall),
         startedAt: startedAt,
         completedAt: completedAt,
       )
     }
+  }
+
+  /// Single-`.text` error helper used by every dispatcher-internal failure
+  /// path (cancellation, unknown tool, input validation, plain throws). Author-
+  /// thrown `ToolError` conformers go through a separate branch in `call(_:)`
+  /// that preserves their multi-block content and structured channel.
+  private func errorResult(message: String, toolCall: ToolCall) -> ToolResult {
+    ToolResult(
+      name: toolCall.name,
+      id: toolCall.id,
+      content: [.text(message)],
+      isError: true,
+    )
+  }
+
+  /// `Error.localizedDescription` returns a locale-dependent NSError stub for
+  /// plain Swift errors ("The operation couldn't be completed …"). Falling
+  /// back to `String(describing:)` surfaces the type name and stored values,
+  /// which is what the agent actually wants. Mirrors swift-mcp's helper.
+  private func errorMessage(_ error: Error) -> String {
+    if error is LocalizedError {
+      return error.localizedDescription
+    }
+    return String(describing: error)
   }
 
   /// Calls multiple tools concurrently and returns execution results in order.
@@ -583,13 +648,71 @@ public struct Tools: Collection, Sendable {
     for (index, toolCall) in toolCalls.enumerated() where !collectedIndices.contains(index) {
       let timestamp = Date()
       results.append((index, ToolExecutionResult(
-        result: .error("Tool execution aborted", name: toolCall.name, id: toolCall.id),
+        result: errorResult(message: "Tool execution aborted", toolCall: toolCall),
         startedAt: timestamp,
         completedAt: timestamp,
       )))
     }
 
     return results.sorted { $0.0 < $1.0 }.map { $0.1 }
+  }
+
+  // MARK: - Output Validation
+
+  /// Validates a tool's `ToolOutputResult` against its declared `outputSchema`,
+  /// returning the final `ToolResult`. Producer bugs (missing structured payload
+  /// when one is required, or schema mismatch) surface as a synthetic
+  /// `isError: true` result with a distinctive `"Output validation error: ..."`
+  /// message and a paired `toolsLogger.error` log entry.
+  ///
+  /// Validation is skipped when `outputSchema == nil` (untyped tools). Errors
+  /// thrown from the tool body bypass this path entirely — they land in the
+  /// `catch` branch of `Tools.call()`, which constructs an `isError: true`
+  /// result that's surfaced unchanged.
+  private func validateOutput(
+    output: ToolOutputResult,
+    tool: Tool,
+    toolCall: ToolCall,
+  ) -> ToolResult {
+    guard let outputSchema = tool.outputSchema else {
+      return ToolResult(
+        name: toolCall.name,
+        id: toolCall.id,
+        content: output.content,
+        structuredContent: output.structuredContent,
+      )
+    }
+
+    guard let structuredContent = output.structuredContent else {
+      let reason = "has an output schema but no structured content was provided"
+      toolsLogger.error("Output validation error: tool '\(toolCall.name, privacy: .public)' \(reason, privacy: .public)")
+      return ToolResult(
+        name: toolCall.name,
+        id: toolCall.id,
+        content: [.text("Output validation error: Tool '\(toolCall.name)' \(reason)")],
+        isError: true,
+      )
+    }
+
+    do {
+      try validator.validate(structuredContent, against: outputSchema)
+    } catch {
+      let reason = error.localizedDescription
+      toolsLogger.error("Output validation error: tool '\(toolCall.name, privacy: .public)' \(reason, privacy: .public)")
+      return ToolResult(
+        name: toolCall.name,
+        id: toolCall.id,
+        content: [.text("Output validation error: Tool '\(toolCall.name)' \(reason)")],
+        isError: true,
+      )
+    }
+
+    return ToolResult(
+      name: toolCall.name,
+      id: toolCall.id,
+      content: output.content,
+      structuredContent: structuredContent,
+    )
   }
 
   // MARK: - Collection Conformance
@@ -709,9 +832,12 @@ public struct ToolResult: Hashable, Sendable {
   /// - `tools.compatible(with:)` filters tools based on client capabilities
   public enum ValueType: String, Sendable, Hashable, CaseIterable {
     case text
+    case json
     case image
     case audio
     case file
+    /// Covers all three resource cases: `.embeddedResource`, `.embeddedText`, `.resourceLink`.
+    case resource
   }
 
   /// The actual content returned by a tool, with associated data.
@@ -721,17 +847,37 @@ public struct ToolResult: Hashable, Sendable {
   /// Use `content.type` to get the corresponding `ValueType`.
   public enum Content: Sendable, Hashable {
     case text(String)
+    /// A JSON value to be displayed to the model in the tool result.
+    /// Distinct from `ToolResult.structuredContent`, which is the parallel
+    /// programmatic channel — `.json` blocks live in the model-facing wire and
+    /// reach text-stringifying providers as stringified JSON.
+    case json(Value)
     case image(Data, mimeType: String? = nil)
     case audio(Data, mimeType: String)
     case file(Data, mimeType: String, filename: String? = nil)
+    /// Inline resource bytes with a URI (e.g., generated PDFs, ZIPs, videos).
+    case embeddedResource(Data, uri: String, mimeType: String? = nil)
+    /// Inline resource text with a URI (e.g., generated markdown, CSV, code).
+    case embeddedText(String, uri: String, mimeType: String? = nil)
+    /// A URL reference the client may fetch lazily.
+    case resourceLink(
+      uri: String,
+      name: String,
+      title: String? = nil,
+      description: String? = nil,
+      mimeType: String? = nil,
+      size: Int? = nil,
+    )
 
     /// The `ValueType` of this content.
     public var type: ValueType {
       switch self {
         case .text: .text
+        case .json: .json
         case .image: .image
         case .audio: .audio
         case .file: .file
+        case .embeddedResource, .embeddedText, .resourceLink: .resource
       }
     }
 
@@ -740,6 +886,8 @@ public struct ToolResult: Hashable, Sendable {
       switch self {
         case let .text(content):
           return content
+        case let .json(value):
+          return value.jsonString
         case let .image(data, mimeType):
           let type = mimeType ?? "image"
           let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
@@ -751,12 +899,37 @@ public struct ToolResult: Hashable, Sendable {
           let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
           let name = filename.map { "\($0) " } ?? ""
           return "[Unsupported result: \(name)\(mimeType), \(size)]"
+        case let .embeddedResource(data, uri, mimeType):
+          let type = mimeType ?? "application/octet-stream"
+          let size = ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)
+          return "\(uri) (\(type), \(size))"
+        case let .embeddedText(text, uri, _):
+          return "\(uri):\n\(text)"
+        case let .resourceLink(uri, name, _, _, mimeType, size):
+          var details: [String] = []
+          if let mimeType { details.append(mimeType) }
+          if let size {
+            details.append(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))
+          }
+          if details.isEmpty {
+            return "\(name): \(uri)"
+          }
+          return "\(name): \(uri) (\(details.joined(separator: ", ")))"
       }
     }
   }
 
   /// The content items returned by the tool.
   public let content: [Content]
+
+  /// Programmatic structured-data channel, parallel to `content[]`.
+  ///
+  /// Mirrors swift-mcp's `CallTool.Result.structuredContent` and Gemini's
+  /// `functionResponse.response`. Invisible on text-stringifying providers
+  /// (Anthropic / Responses / ChatCompletions read `content[]`); becomes the
+  /// raw payload of `functionResponse.response` on Gemini; round-trips
+  /// losslessly through MCP.
+  public let structuredContent: Value?
 
   /// Whether the tool call ended in an error.
   /// When true, `content` typically contains error message(s).
@@ -768,11 +941,19 @@ public struct ToolResult: Hashable, Sendable {
   ///   - name: The name of the tool that was called.
   ///   - id: The unique identifier of the tool call.
   ///   - content: The content items returned by the tool.
+  ///   - structuredContent: Optional structured channel payload.
   ///   - isError: Whether the tool call ended in an error.
-  public init(name: String, id: String, content: [Content], isError: Bool? = nil) {
+  public init(
+    name: String,
+    id: String,
+    content: [Content],
+    structuredContent: Value? = nil,
+    isError: Bool? = nil,
+  ) {
     self.name = name
     self.id = id
     self.content = content
+    self.structuredContent = structuredContent
     self.isError = isError
   }
 
@@ -782,9 +963,22 @@ public struct ToolResult: Hashable, Sendable {
   ///   - name: The name of the tool that was called.
   ///   - id: The unique identifier of the tool call.
   ///   - content: The content item returned by the tool.
+  ///   - structuredContent: Optional structured channel payload.
   ///   - isError: Whether the tool call ended in an error.
-  public init(name: String, id: String, content: Content, isError: Bool? = nil) {
-    self.init(name: name, id: id, content: [content], isError: isError)
+  public init(
+    name: String,
+    id: String,
+    content: Content,
+    structuredContent: Value? = nil,
+    isError: Bool? = nil,
+  ) {
+    self.init(
+      name: name,
+      id: id,
+      content: [content],
+      structuredContent: structuredContent,
+      isError: isError,
+    )
   }
 
   /// Creates a text result.
@@ -796,17 +990,6 @@ public struct ToolResult: Hashable, Sendable {
   /// - Returns: A tool result containing text content.
   public static func text(_ text: String, name: String, id: String) -> ToolResult {
     ToolResult(name: name, id: id, content: [.text(text)])
-  }
-
-  /// Creates an error result.
-  ///
-  /// - Parameters:
-  ///   - message: The error message.
-  ///   - name: The name of the tool that was called.
-  ///   - id: The unique identifier of the tool call.
-  /// - Returns: A tool result marked as an error.
-  public static func error(_ message: String, name: String, id: String) -> ToolResult {
-    ToolResult(name: name, id: id, content: [.text(message)], isError: true)
   }
 }
 

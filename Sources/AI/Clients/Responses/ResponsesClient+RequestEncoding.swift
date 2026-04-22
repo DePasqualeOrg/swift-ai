@@ -312,69 +312,122 @@ extension ResponsesClient {
         return try message.content.compactMap { block -> [String: any Sendable]? in
           guard case let .toolResult(toolResult) = block else { return nil }
 
-          let resultOutput: any Sendable
-          if toolResult.isError == true {
-            let errorText = toolResult.content.compactMap { content -> String? in
-              if case let .text(text) = content { return text }
-              return nil
-            }.joined(separator: "\n")
-            let errorPayload: [String: String] = ["error": errorText.isEmpty ? "Unknown error" : errorText]
-            let errorData = try JSONSerialization.data(withJSONObject: errorPayload, options: [])
-            resultOutput = String(data: errorData, encoding: .utf8) ?? "{\"error\":\"Unknown error\"}"
-          } else {
-            var outputItems: [[String: any Sendable]] = []
-            var hasNonTextContent = false
+          let isError = toolResult.isError == true
+          var outputItems: [[String: any Sendable]] = []
+          var hasNonTextContent = false
 
-            for content in toolResult.content {
-              switch content {
-                case let .text(text):
-                  outputItems.append([
-                    "type": ContentType.inputText,
-                    "text": text,
-                  ])
-                case let .image(data, mimeType):
-                  hasNonTextContent = true
-                  let mediaType = mimeType ?? "image/png"
-                  let dataURL = "data:\(mediaType);base64,\(data.base64EncodedString())"
+          for content in toolResult.content {
+            switch content {
+              case let .text(text):
+                outputItems.append([
+                  "type": ContentType.inputText,
+                  "text": text,
+                ])
+              case let .image(data, mimeType):
+                hasNonTextContent = true
+                let mediaType = mimeType ?? "image/png"
+                let dataURL = "data:\(mediaType);base64,\(data.base64EncodedString())"
+                outputItems.append([
+                  "type": ContentType.inputImage,
+                  "detail": "auto",
+                  "image_url": dataURL,
+                ])
+              case let .audio(data, mimeType):
+                openAIResponsesLogger.warning("Tool '\(toolResult.name)' returned audio, which is not supported by Responses API. Using fallback text.")
+                outputItems.append([
+                  "type": ContentType.inputText,
+                  "text": ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription,
+                ])
+              case let .file(data, mimeType, filename):
+                hasNonTextContent = true
+                if mimeType.hasPrefix("image/") {
+                  let dataURL = "data:\(mimeType);base64,\(data.base64EncodedString())"
                   outputItems.append([
                     "type": ContentType.inputImage,
                     "detail": "auto",
                     "image_url": dataURL,
                   ])
-                case let .audio(data, mimeType):
-                  openAIResponsesLogger.warning("Tool '\(toolResult.name)' returned audio, which is not supported by Responses API. Using fallback text.")
+                } else {
+                  var fileItem: [String: any Sendable] = [
+                    "type": ContentType.inputFile,
+                    "file_data": data.base64EncodedString(),
+                  ]
+                  if let filename {
+                    fileItem["filename"] = filename
+                  }
+                  outputItems.append(fileItem)
+                }
+              case let .json(value):
+                outputItems.append([
+                  "type": ContentType.inputText,
+                  "text": value.jsonString,
+                ])
+              case let .embeddedResource(data, _, mimeType):
+                let inlineMime = mimeType ?? "application/octet-stream"
+                if inlineMime.hasPrefix("image/") {
+                  hasNonTextContent = true
+                  let dataURL = "data:\(inlineMime);base64,\(data.base64EncodedString())"
+                  outputItems.append([
+                    "type": ContentType.inputImage,
+                    "detail": "auto",
+                    "image_url": dataURL,
+                  ])
+                } else if inlineMime == "application/pdf" {
+                  hasNonTextContent = true
+                  outputItems.append([
+                    "type": ContentType.inputFile,
+                    "file_data": data.base64EncodedString(),
+                  ])
+                } else {
+                  // Audio, arbitrary MIME — text fallback (bytes lost; URI annotated).
                   outputItems.append([
                     "type": ContentType.inputText,
-                    "text": ToolResult.Content.audio(data, mimeType: mimeType).fallbackDescription,
+                    "text": content.fallbackDescription,
                   ])
-                case let .file(data, mimeType, filename):
+                }
+              case let .resourceLink(uri, _, _, _, _, _):
+                if isResponsesFetchableScheme(uri) {
                   hasNonTextContent = true
-                  if mimeType.hasPrefix("image/") {
-                    let dataURL = "data:\(mimeType);base64,\(data.base64EncodedString())"
-                    outputItems.append([
-                      "type": ContentType.inputImage,
-                      "detail": "auto",
-                      "image_url": dataURL,
-                    ])
-                  } else {
-                    var fileItem: [String: any Sendable] = [
-                      "type": ContentType.inputFile,
-                      "file_data": data.base64EncodedString(),
-                    ]
-                    if let filename {
-                      fileItem["filename"] = filename
-                    }
-                    outputItems.append(fileItem)
-                  }
-              }
+                  outputItems.append([
+                    "type": ContentType.inputFile,
+                    "file_url": uri,
+                  ])
+                } else {
+                  outputItems.append([
+                    "type": ContentType.inputText,
+                    "text": content.fallbackDescription,
+                  ])
+                }
+              case .embeddedText:
+                outputItems.append([
+                  "type": ContentType.inputText,
+                  "text": content.fallbackDescription,
+                ])
             }
+          }
 
-            if hasNonTextContent {
-              resultOutput = outputItems
-            } else {
-              let texts = outputItems.compactMap { $0["text"] as? String }
-              resultOutput = texts.joined(separator: "\n")
+          // Responses has no out-of-band `isError` field on `function_call_output`,
+          // so for errors with rich (non-text) content we prepend a `"Tool call failed:"`
+          // sentinel part to keep the failure signal distinguishable from a successful
+          // multi-part return. Pure-text errors keep today's `{"error": text}` JSON
+          // wrap so OpenAI's models recognize the failure.
+          let resultOutput: any Sendable
+          if isError, !hasNonTextContent {
+            let errorText = outputItems.compactMap { $0["text"] as? String }.joined(separator: "\n")
+            let errorPayload: [String: String] = ["error": errorText.isEmpty ? "Unknown error" : errorText]
+            let errorData = try JSONSerialization.data(withJSONObject: errorPayload, options: [])
+            resultOutput = String(data: errorData, encoding: .utf8) ?? "{\"error\":\"Unknown error\"}"
+          } else if hasNonTextContent {
+            if isError {
+              outputItems.insert([
+                "type": ContentType.inputText,
+                "text": "Tool call failed:",
+              ], at: 0)
             }
+            resultOutput = outputItems
+          } else {
+            let texts = outputItems.compactMap { $0["text"] as? String }
+            resultOutput = texts.joined(separator: "\n")
           }
 
           return [

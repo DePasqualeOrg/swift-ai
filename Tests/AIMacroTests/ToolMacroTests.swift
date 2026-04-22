@@ -358,30 +358,141 @@ final class ToolMacroTests: XCTestCase {
     )
   }
 
-  func testPerformMissingReturnTypeError() {
+  func testPerformWithVoidReturnNormalizesToVoidOutput() {
+    // Void-returning perform is normalized to AI.VoidOutput so the wire shape
+    // matches Optional<T>.none — see §C "VoidOutput for Void-returning tools".
     assertMacroExpansion(
       """
       @Tool
-      struct BadTool {
-          static let name = "bad_tool"
-          static let description = "Missing return"
+      struct PingTool {
+          static let name = "ping"
+          static let description = "Touch the server"
 
           func perform() async throws {
           }
       }
       """,
       expandedSource: """
-      struct BadTool {
-          static let name = "bad_tool"
-          static let description = "Missing return"
+      struct PingTool {
+          static let name = "ping"
+          static let description = "Touch the server"
 
           func perform() async throws {
           }
+
+          init() {
+          }
+
+          static var title: String {
+              name
+          }
+
+          func _perform() async throws -> AI.VoidOutput {
+              try await perform()
+              return AI.VoidOutput()
+          }
+
+          static var tool: AI.Tool {
+              let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
+                  parameters: []
+              )
+              return AI.Tool(
+                  name: name,
+                  description: description,
+                  title: title,
+                  inputSchema: _schemaBuild.schema,
+                  resultTypes: AI.VoidOutput.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: AI.VoidOutput.self),
+                  schemaBuildErrorMessage: _schemaBuild.errorMessage,
+                  execute: { parameters in
+                      let instance = try Self.parse(from: parameters)
+                      let output = try await instance._perform()
+                      return try output.toToolResult()
+                  }
+              )
+          }
+
+          static func parse(from arguments: [String: AI.Value]) throws -> Self {
+              Self()
+          }
+      }
+
+      extension PingTool: AI.ToolSpec, Sendable {
       }
       """,
-      diagnostics: [
-        DiagnosticSpec(message: "@Tool requires 'perform()' to return a value conforming to 'ToolOutput'", line: 6, column: 10),
-      ],
+      macros: testMacros,
+    )
+  }
+
+  func testResultTypesOverrideEmittedIntoGeneratedTool() {
+    // Per spec §A "grouped types" mitigation: a tool whose return type spans
+    // multiple wire kinds (e.g. `Media` covers `.image + .audio`) can narrow
+    // its declared types via `static let resultTypes`. The macro must emit
+    // that override into the generated `Tool` initializer in place of the
+    // type-level default; otherwise capability filtering (§D) over-reports
+    // the tool's modalities.
+    assertMacroExpansion(
+      """
+      @Tool
+      struct NarrowScreenshot {
+          static let name = "narrow_screenshot"
+          static let description = "Take a screenshot"
+          static let resultTypes: Set<AI.ToolResult.ValueType>? = [.image]
+
+          func perform() async throws -> AI.Media {
+              AI.Media(.image(Data(), mime: "image/png"))
+          }
+      }
+      """,
+      expandedSource: """
+      struct NarrowScreenshot {
+          static let name = "narrow_screenshot"
+          static let description = "Take a screenshot"
+          static let resultTypes: Set<AI.ToolResult.ValueType>? = [.image]
+
+          func perform() async throws -> AI.Media {
+              AI.Media(.image(Data(), mime: "image/png"))
+          }
+
+          init() {
+          }
+
+          static var title: String {
+              name
+          }
+
+          func _perform() async throws -> AI.Media {
+              try await perform()
+          }
+
+          static var tool: AI.Tool {
+              let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
+                  parameters: []
+              )
+              return AI.Tool(
+                  name: name,
+                  description: description,
+                  title: title,
+                  inputSchema: _schemaBuild.schema,
+                  resultTypes: [.image],
+                  outputSchema: AI.AISchema.outputSchema(for: AI.Media.self),
+                  schemaBuildErrorMessage: _schemaBuild.errorMessage,
+                  execute: { parameters in
+                      let instance = try Self.parse(from: parameters)
+                      let output = try await instance._perform()
+                      return try output.toToolResult()
+                  }
+              )
+          }
+
+          static func parse(from arguments: [String: AI.Value]) throws -> Self {
+              Self()
+          }
+      }
+
+      extension NarrowScreenshot: AI.ToolSpec, Sendable {
+      }
+      """,
       macros: testMacros,
     )
   }
@@ -465,11 +576,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -569,11 +681,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -633,11 +746,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -697,11 +811,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -761,11 +876,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -828,11 +944,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -959,11 +1076,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -1050,11 +1168,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -1145,11 +1264,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -1282,11 +1402,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -1295,7 +1416,7 @@ final class ToolMacroTests: XCTestCase {
               var _instance = Self()
               let _args = arguments
               guard let _messageValue = _args["message"] else {
-                  throw ToolError.missingRequiredParameter("message")
+                  throw ToolDispatchError.missingRequiredParameter("message")
               }
               _instance.message = try AITool.ToolMacroSupport.parseParameter(String.schema, from: _messageValue, parameterName: "message")
               return _instance
@@ -1375,11 +1496,12 @@ final class ToolMacroTests: XCTestCase {
                   title: title,
                   inputSchema: _schemaBuild.schema,
                   resultTypes: String.resultTypes,
+                  outputSchema: AI.AISchema.outputSchema(for: String.self),
                   schemaBuildErrorMessage: _schemaBuild.errorMessage,
                   execute: { parameters in
                       let instance = try Self.parse(from: parameters)
                       let output = try await instance._perform()
-                      return output.toToolResult()
+                      return try output.toToolResult()
                   }
               )
           }
@@ -1388,7 +1510,7 @@ final class ToolMacroTests: XCTestCase {
               var _instance = Self()
               let _args = arguments
               guard let _queryValue = _args["query"] else {
-                  throw ToolError.missingRequiredParameter("query")
+                  throw ToolDispatchError.missingRequiredParameter("query")
               }
               _instance.query = try AITool.ToolMacroSupport.parseParameter(String.schema, from: _queryValue, parameterName: "query")
               return _instance

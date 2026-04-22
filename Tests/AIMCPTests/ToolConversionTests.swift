@@ -26,7 +26,7 @@ struct ToolConversionTests {
           required: false,
         ),
       ],
-      execute: { _ in [.text("Sunny")] },
+      execute: { _ in AI.ToolOutputResult(content: [.text("Sunny")]) },
     )
 
     let tool = try MCP.Tool(from: aiTool)
@@ -87,7 +87,7 @@ struct ToolConversionTests {
     )
 
     let aiTool = try AI.Tool(from: tool) { params in
-      [.text("Results for: \(params["query"]?.stringRepresentation ?? "")")]
+      AI.ToolOutputResult(content: [.text("Results for: \(params["query"]?.stringRepresentation ?? "")")])
     }
 
     #expect(aiTool.name == "search")
@@ -119,7 +119,7 @@ struct ToolConversionTests {
         AI.Tool.Parameter(name: "int", title: "Int", type: .integer, description: "", required: true),
         AI.Tool.Parameter(name: "bool", title: "Bool", type: .boolean, description: "", required: true),
       ],
-      execute: { _ in [.text("ok")] },
+      execute: { _ in AI.ToolOutputResult(content: [.text("ok")]) },
     )
 
     let tool = try MCP.Tool(from: aiTool)
@@ -149,8 +149,8 @@ struct ToolConversionTests {
   @Test
   func `Batch conversion of AI.Tools to MCP.Tools`() throws {
     let aiTools = [
-      AI.Tool(name: "func1", description: "First", title: "Func 1", parameters: [], execute: { _ in [.text("1")] }),
-      AI.Tool(name: "func2", description: "Second", title: "Func 2", parameters: [], execute: { _ in [.text("2")] }),
+      AI.Tool(name: "func1", description: "First", title: "Func 1", parameters: [], execute: { _ in AI.ToolOutputResult(content: [.text("1")]) }),
+      AI.Tool(name: "func2", description: "Second", title: "Func 2", parameters: [], execute: { _ in AI.ToolOutputResult(content: [.text("2")]) }),
     ]
 
     let tools = try aiTools.mcpTools()
@@ -168,11 +168,132 @@ struct ToolConversionTests {
         AI.Tool.Parameter(name: "query", title: "Query", type: .string, description: "", required: true),
         AI.Tool.Parameter(name: "query", title: "Query Again", type: .string, description: "", required: true),
       ],
-      execute: { _ in [.text("ok")] },
+      execute: { _ in AI.ToolOutputResult(content: [.text("ok")]) },
     )
 
     #expect(throws: AIError.self) {
       _ = try MCP.Tool(from: aiTool)
     }
+  }
+
+  // MARK: - outputSchema round-trip across the MCP boundary (§H)
+
+  @Test
+  func `AI.Tool to MCP.Tool carries outputSchema across the boundary`() throws {
+    // Schemas are JSON-shaped and never contain MCP-only .data, so the
+    // round-trip is byte-equal. Pinning so a future refactor that drops
+    // outputSchema from the conversion path can't slip through CI.
+    let outputSchema: AI.Value = .object([
+      "type": .string("object"),
+      "properties": .object([
+        "score": .object(["type": .string("integer")]),
+        "label": .object(["type": .string("string")]),
+      ]),
+      "required": .array([.string("score"), .string("label")]),
+    ])
+    let aiTool = AI.Tool(
+      name: "rate",
+      description: "Rate something",
+      parameters: [],
+      outputSchema: outputSchema,
+      execute: { _ in AI.ToolOutputResult(content: [.text("ok")]) },
+    )
+
+    let mcpTool = try MCP.Tool(from: aiTool)
+    #expect(mcpTool.outputSchema != nil)
+    #expect(mcpTool.outputSchema == outputSchema.mcpValue)
+  }
+
+  @Test
+  func `MCP.Tool to AI.Tool carries outputSchema across the boundary`() throws {
+    let mcpOutputSchema: MCP.Value = .object([
+      "type": .string("object"),
+      "properties": .object([
+        "uri": .object(["type": .string("string")]),
+        "size": .object(["type": .string("integer")]),
+      ]),
+      "required": .array([.string("uri")]),
+    ])
+    let mcpTool = MCP.Tool(
+      name: "fetch",
+      description: "Fetch a resource",
+      inputSchema: .object([
+        "type": .string("object"),
+        "properties": .object([:]),
+      ]),
+      outputSchema: mcpOutputSchema,
+    )
+
+    let aiTool = try AI.Tool(from: mcpTool) { _ in
+      AI.ToolOutputResult(content: [.text("ok")])
+    }
+    #expect(aiTool.outputSchema != nil)
+    #expect(aiTool.outputSchema == mcpOutputSchema.aiValue)
+  }
+
+  @Test
+  func `outputSchema survives an AI to MCP to AI round-trip byte-equal`() throws {
+    // Spec §10 calls for the byte-equal round-trip pin: schemas are JSON-shaped
+    // and never carry MCP's binary-only `.data`, so a full AI → MCP → AI loop
+    // must recover the original schema verbatim. Locking it in so a future
+    // converter change that lossily collapses (e.g.) integer/number can't
+    // silently degrade tool-result validation.
+    let outputSchema: AI.Value = .object([
+      "type": .string("object"),
+      "properties": .object([
+        "score": .object(["type": .string("integer"), "minimum": .int(0)]),
+        "label": .object(["type": .string("string")]),
+        "tags": .object([
+          "type": .string("array"),
+          "items": .object(["type": .string("string")]),
+        ]),
+        "nullable": .object(["type": .array([.string("string"), .string("null")])]),
+      ]),
+      "required": .array([.string("score"), .string("label")]),
+      "additionalProperties": .bool(false),
+    ])
+    let aiTool = AI.Tool(
+      name: "rate",
+      description: "Rate something",
+      parameters: [],
+      outputSchema: outputSchema,
+      execute: { _ in AI.ToolOutputResult(content: [.text("ok")]) },
+    )
+    let mcpTool = try MCP.Tool(from: aiTool)
+    let roundTripped = try AI.Tool(from: mcpTool) { _ in
+      AI.ToolOutputResult(content: [.text("ok")])
+    }
+    #expect(roundTripped.outputSchema == outputSchema)
+  }
+
+  @Test
+  func `outputSchema survives an MCP to AI to MCP round-trip byte-equal`() throws {
+    let mcpOutputSchema: MCP.Value = .object([
+      "type": .string("object"),
+      "properties": .object([
+        "uri": .object(["type": .string("string"), "format": .string("uri")]),
+        "size": .object(["type": .string("integer")]),
+        "tags": .object([
+          "type": .string("array"),
+          "items": .object(["type": .string("string")]),
+        ]),
+      ]),
+      "required": .array([.string("uri")]),
+      "additionalProperties": .bool(false),
+    ])
+    let mcpTool = MCP.Tool(
+      name: "fetch",
+      description: "Fetch a resource",
+      inputSchema: .object([
+        "type": .string("object"),
+        "properties": .object([:]),
+      ]),
+      outputSchema: mcpOutputSchema,
+    )
+    let aiTool = try AI.Tool(from: mcpTool) { _ in
+      AI.ToolOutputResult(content: [.text("ok")])
+    }
+    let roundTripped = try MCP.Tool(from: aiTool)
+    #expect(roundTripped.outputSchema == mcpOutputSchema)
   }
 }

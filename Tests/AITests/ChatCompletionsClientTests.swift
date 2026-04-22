@@ -110,7 +110,7 @@ struct ChatCompletionsClientTests {
       ],
       schemaBuildErrorMessage: "Strict mode requires all properties to be required.",
     ) { _ in
-      [.text("ok")]
+      ToolOutputResult(content: [.text("ok")])
     }
 
     await #expect(throws: AIError.self) {
@@ -139,7 +139,7 @@ struct ChatCompletionsClientTests {
         .string("query", description: "Second query"),
       ],
     ) { _ in
-      [.text("ok")]
+      ToolOutputResult(content: [.text("ok")])
     }
 
     await #expect(throws: AIError.self) {

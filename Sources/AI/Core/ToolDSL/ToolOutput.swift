@@ -2,6 +2,25 @@
 
 import Foundation
 
+/// The dual-channel return value of `ToolOutput.toToolResult()`.
+///
+/// `content` is the model-facing wire — what the LLM sees as part of its input.
+/// `structuredContent` is the parallel programmatic channel that becomes
+/// `functionResponse.response` on Gemini and round-trips through MCP's
+/// `CallTool.Result.structuredContent`. Text-stringifying providers
+/// (Anthropic / Responses / ChatCompletions) read `content[]` only.
+public struct ToolOutputResult: Sendable {
+  /// The content blocks the model sees.
+  public let content: [ToolResult.Content]
+  /// Optional programmatic structured channel.
+  public let structuredContent: Value?
+
+  public init(content: [ToolResult.Content], structuredContent: Value? = nil) {
+    self.content = content
+    self.structuredContent = structuredContent
+  }
+}
+
 /// A type that can be returned from a tool's `perform()` method.
 ///
 /// Each conforming type declares what result types it produces via `resultTypes`.
@@ -9,10 +28,19 @@ import Foundation
 /// automatically sets `Tool.resultTypes` based on the `perform()` return type,
 /// eliminating the possibility of mismatched declarations.
 ///
-/// Built-in conformances:
-/// - `String` → `[.text]`
-/// - `ImageResult` → `[.image]`
-/// - `AudioResult` → `[.audio]`
+/// Built-in conformances (see also `PrimitiveToolOutput`, `StructuredOutput`,
+/// `Asset`, `Media`):
+/// - `String`, `Int`, `Double`, `Bool`, `Date`, `Array<WrappableValue>`,
+///   `Optional<WrappableValue>` → `[.text, .json]` (via `PrimitiveToolOutput`,
+///   wrapped under `"result"` in `structuredContent`)
+/// - `Dictionary<String, WrappableValue>` → `[.text, .json]` (unwrapped
+///   top-level object in `structuredContent`)
+/// - `Void` / `VoidOutput` → `[.text, .json]` (`{"result": null}`)
+/// - `@StructuredOutput` struct → `[.text, .json]` (unwrapped struct shape)
+/// - `ImageResult` → `[.image]`; `ImageWithMetadata<T>` → `[.text, .json, .image]`
+/// - `AudioResult` → `[.audio]`; `AudioWithMetadata<T>` → `[.text, .json, .audio]`
+/// - `Media` → `[.image, .audio]`; `MediaWithMetadata<T>` → `[.text, .json, .image, .audio]`
+/// - `Asset` → `[.resource]`; `AssetWithMetadata<T>` → `[.text, .json, .resource]`
 /// - `FileResult` → `[.file]`
 /// - `MultiContent` → `nil` (contents determined at runtime)
 ///
@@ -32,21 +60,15 @@ public protocol ToolOutput: Sendable {
   /// are determined at runtime.
   static var resultTypes: Set<ToolResult.ValueType>? { get }
 
-  /// Convert to `ToolResult.Content` for the response.
-  func toToolResult() -> [ToolResult.Content]
+  /// Convert to the dual-channel `ToolOutputResult` for the response.
+  /// - Throws: On encoding failure - the dispatcher catches and surfaces as `isError`.
+  func toToolResult() throws -> ToolOutputResult
 }
 
-// MARK: - String Conformance
-
-extension String: ToolOutput {
-  public static var resultTypes: Set<ToolResult.ValueType>? {
-    [.text]
-  }
-
-  public func toToolResult() -> [ToolResult.Content] {
-    [.text(self)]
-  }
-}
+// `String` conforms to `ToolOutput` transitively through `PrimitiveToolOutput`
+// (see `PrimitiveToolOutput.swift`). A tool returning `String` emits
+// `content = [.text(value)]` *and* `structuredContent = {"result": value}` —
+// both display and wire channels populated.
 
 // MARK: - Image Output
 
@@ -91,8 +113,8 @@ public struct ImageResult: ToolOutput, Sendable {
     self.init(data: jpegData, mimeType: "image/jpeg")
   }
 
-  public func toToolResult() -> [ToolResult.Content] {
-    [.image(data, mimeType: mimeType)]
+  public func toToolResult() -> ToolOutputResult {
+    ToolOutputResult(content: [.image(data, mimeType: mimeType)])
   }
 }
 
@@ -127,8 +149,8 @@ public struct AudioResult: ToolOutput, Sendable {
     self.mimeType = mimeType
   }
 
-  public func toToolResult() -> [ToolResult.Content] {
-    [.audio(data, mimeType: mimeType)]
+  public func toToolResult() -> ToolOutputResult {
+    ToolOutputResult(content: [.audio(data, mimeType: mimeType)])
   }
 }
 
@@ -168,8 +190,8 @@ public struct FileResult: ToolOutput, Sendable {
     self.filename = filename
   }
 
-  public func toToolResult() -> [ToolResult.Content] {
-    [.file(data, mimeType: mimeType, filename: filename)]
+  public func toToolResult() -> ToolOutputResult {
+    ToolOutputResult(content: [.file(data, mimeType: mimeType, filename: filename)])
   }
 }
 
@@ -186,6 +208,12 @@ public struct FileResult: ToolOutput, Sendable {
 ///     ])
 /// }
 /// ```
+///
+/// `MultiContent` populates `content[]` only — `structuredContent` is always
+/// `nil`. Authors who need the structured channel (Gemini's
+/// `functionResponse.response`, MCP's `structuredContent`) should construct
+/// a `ToolOutputResult(content:, structuredContent:)` directly from a custom
+/// `ToolOutput` conformer.
 public struct MultiContent: ToolOutput, Sendable {
   /// Returns `nil` because the actual content types are determined at runtime.
   public static var resultTypes: Set<ToolResult.ValueType>? {
@@ -201,7 +229,7 @@ public struct MultiContent: ToolOutput, Sendable {
     self.items = items
   }
 
-  public func toToolResult() -> [ToolResult.Content] {
-    items
+  public func toToolResult() -> ToolOutputResult {
+    ToolOutputResult(content: items)
   }
 }

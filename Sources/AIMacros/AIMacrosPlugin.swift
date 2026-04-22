@@ -7,5 +7,7 @@ import SwiftSyntaxMacros
 struct AIMacrosPlugin: CompilerPlugin {
   let providingMacros: [Macro.Type] = [
     ToolMacro.self,
+    StructuredOutputMacro.self,
+    ManualEncodingMacro.self,
   ]
 }

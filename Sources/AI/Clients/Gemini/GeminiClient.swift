@@ -22,7 +22,7 @@ import os.log
 /// ```
 @Observable
 public final class GeminiClient: APIClient, Sendable {
-  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .image, .audio, .file]
+  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .json, .image, .audio, .file, .resource]
 
   private static let defaultModelsEndpoint = URL(string: "https://generativelanguage.googleapis.com/v1beta/models")!
 
@@ -256,54 +256,113 @@ public final class GeminiClient: APIClient, Sendable {
             "id": toolResult.id,
           ]
 
-          if toolResult.isError == true {
-            let errorText = toolResult.content.compactMap { content -> String? in
-              if case let .text(text) = content { return text }
-              return nil
-            }.joined(separator: "\n")
-            functionResponse["response"] = ["error": errorText.isEmpty ? "Unknown error" : errorText] as [String: any Sendable]
-          } else {
-            var inlineDataParts: [[String: any Sendable]] = []
-            var textOutputs: [String] = []
+          // Inline data and file-data parts ride alongside `response` regardless
+          // of whether the structured channel is populated. Text and `.json`
+          // blocks in `content[]` are not visible to Gemini in the structured
+          // path — `FunctionResponsePart` carries no text slot.
+          var inlineDataParts: [[String: any Sendable]] = []
+          var textOutputs: [String] = []
 
-            for content in toolResult.content {
-              switch content {
-                case let .text(text):
-                  textOutputs.append(text)
-                case let .image(data, mimeType):
-                  let mediaType = mimeType ?? "image/png"
+          for content in toolResult.content {
+            switch content {
+              case let .text(text):
+                textOutputs.append(text)
+              case let .json(value):
+                textOutputs.append(value.jsonString)
+              case let .image(data, mimeType):
+                let mediaType = mimeType ?? "image/png"
+                inlineDataParts.append([
+                  "inlineData": [
+                    "mimeType": mediaType,
+                    "data": data.base64EncodedString(),
+                  ] as [String: any Sendable],
+                ])
+              case let .audio(data, mimeType):
+                inlineDataParts.append([
+                  "inlineData": [
+                    "mimeType": mimeType,
+                    "data": data.base64EncodedString(),
+                  ] as [String: any Sendable],
+                ])
+              case let .file(data, mimeType, _):
+                inlineDataParts.append([
+                  "inlineData": [
+                    "mimeType": mimeType,
+                    "data": data.base64EncodedString(),
+                  ] as [String: any Sendable],
+                ])
+              case let .embeddedResource(data, _, mimeType):
+                let inlineMime = mimeType ?? "application/octet-stream"
+                if inlineMime.hasPrefix("image/")
+                  || inlineMime.hasPrefix("audio/")
+                  || inlineMime == "application/pdf"
+                {
                   inlineDataParts.append([
                     "inlineData": [
-                      "mimeType": mediaType,
+                      "mimeType": inlineMime,
                       "data": data.base64EncodedString(),
                     ] as [String: any Sendable],
                   ])
-                case let .audio(data, mimeType):
+                } else {
+                  // No inline slot for arbitrary MIMEs; bytes lost, URI annotated.
+                  textOutputs.append(content.fallbackDescription)
+                }
+              case let .resourceLink(uri, _, _, _, mimeType, _):
+                if isGeminiFetchableScheme(uri) {
+                  var fileDataDict: [String: any Sendable] = ["fileUri": uri]
+                  if let mimeType { fileDataDict["mimeType"] = mimeType }
                   inlineDataParts.append([
-                    "inlineData": [
-                      "mimeType": mimeType,
-                      "data": data.base64EncodedString(),
-                    ] as [String: any Sendable],
+                    "fileData": fileDataDict,
                   ])
-                case let .file(data, mimeType, _):
-                  inlineDataParts.append([
-                    "inlineData": [
-                      "mimeType": mimeType,
-                      "data": data.base64EncodedString(),
-                    ] as [String: any Sendable],
-                  ])
-              }
+                } else {
+                  textOutputs.append(content.fallbackDescription)
+                }
+              case .embeddedText:
+                textOutputs.append(content.fallbackDescription)
             }
+          }
 
+          if toolResult.isError == true {
+            // Gemini's `functionResponse` has no `isError` field, so the failure
+            // signal has to ride inside `response`. Wrap structured errors under
+            // `"error"` to mirror the text-only `{"error": text}` shape and
+            // preserve a stable failure marker the model can recognize.
+            if let structured = toolResult.structuredContent {
+              functionResponse["response"] = [
+                "error": structured.toAny(),
+              ] as [String: any Sendable]
+            } else {
+              let errorText = textOutputs.joined(separator: "\n")
+              functionResponse["response"] = [
+                "error": errorText.isEmpty ? "Unknown error" : errorText,
+              ] as [String: any Sendable]
+            }
+          } else if let structured = toolResult.structuredContent {
+            // Structured channel wins: raw pass-through, not `{"output": ...}`,
+            // not Vercel's `{name, content: ...}`. Matches `responseJsonSchema`.
+            // Defensive fallback: Gemini's API requires `response` to be an
+            // object, so a hand-rolled non-object payload gets wrapped under
+            // `"result"`. Canonical paths (`PrimitiveToolOutput` → wrapped under
+            // `result`; `StructuredOutput`/`Dictionary` → object) never trigger
+            // this branch — only custom `ToolOutput` conformers that put a
+            // scalar or array directly in `structuredContent` do, and they
+            // diverge from the schema they declared.
+            if case .object = structured {
+              functionResponse["response"] = structured.toAny()
+            } else {
+              geminiLogger.warning("Tool '\(toolResult.name)' returned non-object structuredContent; wrapping under 'result' so Gemini's API accepts it. The wire shape diverges from the declared outputSchema — wrap the payload in a struct or dictionary on the author side.")
+              functionResponse["response"] = ["result": structured.toAny()] as [String: any Sendable]
+            }
+          } else {
             let joinedText = textOutputs.joined(separator: "\n")
             if !joinedText.isEmpty {
               functionResponse["response"] = ["output": joinedText] as [String: any Sendable]
             } else {
               functionResponse["response"] = [:] as [String: any Sendable]
             }
-            if !inlineDataParts.isEmpty {
-              functionResponse["parts"] = inlineDataParts
-            }
+          }
+          if !inlineDataParts.isEmpty {
+            functionResponse["parts"] = inlineDataParts
           }
 
           parts.append(["functionResponse": functionResponse])
@@ -1044,7 +1103,15 @@ extension GeminiClient {
   }
 }
 
-private let geminiLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.local-intelligence", category: "GeminiClient")
+let geminiLogger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "com.local-intelligence", category: "GeminiClient")
+
+/// True when `uri` uses a scheme Gemini can fetch on the tool-result wire
+/// (`https://`, `http://`, `gs://`). Opaque schemes (`mcp+resource://`, custom
+/// server schemes) stringify on every provider — Gemini can't fetch them.
+func isGeminiFetchableScheme(_ uri: String) -> Bool {
+  let lower = uri.lowercased()
+  return lower.hasPrefix("https://") || lower.hasPrefix("http://") || lower.hasPrefix("gs://")
+}
 
 // MARK: - Configuration
 

@@ -106,7 +106,7 @@ struct ResponsesClientTests {
       ],
       schemaBuildErrorMessage: "Strict mode requires all properties to be required.",
     ) { _ in
-      [.text("ok")]
+      ToolOutputResult(content: [.text("ok")])
     }
 
     await #expect(throws: AIError.self) {

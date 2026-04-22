@@ -23,7 +23,7 @@ import os.log
 /// ```
 @Observable
 public final class ResponsesClient: APIClient, Sendable {
-  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .image, .file]
+  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .json, .image, .file, .resource]
 
   /// Predefined API endpoints for the Responses API.
   public enum Endpoint {

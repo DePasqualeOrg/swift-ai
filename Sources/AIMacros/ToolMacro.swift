@@ -70,12 +70,23 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       """)
     }
 
-    // Generate _perform() bridging to the user's perform()
-    members.append("""
-    \(raw: accessPrefix)func _perform() async throws -> \(raw: toolInfo.outputType) {
-        try await perform()
+    // Generate _perform() bridging to the user's perform().
+    // For Void returns, run the handler, discard the empty tuple, and emit the
+    // VoidOutput sentinel so the wire shape matches Optional<T>.none.
+    if toolInfo.returnsVoid {
+      members.append("""
+      \(raw: accessPrefix)func _perform() async throws -> \(raw: toolInfo.outputType) {
+          try await perform()
+          return AI.VoidOutput()
+      }
+      """)
+    } else {
+      members.append("""
+      \(raw: accessPrefix)func _perform() async throws -> \(raw: toolInfo.outputType) {
+          try await perform()
+      }
+      """)
     }
-    """)
 
     // Generate tool property
     let toolDecl = generateToolProperty(
@@ -280,6 +291,8 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
     var description: String
     var parameters: [ParameterInfo]
     var outputType: String
+    var returnsVoid: Bool
+    var resultTypesOverride: ExprSyntax?
     var hasTitle: Bool
     var strictSchema: Bool
   }
@@ -419,9 +432,13 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       throw ToolMacroError.missingPerformMethod
     }
 
-    if let returnClause = performDecl.signature.returnClause {
+    let returnsVoid = performReturnsVoid(performDecl)
+    if returnsVoid {
+      outputType = "AI.VoidOutput"
+    } else if let returnClause = performDecl.signature.returnClause {
       outputType = returnClause.type.trimmedDescription
     }
+    let resultTypesOverride = findResultTypesOverride(in: structDecl)
 
     // Validate perform() signature using the shared validator so MemberMacro and
     // ExtensionMacro can never disagree on what's accepted.
@@ -480,6 +497,8 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
       description: toolDescription,
       parameters: parameters,
       outputType: outputType,
+      returnsVoid: returnsVoid,
+      resultTypesOverride: resultTypesOverride,
       hasTitle: hasTitle,
       strictSchema: strictSchema,
     )
@@ -535,6 +554,9 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
 
       """
       : ""
+    let resultTypesExpr = toolInfo.resultTypesOverride.map(\.trimmedDescription)
+      ?? "\(toolInfo.outputType).resultTypes"
+
     return """
     \(raw: accessPrefix)static var tool: AI.Tool {
         let _schemaBuild = AITool.ToolMacroSupport.buildObjectSchemaResult(
@@ -545,12 +567,13 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
             description: description,
             title: title,
             inputSchema: _schemaBuild.schema,
-            resultTypes: \(raw: toolInfo.outputType).resultTypes,
+            resultTypes: \(raw: resultTypesExpr),
+            outputSchema: AI.AISchema.outputSchema(for: \(raw: toolInfo.outputType).self),
             schemaBuildErrorMessage: _schemaBuild.errorMessage,
             execute: { parameters in
                 let instance = try Self.parse(from: parameters)
                 let output = try await instance._perform()
-                return output.toToolResult()
+                return try output.toToolResult()
             }
         )
     }
@@ -589,7 +612,7 @@ public struct ToolMacro: MemberMacro, ExtensionMacro {
         // Use `missingRequiredParameter` for absent keys — `invalidParameterType` is
         // reserved for keys that are present but the wrong shape.
         parseStatements.append(
-          "guard let _\(prop)Value = _args[\"\(key)\"] else { throw ToolError.missingRequiredParameter(\"\(key)\") }",
+          "guard let _\(prop)Value = _args[\"\(key)\"] else { throw ToolDispatchError.missingRequiredParameter(\"\(key)\") }",
         )
         parseStatements.append(
           "_instance.\(prop) = try AITool.ToolMacroSupport.parseParameter(\(type).schema, from: _\(prop)Value, parameterName: \"\(key)\")",
@@ -719,12 +742,43 @@ extension ToolMacro {
         blameNode: decl.name,
       )
     }
-    if decl.signature.returnClause == nil {
-      return .invalid(
-        message: "@Tool requires 'perform()' to return a value conforming to 'ToolOutput'",
-        blameNode: decl.name,
-      )
-    }
+    // Void returns are allowed — the macro normalizes them to AI.VoidOutput.
     return .valid
+  }
+
+  /// Returns true when the `perform()` declaration's return clause is one of
+  /// the canonical Void spellings, or absent. Same syntactic check swift-mcp
+  /// uses; `typealias Nothing = Void` used as `-> Nothing` won't be detected.
+  static func performReturnsVoid(_ decl: FunctionDeclSyntax) -> Bool {
+    guard let returnClause = decl.signature.returnClause else {
+      return true
+    }
+    switch returnClause.type.trimmedDescription {
+      case "Void", "()", "Swift.Void":
+        return true
+      default:
+        return false
+    }
+  }
+
+  /// Detects a `static let resultTypes: Set<ToolResult.ValueType>?` declaration
+  /// on the `@Tool` struct. When present, the macro emits this expression
+  /// verbatim into the generated `Tool` initializer instead of the type-level
+  /// default from `\(outputType).resultTypes`. Used by authors to narrow the
+  /// declared types on, e.g., a `Media`-returning tool that only emits images.
+  static func findResultTypesOverride(in structDecl: StructDeclSyntax) -> ExprSyntax? {
+    for member in structDecl.memberBlock.members {
+      guard let varDecl = member.decl.as(VariableDeclSyntax.self),
+            varDecl.modifiers.contains(where: { $0.name.text == "static" })
+      else { continue }
+      for binding in varDecl.bindings {
+        guard let identifier = binding.pattern.as(IdentifierPatternSyntax.self),
+              identifier.identifier.text == "resultTypes",
+              let initializer = binding.initializer
+        else { continue }
+        return initializer.value
+      }
+    }
+    return nil
   }
 }

@@ -127,6 +127,15 @@ public enum ToolMacroSupport {
     try SchemableAdapter.parse(component, from: value, parameterName: parameterName)
   }
 
+  /// Builds the `outputJSONSchema` payload for `@StructuredOutput` types.
+  /// Thin wrapper over `SchemableAdapter.structuredOutputSchemaDictionary` so
+  /// macro-emitted code only references symbols in `AITool`.
+  public static func structuredOutputSchemaDictionary(
+    from component: some JSONSchemaComponent,
+  ) throws -> [String: Value] {
+    try SchemableAdapter.structuredOutputSchemaDictionary(from: component)
+  }
+
   /// Nonthrowing schema build result used by macro-generated declarations.
   public struct BuiltObjectSchema: Sendable {
     public let schema: [String: Value]

@@ -6,28 +6,37 @@ import ImageIO
 import MCP
 import UniformTypeIdentifiers
 
-// MARK: - ToolResult.Content → Tool.Content Conversion
+// MARK: - ToolResult.Content → ContentBlock Conversion
 
-extension MCP.Tool.Content {
-  /// Creates MCP Tool Content from an AI ToolResult Content.
+extension MCP.ContentBlock {
+  /// Creates an MCP ContentBlock from an AI ToolResult Content.
   public init(_ value: AI.ToolResult.Content) {
     switch value {
       case let .text(text):
         self = .text(text)
+      case let .json(jsonValue):
+        self = .text(jsonValue.jsonString)
       case let .image(data, providedMimeType):
         let mimeType = providedMimeType ?? Self.detectImageMimeType(data) ?? "image/png"
         self = .image(data: data.base64EncodedString(), mimeType: mimeType)
       case let .audio(data, mimeType):
         self = .audio(data: data.base64EncodedString(), mimeType: mimeType)
       case let .file(data, mimeType, filename):
-        // Preserve generic files as embedded resources instead of dropping their bytes.
-        if mimeType.hasPrefix("image/") {
-          self = .image(data: data.base64EncodedString(), mimeType: mimeType)
-        } else if mimeType.hasPrefix("audio/") {
-          self = .audio(data: data.base64EncodedString(), mimeType: mimeType)
-        } else {
-          self = .resource(uri: Self.fileResourceURI(filename: filename), mimeType: mimeType, blob: data)
-        }
+        // Anonymous bytes get a synthesized URI so they round-trip through the resource channel.
+        self = .resource(uri: Self.fileResourceURI(filename: filename), mimeType: mimeType, blob: data)
+      case let .embeddedResource(data, uri, mimeType):
+        self = .resource(uri: uri, mimeType: mimeType, blob: data)
+      case let .embeddedText(text, uri, mimeType):
+        self = .resource(uri: uri, mimeType: mimeType, text: text)
+      case let .resourceLink(uri, name, title, description, mimeType, size):
+        self = .resourceLink(MCP.ResourceLink(
+          name: name,
+          title: title,
+          uri: uri,
+          description: description,
+          mimeType: mimeType,
+          size: size,
+        ))
     }
   }
 
@@ -53,16 +62,17 @@ extension MCP.Tool.Content {
 public extension MCP.CallTool.Result {
   /// Creates an MCP CallTool Result from an AI ToolResult.
   init(_ result: AI.ToolResult) {
-    let content = result.content.map { MCP.Tool.Content($0) }
-    self.init(content: content, isError: result.isError)
+    let content = result.content.map { MCP.ContentBlock($0) }
+    let structured = result.structuredContent?.mcpValue
+    self.init(content: content, structuredContent: structured, isError: result.isError)
   }
 }
 
-// MARK: - Tool.Content → ToolResult.Content Conversion
+// MARK: - ContentBlock → ToolResult.Content Conversion
 
 public extension AI.ToolResult.Content {
-  /// Creates an AI ToolResult Value from MCP Tool Content.
-  init(_ content: MCP.Tool.Content) {
+  /// Creates an AI ToolResult Value from an MCP ContentBlock.
+  init(_ content: MCP.ContentBlock) {
     switch content {
       case let .text(text, _, _):
         self = .text(text)
@@ -79,24 +89,27 @@ public extension AI.ToolResult.Content {
           self = .text("[Invalid audio data]")
         }
       case let .resource(resource, _, _):
-        // Resource.Content is a struct with text and/or blob fields
+        // Resource.Contents has either text or blob; preserve URI on both branches.
         if let text = resource.text {
-          self = .text(text)
-        } else if let blob = resource.blob, let data = Data(base64Encoded: blob) {
-          let mimeType = resource.mimeType ?? "application/octet-stream"
-          if mimeType.hasPrefix("image/") {
-            self = .image(data, mimeType: mimeType)
-          } else if mimeType.hasPrefix("audio/") {
-            self = .audio(data, mimeType: mimeType)
+          self = .embeddedText(text, uri: resource.uri, mimeType: resource.mimeType)
+        } else if let blob = resource.blob {
+          if let data = Data(base64Encoded: blob) {
+            self = .embeddedResource(data, uri: resource.uri, mimeType: resource.mimeType)
           } else {
-            // Use file type for other binary resources
-            self = .file(data, mimeType: mimeType, filename: nil)
+            self = .text("[Invalid resource data: \(resource.uri)]")
           }
         } else {
           self = .text("[Resource: \(resource.uri)]")
         }
       case let .resourceLink(link):
-        self = .text("[Resource link: \(link.uri)]")
+        self = .resourceLink(
+          uri: link.uri,
+          name: link.name,
+          title: link.title,
+          description: link.description,
+          mimeType: link.mimeType,
+          size: link.size,
+        )
     }
   }
 }
@@ -112,7 +125,14 @@ public extension AI.ToolResult {
   ///   - id: The call ID (required for ToolResult)
   init(_ result: MCP.CallTool.Result, name: String, id: String) {
     let content = result.content.map { AI.ToolResult.Content($0) }
-    self.init(name: name, id: id, content: content, isError: result.isError)
+    let structured = result.structuredContent?.aiValue
+    self.init(
+      name: name,
+      id: id,
+      content: content,
+      structuredContent: structured,
+      isError: result.isError,
+    )
   }
 }
 

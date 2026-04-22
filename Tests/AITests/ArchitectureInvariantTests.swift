@@ -70,7 +70,7 @@ struct ArchitectureInvariantTests {
         .string("unit", description: "Temperature unit", required: false),
       ],
     ) { _ in
-      [.text("ok")]
+      ToolOutputResult(content: [.text("ok")])
     }
 
     // Both tools store raw schemas; comparing at send-time normalized form
@@ -90,7 +90,7 @@ struct ArchitectureInvariantTests {
         .string("priority", description: "Priority override", required: false, enum: ["low", "medium", "high"]),
       ],
     ) { _ in
-      [.text("ok")]
+      ToolOutputResult(content: [.text("ok")])
     }
 
     let imperativeStrict = try canonicalJSONString(Value.schemaForStrictMode(imperativeTool.rawInputSchema))

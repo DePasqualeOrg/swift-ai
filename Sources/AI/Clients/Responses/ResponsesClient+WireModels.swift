@@ -552,3 +552,10 @@ let openAIResponsesLogger = Logger(
   subsystem: Bundle.main.bundleIdentifier ?? "com.local-intelligence",
   category: "ResponsesClient",
 )
+
+/// True when `uri` uses a scheme OpenAI's Responses API will fetch
+/// (`https://`, `http://`). Other schemes — including `gs://` — stringify.
+func isResponsesFetchableScheme(_ uri: String) -> Bool {
+  let lower = uri.lowercased()
+  return lower.hasPrefix("https://") || lower.hasPrefix("http://")
+}

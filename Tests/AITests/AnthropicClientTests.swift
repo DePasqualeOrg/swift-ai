@@ -405,7 +405,7 @@ struct AnthropicClientTests {
         ]),
         "required": .array([.string("meeting_time"), .string("config"), .string("tags")]),
       ],
-    ) { _ in [.text("ok")] }
+    ) { _ in ToolOutputResult(content: [.text("ok")]) }
 
     MockURLProtocol.setHandler(for: testId) { request in
       capturedBodyData = readRequestBody(from: request)

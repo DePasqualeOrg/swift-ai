@@ -66,7 +66,7 @@ public extension ChatCompletionsClient {
 /// ```
 @Observable
 public final class ChatCompletionsClient: APIClient, Sendable {
-  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text]
+  public static let supportedResultTypes: Set<ToolResult.ValueType> = [.text, .json]
   private static let refusalOpaqueProvider = "openai-chat-completions"
   private static let refusalOpaqueType = "refusal"
   private static let annotationsOpaqueType = "annotations"
@@ -320,7 +320,9 @@ public final class ChatCompletionsClient: APIClient, Sendable {
           switch content {
             case let .text(text):
               return text
-            case .image, .audio, .file:
+            case let .json(value):
+              return value.jsonString
+            case .image, .audio, .file, .embeddedResource, .embeddedText, .resourceLink:
               openAILogger.warning("Tool '\(toolResult.name)' returned \(content.type.rawValue), which is not supported by ChatCompletions. Using fallback text.")
               return content.fallbackDescription
           }

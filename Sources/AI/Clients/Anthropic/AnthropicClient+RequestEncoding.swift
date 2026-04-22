@@ -96,6 +96,27 @@ extension AnthropicClient {
                   anthropicLogger.warning("Tool '\(toolResult.name)' returned a file (\(mimeType)), which is not supported by Anthropic. Using fallback text.")
                   resultContentBlocks.append(.text(ToolResult.Content.file(data, mimeType: mimeType, filename: filename).fallbackDescription))
                 }
+              case let .json(value):
+                resultContentBlocks.append(.text(value.jsonString))
+              case let .embeddedResource(data, _, mimeType):
+                let inlineMime = mimeType ?? "application/octet-stream"
+                if inlineMime.hasPrefix("image/") {
+                  let (normalizedData, normalizedMime) = try await MediaProcessor.normalizeImageForAnthropic(data, mimeType: inlineMime)
+                  resultContentBlocks.append(.image(
+                    mediaType: normalizedMime,
+                    data: normalizedData.base64EncodedString(),
+                  ))
+                } else if inlineMime == "application/pdf" {
+                  resultContentBlocks.append(.document(
+                    mediaType: inlineMime,
+                    data: data.base64EncodedString(),
+                  ))
+                } else {
+                  // Audio, arbitrary MIME — bytes lost, URI annotated.
+                  resultContentBlocks.append(.text(content.fallbackDescription))
+                }
+              case .embeddedText, .resourceLink:
+                resultContentBlocks.append(.text(content.fallbackDescription))
             }
           }
 
