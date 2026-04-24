@@ -112,9 +112,7 @@ enum GeminiRequestEncoder {
   ) -> [String: any Sendable] {
     var generationConfig: [String: any Sendable] = [:]
 
-    if let maxTokens {
-      generationConfig["maxOutputTokens"] = maxTokens
-    }
+    generationConfig["maxOutputTokens"] = maxTokens ?? GeminiClient.defaultMaxOutputTokens
 
     if let temperature {
       generationConfig["temperature"] = temperature

@@ -864,6 +864,16 @@ public final class GeminiClient: APIClient, Sendable {
     currentTask?.cancel()
   }
 
+  /// Default `maxOutputTokens` applied when the caller doesn't specify one.
+  ///
+  /// Gemini 2.5+ models share their `maxOutputTokens` budget between hidden reasoning tokens
+  /// and the visible response. The server default of 8192 can be consumed almost entirely by
+  /// reasoning on complex prompts, leaving the visible response truncated with
+  /// `finishReason: MAX_TOKENS`. 65_536 is the documented output-token ceiling for Gemini 2.5
+  /// and later, which gives reasoning headroom without the caller having to think about it.
+  /// Callers that want a different value can pass `maxTokens` explicitly.
+  static let defaultMaxOutputTokens = 65536
+
   private func queryItemsPreservingCustomParameters(
     _ queryItems: [URLQueryItem]?,
     apiKey: String,
